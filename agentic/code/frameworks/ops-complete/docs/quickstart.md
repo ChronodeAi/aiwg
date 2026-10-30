@@ -8,6 +8,8 @@ Use ops-complete when a repository needs runbooks, fleet inventory, incident
 records, deployment operations, or other operational procedures that an AI
 assistant can inspect and update with evidence.
 
+Each section below starts with what you can ask your assistant, then gives the command reference. Every command is kept exactly as shipped.
+
 ## Before You Start
 
 ops-complete is for repositories that contain operational procedures — runbooks, fleet inventory, incident reports, CI/CD definitions. If you are working on an application codebase managed with the SDLC framework, you do not need ops-complete.

@@ -1,0 +1,26 @@
+{
+  "rare-rule": {
+    "source": "synthetic-owner-review",
+    "history": "known",
+    "createdAt": "2025-01-01T00:00:00.000Z",
+    "reviewedAt": "2025-01-01T00:00:00.000Z",
+    "provenance": "verified",
+    "criticality": "critical",
+    "ownerPinned": true,
+    "rareObligation": true,
+    "obsolete": true
+  },
+  "fresh-note": {
+    "source": "synthetic-owner-review",
+    "history": "known",
+    "createdAt": "2026-10-24T00:00:00.000Z",
+    "provenance": "verified",
+    "obsolete": true
+  },
+  "stale-summary": {
+    "source": "synthetic-source-correction",
+    "summaryStale": true,
+    "provenance": "conflicting",
+    "categoryCorrection": "decision"
+  }
+}

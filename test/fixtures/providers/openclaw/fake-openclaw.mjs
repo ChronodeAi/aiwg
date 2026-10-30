@@ -15,6 +15,7 @@
  * bundled source (dist/agent-exec-4ENgJefG.mjs): one object, printed once,
  * `{ ok, status, final, payloads, model, provider, sessionId, error? }`.
  */
+import { ignoreTermUntilKilled } from '../ignore-term.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const config = process.env.AIWG_FAKE_WORKER_CONFIG
@@ -161,8 +162,7 @@ switch (scenario) {
     setInterval(() => {}, 1000);
     break;
   case 'ignore-term':
-    process.on('SIGTERM', () => {});
-    setInterval(() => {}, 1000);
+    ignoreTermUntilKilled();
     break;
   default:
     fail(`unknown fixture scenario ${scenario}`, 64);

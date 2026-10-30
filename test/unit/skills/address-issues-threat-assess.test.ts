@@ -13,6 +13,25 @@ import { THREAT_ASSESSMENT_LIMITS } from '../../../tools/security/threat-assessm
 const orchestratorThread = JSON.parse(readFileSync('test/fixtures/security/issue-orchestrator-cycle-comments.json', 'utf8'));
 
 describe('address-issues-threat-assess', () => {
+  it.each([
+    'No real credentials are used.',
+    '...fake local CLI/MCP/HTTP endpoints; no paid inference or real credentials.',
+    'Security negatives: ... secrets at every boundary are rejected.',
+  ])('keeps negated auth-material policy safe (#3636): %s', (body) => {
+    const report = assessIssue({ title: '', body, labels: [], comments: [] });
+    expect(report.verdict).toBe('safe');
+    const findings = report.policy_report.findings.filter(finding => finding.ruleId === 'credential-or-env-probing');
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every(finding => finding.context === 'descriptive' && finding.suppressed)).toBe(true);
+  });
+
+  it('allows metadata-only outbound status prose with no secrets (#3636)', () => {
+    const report = assessText('Metadata-only export: no secrets, no real credentials, and no environment variables.', 'outbound-maintainer-comment');
+    expect(report.verdict).toBe('safe');
+    expect(report.policy_report.findings.length).toBeGreaterThan(0);
+    expect(report.policy_report.findings.every(finding => finding.context === 'descriptive' && finding.suppressed)).toBe(true);
+  });
+
   it('rejects issue bodies that combine sensitive-file targeting with unpinned third-party execution', () => {
     const report = assessIssue({
       number: 117,

@@ -10,6 +10,8 @@ requirements, architecture decisions, tests, security review, release planning,
 and project status. Use it when you want durable project artifacts instead of
 a one-off chat answer.
 
+Each section below starts with what you can ask your assistant, then gives the command reference. Every command is kept exactly as shipped.
+
 ---
 
 ## Before You Start
@@ -42,6 +44,16 @@ The SDLC framework follows five phases. You don't have to use all of them — mo
 
 ### From an idea
 
+> "Start a project from this idea: a task management API for small teams with Slack integration. Save the intake where I can review it, and tell me what is needed before Inception."
+
+Your assistant runs the intake wizard and saves the intake, solution profile, and option matrix in `.aiwg/intake/`.
+
+> "I answered the intake questions. What is still missing before Inception?"
+
+Your assistant names the missing inputs and the next review decision.
+
+### Command reference — starting from an idea
+
 ```
 /intake-wizard "A task management API for small teams with Slack integration"
 ```
@@ -54,15 +66,23 @@ This generates your project intake, solution profile, and option matrix in `.aiw
 
 ### From an existing codebase
 
+> "Build project context from this codebase. Ask me only what you cannot infer from the code."
+
+Your assistant scans your code and generates intake documents from what it finds — architecture, dependencies, inferred requirements. You answer a few clarifying questions and it builds the project context automatically.
+
+### Command reference — starting from code
+
 ```
 /intake-from-codebase . --interactive
 ```
 
-AIWG scans your code and generates intake documents from what it finds — architecture, dependencies, inferred requirements. You answer a few clarifying questions and it builds the project context automatically.
-
 ### Skip everything and just ask
 
-If you don't need formal lifecycle management:
+> "Do a security audit on this codebase and save the findings where I can review them."
+
+Your assistant uses the framework agents directly without formal intake. If you don't need formal lifecycle management:
+
+### Command reference — direct questions
 
 ```
 Run a security audit on this codebase
@@ -75,6 +95,14 @@ You don't have to run intake to use the agents. The framework adds structure whe
 ---
 
 ## Common Specialist Roles
+
+> "What is the right test strategy for this service? Work from the current code and save the strategy where I can review it."
+
+Your assistant routes the question to the matching specialist and returns a reviewable artifact with its evidence.
+
+> "That strategy assumes a database I do not use. Redo it for my actual stack."
+
+Your assistant revises the result against the corrected constraint.
 
 The framework includes specialist roles for requirements, architecture,
 security, testing, DevOps, documentation, review, and data design. A few
@@ -92,7 +120,9 @@ you'll use constantly:
 | `code-reviewer` | Comprehensive code review |
 | `database-optimizer` | Query optimization, schema design |
 
-You don't invoke them explicitly most of the time — orchestrated commands launch them automatically. But you can address them directly:
+You don't invoke them explicitly most of the time — orchestrated commands launch them automatically. Where one agent briefs another, the brief names the goal, inputs, boundaries, result, and success check. But you can address them directly:
+
+### Command reference — addressing specialists
 
 ```
 @test-architect: What's the right test strategy for this service?
@@ -103,7 +133,17 @@ You don't invoke them explicitly most of the time — orchestrated commands laun
 
 ## Continuous workflows
 
+> "Run a security review of the current code and save the findings with the evidence I should check."
+
+Your assistant coordinates the relevant roles, synthesizes their output, and generates artifacts in `.aiwg/`.
+
+> "Scope the review to the auth service only and exclude test fixtures."
+
+Your assistant re-runs the same workflow against the narrower scope.
+
 These commands run throughout the lifecycle, not just at phase boundaries:
+
+### Command reference — continuous workflows
 
 ```
 /flow-security-review-cycle           # Security audit and threat modeling
@@ -117,11 +157,29 @@ These commands run throughout the lifecycle, not just at phase boundaries:
 Each one coordinates the relevant roles, synthesizes their output, and
 generates artifacts in `.aiwg/`.
 
+Where the coordinator briefs a specialist, the brief names the goal, inputs, boundaries, result, and success check:
+
+**Agent-to-agent brief (example):**
+
+```brief
+Goal: assess the auth service test strategy. Inputs: current code and existing test plan in `.aiwg/testing/`. Boundaries: do not change code; read-only analysis. Result: strategy note with gaps and evidence refs. Success check: every gap cites a file and line.
+```
+
 ---
 
 ## Phase transitions
 
+> "Move us to Elaboration. Check the gate criteria and tell me what is missing."
+
+Your assistant validates gate criteria before proceeding. If something's missing, it tells you exactly what — and can often generate it automatically.
+
+> "The gate check failed on missing ADRs. Draft them from the current design and re-check."
+
+Your assistant generates the missing artifacts and re-runs the check.
+
 When you're ready to move forward:
+
+### Command reference — phase transitions
 
 ```
 # Natural language
@@ -139,7 +197,13 @@ AIWG validates gate criteria before proceeding. If something's missing, it tells
 
 ## The fast path: sdlc-accelerate
 
+> "Take this idea to construction-ready. Ask me focused questions at each gate and save the Construction Ready Brief."
+
+Your assistant runs the full pipeline — intake through elaboration — with focused questions at each gate instead of requiring you to invoke 7+ commands manually.
+
 If you want to go from idea to construction-ready without manually orchestrating each phase:
+
+### Command reference — sdlc-accelerate
 
 ```
 /sdlc-accelerate "A task management API for small teams"
@@ -150,6 +214,10 @@ This runs the full pipeline — intake through elaboration — with focused ques
 ---
 
 ## What gets created
+
+> "Where do the project artifacts live, and what should I review first?"
+
+Your assistant points to the `.aiwg/` directory so future sessions and teammates can pick up the same project context.
 
 Everything lands in `.aiwg/`:
 
@@ -173,7 +241,17 @@ project context.
 
 ## Iteration during Construction
 
+> "Run iteration 3 with discovery and delivery in parallel. Stop if the acceptance check is unclear."
+
+Your assistant runs a Discovery track (backlog refinement, story prep) and a Delivery track (implementation, testing) in parallel, the way modern teams actually work.
+
+> "Fix all the failing auth tests. Done means npm test passes, and do not change unrelated packages."
+
+Al keeps iterating — fix, test, fix again — until the criterion is met or it needs your input.
+
 Once you're in Construction, use the dual-track iteration model:
+
+### Command reference — iteration
 
 ```
 /flow-iteration-dual-track --iteration 3

@@ -43,6 +43,7 @@
 import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { integer, number } from '../../schema/zod-validation.mjs';
 import { matchSessionWorkspace, WORKSPACE_MATCH_KINDS } from '../workspace-matching.js';
 import {
   schemaRejectionDetail,
@@ -96,29 +97,29 @@ const Rfc3339Schema = z.string().refine(
  * `stream: {kind, id}` block on every record envelope; gap markers carry
  * `"envelope": null` instead.
  */
-const MuseStreamSchema = z.object({
+const MuseStreamSchema = z.looseObject({
   kind: z.string().optional(),
   id: z.string().optional(),
-}).passthrough();
+});
 
-const MuseEnvelopeSchema = z.object({
-  sequence: z.number().int().nonnegative(),
+const MuseEnvelopeSchema = z.looseObject({
+  sequence: integer().nonnegative(),
   id: z.string().optional(),
   causation_id: z.string().nullish(),
-  schema_version: z.union([z.number(), z.string()]).optional(),
-  payload_schema_version: z.union([z.number(), z.string()]).optional(),
+  schema_version: z.union([number(), z.string()]).optional(),
+  payload_schema_version: z.union([number(), z.string()]).optional(),
   stream: MuseStreamSchema.optional(),
   // Muse Code 1.4.0 exports epoch microseconds; RFC 3339 strings stay valid.
-  recorded_at: z.union([z.string(), z.number().int().nonnegative()]).optional(),
+  recorded_at: z.union([z.string(), integer().nonnegative()]).optional(),
   record_type: z.string().optional(),
   durability: z.string().optional(),
   payload_type: z.string().optional(),
-  payload: z.object({
+  payload: z.looseObject({
     // Muse Code 1.4.3 runtime.session mode records carry an event without a
     // kind; eventKindOf() falls back to payload_type for those.
-    event: z.object({ kind: z.string().min(1).optional() }).passthrough().optional(),
-  }).passthrough().optional(),
-}).passthrough();
+    event: z.looseObject({ kind: z.string().min(1).optional() }).optional(),
+  }).optional(),
+});
 
 /**
  * Record events carry a record envelope, validated strictly. Every other
@@ -127,59 +128,59 @@ const MuseEnvelopeSchema = z.object({
  * (`children`, `transaction_id`, `content_sha256`) instead of a record.
  * Markers are never fabricated into provider records.
  */
-const MuseRecordEventSchema = z.object({
+const MuseRecordEventSchema = z.looseObject({
   kind: z.literal('record'),
   envelope: MuseEnvelopeSchema,
-}).passthrough();
+});
 
-const MuseMarkerEventSchema = z.object({
+const MuseMarkerEventSchema = z.looseObject({
   kind: z.string().min(1).refine((kind) => kind !== 'record'),
   envelope: z.record(z.string(), z.unknown()).nullish(),
-}).passthrough();
+});
 
 const MuseExportEventSchema = z.union([MuseRecordEventSchema, MuseMarkerEventSchema]);
 
-const MuseAcceptedSpawnSchema = z.object({
+const MuseAcceptedSpawnSchema = z.looseObject({
   subagent_id: z.string().optional(),
   agent_path: z.string().optional(),
   role: z.string().optional(),
   parent_session_id: z.string().optional(),
-}).passthrough();
+});
 
-const MuseSessionSummarySchema = z.object({
+const MuseSessionSummarySchema = z.looseObject({
   session_id: z.string().min(1),
-  turn_count: z.number().int().nonnegative().optional(),
-  step_count: z.number().int().nonnegative().optional(),
+  turn_count: integer().nonnegative().optional(),
+  step_count: integer().nonnegative().optional(),
   // Live evidence: one summary per exported parent session; subagents appear
   // only here, as spawn handles (subagent_id), never as extra summaries.
   accepted_spawns: z.array(MuseAcceptedSpawnSchema).optional(),
-  session_end: z.object({
+  session_end: z.looseObject({
     exit_reason: z.string().optional(),
-    uptime_ms: z.number().nonnegative().optional(),
-  }).passthrough().optional(),
-}).passthrough();
+    uptime_ms: number().check(z.gte(0)).meta({ type: 'number', minimum: 0 }).optional(),
+  }).optional(),
+});
 
-const MuseDiagnosticsSchema = z.object({
-  unparseable_lines: z.number().int().nonnegative().optional(),
-  unknown_payload_kinds: z.number().int().nonnegative().optional(),
-  gaps: z.number().int().nonnegative().optional(),
-  omitted_live_only: z.number().int().nonnegative().optional(),
-  omitted_records: z.number().int().nonnegative().optional(),
-  duplicate_records: z.number().int().nonnegative().optional(),
-  retained_frames: z.number().int().nonnegative().optional(),
-  retained_frame_children: z.number().int().nonnegative().optional(),
-}).passthrough();
+const MuseDiagnosticsSchema = z.looseObject({
+  unparseable_lines: integer().nonnegative().optional(),
+  unknown_payload_kinds: integer().nonnegative().optional(),
+  gaps: integer().nonnegative().optional(),
+  omitted_live_only: integer().nonnegative().optional(),
+  omitted_records: integer().nonnegative().optional(),
+  duplicate_records: integer().nonnegative().optional(),
+  retained_frames: integer().nonnegative().optional(),
+  retained_frame_children: integer().nonnegative().optional(),
+});
 
-const MuseTrajectorySchema = z.object({
-  export_schema_version: z.number().int().nonnegative(),
+const MuseTrajectorySchema = z.looseObject({
+  export_schema_version: integer().nonnegative(),
   redaction: z.string().optional(),
-  exporter_version: z.object({ display: z.string() }).passthrough().optional(),
-  session_build: z.object({ display: z.string() }).passthrough().optional(),
+  exporter_version: z.looseObject({ display: z.string() }).optional(),
+  session_build: z.looseObject({ display: z.string() }).optional(),
   session_terminated_abnormally: z.boolean().optional(),
   sessions: z.array(MuseSessionSummarySchema).min(1),
   events: z.array(MuseExportEventSchema),
   diagnostics: MuseDiagnosticsSchema.optional(),
-}).passthrough();
+});
 
 type MuseTrajectory = z.infer<typeof MuseTrajectorySchema>;
 type MuseExportEvent = z.infer<typeof MuseExportEventSchema>;
@@ -191,17 +192,17 @@ function isRecordEvent(event: MuseExportEvent): event is MuseRecordEvent {
 }
 type MuseEnvelope = z.infer<typeof MuseEnvelopeSchema>;
 
-const MuseRetainedFrameSchema = z.object({
+const MuseRetainedFrameSchema = z.looseObject({
   retained_frame: z.string().min(1),
-  frame_schema_version: z.number().int().nonnegative().optional(),
-  outer_log_ordinal: z.number().int().nonnegative().optional(),
+  frame_schema_version: integer().nonnegative().optional(),
+  outer_log_ordinal: integer().nonnegative().optional(),
   transaction_id: z.string().optional(),
   content_sha256: z.string().optional(),
-  children: z.array(z.object({
-    child_index: z.number().int().nonnegative().optional(),
+  children: z.array(z.looseObject({
+    child_index: integer().nonnegative().optional(),
     record_json: z.string().min(1),
-  }).passthrough()),
-}).passthrough();
+  })),
+});
 
 interface MuseRecordContext {
   locatorClass: typeof MUSE_LOCATOR_CLASS | typeof MUSE_NATIVE_LOCATOR_CLASS;
@@ -630,12 +631,12 @@ export const MuseWorkspaceInspectionSchema = z.object({
   attribution: z.enum(['matched', 'mismatch', 'unattributed']),
   matchKind: z.enum(WORKSPACE_MATCH_KINDS).optional(),
   reasonCode: z.string().nullable(),
-  recordsInspected: z.number().int().nonnegative(),
-  bytesInspected: z.number().int().nonnegative(),
+  recordsInspected: integer().nonnegative(),
+  bytesInspected: integer().nonnegative(),
   completeInspection: z.boolean(),
   limit: z.object({
     name: z.enum(['maxRecords', 'maxRecordBytes', 'maxTotalBytes', 'maxNestingDepth']),
-    value: z.number().int().positive(),
+    value: integer().positive(),
   }).optional(),
   fallback: z.literal('bounded-tail').optional(),
   detail: SessionRejectionDetailSchema.optional(),

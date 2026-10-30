@@ -95,7 +95,7 @@ defaults** (`single_query_mode: deny`, `approvals.mode: smart`, never
 `off`) regardless of the host's `config.yaml` — session/auth credentials
 still resolve via `.env`, so this never blocks dispatch. `HERMES_YOLO_MODE`
 (and any other `HERMES_*` override) is defeated structurally, not by a
-flag: the bundled profile's `envAllowlist` is `[]` and the shared shell
+flag: the bundled profile's `envAllowlist` is `["PATH"]` and the shared shell
 renderer clears the child environment (`env -i <allowlist-only>`), so an
 ambient `HERMES_YOLO_MODE` in the conductor's own environment can never
 reach the child — proven by an explicit assertion

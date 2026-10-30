@@ -1,5 +1,7 @@
 # Schema Governance
 
+Evidence status: design intent.
+
 First-class schema discovery, authoring, validation, evolution, and SDLC normalization.
 
 This addon gives people a task-oriented surface over `aiwg schema`. Users do

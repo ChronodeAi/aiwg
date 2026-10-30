@@ -4,7 +4,7 @@
  * @source @src/extensions/manifest.ts
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   BundleManifestSchema,
   zodErrorToValidationErrors,
@@ -32,6 +32,25 @@ function baseValid(): Record<string, unknown> {
 }
 
 describe('BundleManifestSchema', () => {
+  it('rejects oversized keywords before validating any element', () => {
+    const validator = vi.spyOn(BundleManifestSchema.shape.keywords.element._zod, 'run');
+    try {
+      expect(BundleManifestSchema.safeParse(baseValid()).success).toBe(true);
+      expect(validator).toHaveBeenCalledTimes(1);
+      validator.mockClear();
+      const result = BundleManifestSchema.safeParse({
+        ...baseValid(), keywords: Array(MAX_KEYWORDS_PER_MANIFEST + 1).fill('synthetic'),
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'too_big', path: ['keywords'] }),
+      ]));
+      expect(validator).not.toHaveBeenCalled();
+    } finally {
+      validator.mockRestore();
+    }
+  });
+
   describe('happy path', () => {
     it('accepts a minimal valid addon manifest', () => {
       const result = BundleManifestSchema.safeParse(baseValid());
@@ -66,6 +85,23 @@ describe('BundleManifestSchema', () => {
     it('rejects unknown top-level keys', () => {
       const m = { ...baseValid(), unknownField: 'oops' };
       expect(BundleManifestSchema.safeParse(m).success).toBe(false);
+    });
+
+    it('accepts pi and hermes platform keys (#3724)', () => {
+      const m = { ...baseValid(), platforms: { claude: 'full', pi: 'full', hermes: 'full' } };
+      expect(BundleManifestSchema.safeParse(m).success).toBe(true);
+    });
+
+    it('rejects an unknown platform key and names it (#3724)', () => {
+      const m = { ...baseValid(), platforms: { claude: 'full', bogus: 'full' } };
+      const result = BundleManifestSchema.safeParse(m);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const errors = zodErrorToValidationErrors(result.error, '/path/to/manifest.json', m);
+        expect(errors.length).toBeGreaterThan(0);
+        const text = errors.map(error => `${error.field} ${error.expected} ${error.actual}`).join('\n');
+        expect(text).toContain('bogus');
+      }
     });
 
     it('rejects missing required fields', () => {
@@ -177,10 +213,11 @@ describe('BundleManifestSchema', () => {
       const result = BundleManifestSchema.safeParse(m);
       expect(result.success).toBe(false);
       if (!result.success) {
-        const errors = zodErrorToValidationErrors(result.error, '/path/to/manifest.json');
+        const errors = zodErrorToValidationErrors(result.error, '/path/to/manifest.json', m);
         expect(errors.length).toBeGreaterThan(0);
         expect(errors[0].path).toBe('/path/to/manifest.json');
         expect(errors[0].severity).toBe('error');
+        expect(errors[0].actual).toBe('undefined');
       }
     });
   });

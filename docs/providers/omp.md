@@ -45,6 +45,15 @@ operator or other-provider resources, which OMP deployment must preserve.
 OMP's foreign-provider discovery settings are operator-controlled; AIWG does
 not enable foreign user directories or change `disabledProviders`.
 
+Rule delivery uses the shared activation and binding pipeline. It generates one
+`.omp/rules/RULES-INDEX.md` and links it from the managed startup hook; source
+bundle indexes are not copied or renamed into parallel rule indexes. Kernel
+contracts are delivered in full, while path and summary contracts keep their
+fetch-on-demand routes and bound contracts remain attached to their definitions.
+Rule refresh retires only unchanged receipt-owned OMP files. Unmarked operator
+files and edited rules are preserved; a selected destination collision aborts
+projection without replacing the previous deployment, including with `--force`.
+
 ## Context and profile roots
 
 The project bootstrap is `.omp/AGENTS.md`, with native `@../WORKSPACE.md` and

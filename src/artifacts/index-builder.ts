@@ -32,18 +32,27 @@ import {
   resolveGraphBackendType,
 } from './types.js';
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
-import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
-import { loadManifest, writeManifest, statMatches, makeEntry, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
+import { writeIndexFile, resolveIndexDir, loadGraphIndexFile, publishIndexFiles } from './index-reader.js';
+import { loadManifest, writeManifest, statMatches, makeEntry, formatManifestStats, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
+import { FRAMEWORK_RELATIONS_REVISION } from './framework-source-digest.js';
 import { normalizeOperationalState } from './operational-state.js';
 import {
   DEFAULT_PROJECT_AIWG_DIR,
   resolveProjectAiwgDir,
 } from '../config/project-artifacts.js';
 import { normalizeStateTransferProjection } from './state-transfer.js';
-import { collectGraphIndexFiles, findArtifactFiles, indexPathFor } from './index-files.js';
+import { resolveIndexWorkers, runIndexPreparation, type IndexPreparationJob, type IndexPreparationResult } from './index-preparation.js';
+import { collectGraphIndexFiles, findArtifactFiles, indexPathFor, type ArtifactDiscoveryOptions } from './index-files.js';
+import { acquireDirectoryLock } from './prebuilt-build-lock.js';
+import { graphIndexDigest, indexAdapterRegistry, recordIndexVerification, type IndexAdapter } from './index-adapters.js';
+import { loadMemoryRecord } from '../memory/maintenance-record.js';
 
 export interface BuildOptions {
   force?: boolean;
+  lockWaitMs?: number;
+  /** Bound independent preparation processes; 0/1 keeps serial extraction. */
+  workers?: number;
+  onDiagnostic?: (message: string) => void;
   quiet?: boolean;
   verbose?: boolean;
   scope?: string;
@@ -82,6 +91,30 @@ export function parseFrontmatter(content: string): { data: Record<string, unknow
   } catch {
     return { data: {}, body: content };
   }
+}
+
+/** Read the target rule schema tolerantly while older rules remain untagged. */
+export function extractRuleBindings(data: Record<string, unknown>, body = ''): Pick<MetadataEntry, 'activation' | 'bound_to' | 'ruleSummary' | 'ruleEnforcement' | 'rulePaths'> {
+  const bound_to: NonNullable<MetadataEntry['bound_to']> = {};
+  const raw = data.bound_to;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const key of ['skills', 'agents', 'flows'] as const) {
+      const targets = (raw as Record<string, unknown>)[key];
+      if (Array.isArray(targets)) {
+        const names = [...new Set(targets.filter((name): name is string => typeof name === 'string' && name.trim().length > 0))];
+        if (names.length) bound_to[key] = names;
+      }
+    }
+  }
+  const enforcement = typeof data.enforcement === 'string' ? data.enforcement
+    : body.match(/^\*\*Enforcement Level\*\*:\s*([A-Za-z]+)/m)?.[1];
+  return {
+    ...(enforcement ? { ruleEnforcement: enforcement.trim().toLowerCase() } : {}),
+    ...(Array.isArray(data.paths) ? { rulePaths: data.paths.filter((value): value is string => typeof value === 'string') } : {}),
+    ...(typeof data.activation === 'string' ? { activation: data.activation } : {}),
+    ...(typeof data.summary === 'string' ? { ruleSummary: data.summary } : {}),
+    ...(Object.keys(bound_to).length ? { bound_to } : {}),
+  };
 }
 
 /**
@@ -404,6 +437,8 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
         case 'rules':
           // Rules/RULES-INDEX.md is a curated index file, not a rule.
           if (basename === 'rules-index' || basename === 'index') break;
+          // <rule>.core.md is a delivery body (#3450), not a separate rule.
+          if (/\.core\.md$/i.test(filePath)) break;
           if (isMarkdown) return 'rule';
           break;
         case 'schemas':
@@ -904,11 +939,195 @@ function resolveInstallRootHint(): string {
   return '<aiwg install root>';
 }
 
-export async function buildIndex(
+/** Current source identities for rule bindings; no search index or graph is written. */
+export async function collectRuleBindingEntries(cwd: string, scope: string): Promise<MetadataEntry[]> {
+  const fileStats = new Map<string, fs.Stats>();
+  const files = await collectGraphIndexFiles(cwd, undefined, { scope, fileStats });
+  return files.flatMap(fullPath => {
+    const stat = fileStats.get(fullPath) ?? fs.statSync(fullPath);
+    const entry = extractIndexArtifact({ fullPath, relativePath: indexPathFor(cwd, fullPath),
+      mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs, sizeBytes: stat.size }, true).entry;
+    return entry && ['skill', 'agent', 'flow'].includes(entry.type) ? [entry] : [];
+  });
+}
+
+/** Shared serial/worker read, checksum and extraction. No index output or global reduction. */
+export function prepareIndexArtifact(job: IndexPreparationJob): IndexPreparationResult {
+  const warnings: string[] = [];
+  const result = extractIndexArtifact(job, false, warnings);
+  return { ...result, ...(warnings.length ? { warnings } : {}) };
+}
+
+function extractIndexArtifact(job: IndexPreparationJob, bindingOnly: boolean, warnings: string[] = []): IndexPreparationResult {
+  const { fullPath, relativePath } = job;
+  const content = fs.readFileSync(fullPath, 'utf8');
+  const checksum = computeChecksum(content);
+  if (job.existingChecksum === checksum) return { checksum };
+  const { data, body } = parseFrontmatter(content);
+  let memoryRecord: MetadataEntry['memoryRecord'];
+  if (data.memoryRecord !== undefined) {
+    try { memoryRecord = loadMemoryRecord(data.memoryRecord); }
+    catch (error) {
+      warnings.push(`${relativePath}: invalid memoryRecord metadata quarantined: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const inferredType = inferType(data, relativePath);
+  const bindingType = ['skill', 'agent', 'flow'].includes(inferredType);
+  // Only YAML flows can promote an otherwise unrelated document to a binding target.
+  if (bindingOnly && !bindingType && !/\.ya?ml$/i.test(relativePath)) return { checksum };
+  // YAML Flow documents (workflow.aiwg.io/v1) are pure YAML, not
+  // markdown+frontmatter — detect them up front so they classify and
+  // become discoverable (#1540).
+  const flow = parseFlowDoc(content, relativePath);
+  if (bindingOnly && !flow && !bindingType) return { checksum };
+  const decision = flow ? null : parseDecisionDoc(content, relativePath);
+  const gatePack = flow || decision ? null : parseGatePackDoc(content, relativePath);
+  if (bindingOnly && (decision || gatePack)) return { checksum };
+  const physicalType = inferType({ ...data, type: undefined }, relativePath);
+  const runbook = flow || decision || gatePack ? null : parseRunbookDoc(data, body, relativePath);
+  const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
+  const title = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.title ?? extractTitle(data, body);
+  const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
+  const type = flow?.type ?? decision?.type ?? gatePack?.type ?? (runbook ? 'runbook' : inferredType);
+  // Binding resolution consumes only identity and title. Keep the same canonical
+  // classification (including declarative flows and runbooks), without extracting
+  // search terms, mentions, links, or constructing a persistent graph.
+  if (bindingOnly) return { checksum, entry: {
+    path: relativePath, type, title, phase,
+    ...(memoryRecord ? { memoryRecord } : {}),
+    name: flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name
+      ?? (OPERATIONAL_DISCOVERY_TYPES.includes(type as typeof OPERATIONAL_DISCOVERY_TYPES[number])
+        ? extractCanonicalName(data, relativePath) : undefined),
+    tags: [], dependencies: [], dependents: [], checksum,
+    created: '', updated: '', summary: '',
+  } };
+  const tags = flow?.tags ?? decision?.tags ?? gatePack?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
+  const summary = flow?.description ?? decision?.description ?? gatePack?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
+  const dependencies = extractMentions(content);
+  const markdownLinks = extractMarkdownLinks(content);
+
+  // Discovery metadata (#1214, #1540, #1792) — meaningful for operational
+  // AIWG artifact kinds. Kept undefined on document types so the index file
+  // stays small for the common case.
+  const isDiscoverable = OPERATIONAL_DISCOVERY_TYPES.includes(
+    type as typeof OPERATIONAL_DISCOVERY_TYPES[number],
+  );
+  // Declarative processes have no trigger phrases — they rely on their
+  // capability and structure-aware search terms.
+  const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
+  const capability = flow?.capability ?? decision?.capability ?? gatePack?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
+  const kind = flow?.kind ?? decision?.kind ?? gatePack?.kind ?? runbook?.kind;
+  const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
+  const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? gatePack?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
+  const kernel =
+    data.kernel === true || data.kernel === 'true' ? true : undefined;
+  // Script entrypoint metadata is meaningful for skills only (#1227).
+  const script = type === 'skill' ? extractSkillScript(data) : undefined;
+  const operationalState = normalizeOperationalState(data.operational_state);
+  const stateTransfer = normalizeStateTransferProjection(data.state_transfer);
+  // Canonical short name (#1233) — used by the scorer to floor exact-name
+  // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
+  // remain searchable even when the rendered title strips the hyphen.
+  const name = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
+
+  const entry: MetadataEntry = {
+    ...(memoryRecord ? { memoryRecord } : {}),
+    ...(typeof data.memoryCategory === 'string' ? { memoryCategory: data.memoryCategory } : {}),
+    path: relativePath,
+    type,
+    ...(kind ? { kind } : {}),
+    ...(sourceType ? { sourceType } : {}),
+    phase,
+    title,
+    tags,
+    created: typeof data.created === 'string' ? data.created : new Date(job.birthtimeMs).toISOString(),
+    updated: new Date(job.mtimeMs).toISOString(),
+    checksum,
+    summary,
+    dependencies,
+    ...(markdownLinks.length > 0 ? { markdownLinks } : {}),
+    dependents: [], // Computed after all entries are processed
+    ...(name ? { name } : {}),
+    ...(triggers && triggers.length > 0 ? { triggers } : {}),
+    ...(capability ? { capability } : {}),
+    ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
+    ...(kernel ? { kernel } : {}),
+    ...(script ? { script } : {}),
+    ...(type === 'rule' || type === 'behavior' ? extractRuleBindings(data, body) :
+      Array.isArray(data.paths) ? { governedPaths: data.paths.filter((value): value is string => typeof value === 'string') } : {}),
+    ...(operationalState ? { operationalState } : {}),
+    ...(stateTransfer ? { stateTransfer } : {}),
+  };
+  return { checksum, entry };
+}
+
+/** Return change-detection counts for artifact builds; skipped/source builds return void. */
+export async function buildIndex(cwd: string, options: BuildOptions = {}): Promise<ManifestStats | void> {
+  loadUserGraphConfigs(cwd);
+  loadGlobalGraphConfigs();
+  const scanDirs = options.scope ? [path.join(cwd, options.scope)] : options.graph
+    ? GRAPH_CONFIGS[options.graph]?.scanDirs.map(dir => resolveGraphScanDir(cwd, dir)) ?? []
+    : [resolveProjectAiwgDir(cwd)];
+  if (!scanDirs.some(dir => fs.existsSync(dir))) {
+    // Keep the owner's missing-root diagnostic/exit path before creating output directories.
+    await buildIndexSnapshot(cwd, options, () => '');
+    return;
+  }
+  const directory = options.outputDir
+    ? path.join(options.outputDir, options.graph ? `.aiwg/.index/${options.graph}` : INDEX_DIR)
+    : resolveIndexDir(cwd, options.graph);
+  // Manual and background builds acquire the same per-output owner lock.
+  const release = await acquireDirectoryLock(`${directory}.build.lock`, {
+    timeoutMs: options.lockWaitMs ?? 180_000, reclaimDeadOwner: true,
+  });
+  let staging: string | undefined;
+  const start = Date.now();
+  let owned: IndexAdapter | undefined;
+  try {
+    const adapter = !options.scope && !options.includeIgnored
+      ? indexAdapterRegistry(cwd).find(item => item.name === (options.graph ?? 'project')) : undefined;
+    owned = adapter && directory === path.dirname(adapter.statePath) ? adapter : undefined;
+    const observation: BuildObservation = { selection: {} };
+    const preparePublication = (): string => {
+      fs.mkdirSync(directory, { recursive: true });
+      return staging ??= fs.mkdtempSync(path.join(directory, '.build-'));
+    };
+    const stats = await buildIndexSnapshot(cwd, options, preparePublication, owned ? observation : undefined);
+    // A receipt hit verifies the existing snapshot directly against the scan's
+    // stats. There is no extraction interval to recheck. Real builds still probe
+    // again after preparation so concurrent source changes remain pending.
+    const after = owned ? observation.unchanged ? observation.before
+      : await graphIndexDigest(cwd, options.graph, { selection: observation.selection }) : undefined;
+    // All extraction and backend work has succeeded before any live file moves.
+    if (owned) recordIndexVerification(owned, cwd, { before: observation.before, after, wallMs: Date.now() - start }, staging);
+    if (staging) publishIndexFiles(staging, directory);
+    return stats;
+  } catch (error) {
+    if (owned) {
+      try { recordIndexVerification(owned, cwd, { error: error instanceof Error ? error.message : String(error), wallMs: Date.now() - start }); }
+      catch { /* Preserve the original build failure if recording is unavailable. */ }
+    }
+    throw error;
+  } finally {
+    try { if (staging) fs.rmSync(staging, { recursive: true, force: true }); }
+    finally { await release(); }
+  }
+}
+
+interface BuildObservation {
+  before?: string;
+  unchanged?: boolean;
+  selection: NonNullable<ArtifactDiscoveryOptions['selection']>;
+}
+
+async function buildIndexSnapshot(
   cwd: string,
-  options: BuildOptions = {}
-): Promise<void> {
+  options: BuildOptions,
+  preparePublication: () => string,
+  observation?: BuildObservation,
+): Promise<ManifestStats | void> {
   const { force = false, verbose = false, scope, includeIgnored = false, outputDir, graph, explicit = true } = options;
+  const workers = resolveIndexWorkers(options.workers);
   const startTime = Date.now();
   const log = options.quiet ? (..._args: unknown[]) => {} : console.log;
 
@@ -977,10 +1196,11 @@ export async function buildIndex(
   const effectiveOutputCwd = outputDir ?? cwd;
 
   if (graph === 'source') {
+    if (observation) observation.before = await graphIndexDigest(cwd, graph, { selection: observation.selection });
     const { buildSourceGraphIndex } = await import('./source-graph.js');
     await buildSourceGraphIndex({
       cwd,
-      outputDir: indexOutputDir,
+      outputDir: preparePublication(),
       effectiveOutputCwd,
       verbose,
     });
@@ -995,21 +1215,12 @@ export async function buildIndex(
   const buildConfigHash = createHash('sha256')
     .update(JSON.stringify({ graphConfig, backendType }))
     .digest('hex');
-  const existingIndex = force
-    ? null
-    : outputDir
-      ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
-      : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
-  const canReuseExisting = existingIndex?.version === INDEX_VERSION
-    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION
-    && existingIndex.buildConfigHash === buildConfigHash;
-  const existingEntries = canReuseExisting ? existingIndex.entries : {};
-
-  // Load checksum manifest for fast stat-based change detection (#794).
-  // When --force is set we skip the manifest entirely and rebuild everything.
-  const manifest: ChecksumManifest = force || !canReuseExisting
+  const storedManifest: ChecksumManifest = force
     ? { version: 1, generated: '', entries: {} }
     : loadManifest(indexOutputDir);
+  const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
+  const reusable = !useFilenameMetadata && !graphConfig?.metadataSupplements?.length && !graphConfig?.edgeExtraction;
+  const fileStats = observation || (!force && reusable) ? new Map<string, fs.Stats>() : undefined;
   const nextManifestEntries: Record<string, import('./checksum-manifest.js').ManifestEntry> = {};
   const manifestStats: ManifestStats = {
     checked: 0,
@@ -1020,7 +1231,8 @@ export async function buildIndex(
   };
 
   // Collect files from all scan directories
-  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored });
+  const files = await collectGraphIndexFiles(cwd, graph, { scope, includeIgnored, fileStats, selection: observation?.selection });
+  if (observation) observation.before = await graphIndexDigest(cwd, graph, { files, fileStats });
   const entries: Record<string, MetadataEntry> = {};
   const tagIndex: TagIndex = {};
   const depGraph: DependencyGraph = {};
@@ -1029,23 +1241,101 @@ export async function buildIndex(
   let updatedCount = 0;
   let unchangedCount = 0;
 
-  const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
-
   const reportBuild = (buildTimeMs: number, total: number): void => {
     log(`Artifact index built in ${buildTimeMs}ms`);
     log(`  Indexed ${newCount} new, updated ${updatedCount}, unchanged ${unchangedCount}`);
     log(`  Total: ${total} artifacts`);
-    if (!force && manifestStats.checked > 0) {
-      const fastPath = manifestStats.statSkipped;
-      const slowPath = manifestStats.checked - manifestStats.statSkipped;
-      log(`  Change detection: ${manifestStats.checked} checked, ${fastPath} skipped via stat, ${slowPath} content-read, ${manifestStats.reindexed} re-indexed`);
-      if (manifestStats.pruned > 0) {
-        log(`  Pruned ${manifestStats.pruned} stale manifest entries (files no longer on disk)`);
-      }
-    }
+    if (!force) for (const message of formatManifestStats(manifestStats)) log(message);
     const displayDir = graph ? indexOutputDir : `${INDEX_DIR}/`;
     log(`  Output: ${displayDir}`);
   };
+
+  const requiredFiles = ['tags.json', 'dependencies.json'];
+  if (backendType === 'sqlite') requiredFiles.push('graph.db');
+  const fileSignature = (filename: string): string => {
+    try {
+      const stat = fs.statSync(path.join(indexOutputDir, filename), { bigint: true });
+      return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
+    } catch { return ''; }
+  };
+  const relationsReceiptMatches = (): boolean => {
+    const projection = storedManifest.receipt?.relations;
+    return graph !== 'framework' || Boolean(projection?.revision === FRAMEWORK_RELATIONS_REVISION
+      && projection.signature && projection.signature === fileSignature('relations.json'));
+  };
+  const entriesDigest = (values: ChecksumManifest['entries']): string =>
+    createHash('sha256').update(JSON.stringify(values)).digest('hex');
+  const writeBuildManifest = (values: ChecksumManifest['entries']): void => {
+    writeManifest(publicationDir, { version: 1, generated: new Date().toISOString(), entries: values,
+      ...(reusable ? { receipt: {
+        indexVersion: INDEX_VERSION, extractorVersion: INDEX_EXTRACTOR_VERSION, buildConfigHash,
+        sourceRoot: path.resolve(cwd), metadataSignature: fileSignature('metadata.json'), entriesDigest: entriesDigest(values),
+        ...(graph === 'framework' ? { relations: { revision: FRAMEWORK_RELATIONS_REVISION, signature: fileSignature('relations.json') } } : {}),
+      } } : {}),
+    });
+  };
+
+  // A successful receipt proves the manifest belongs to this exact metadata
+  // file. Still enumerate/stat every source and verify the complete file set;
+  // unchanged builds need not parse the much larger metadata/dependency data.
+  const receipt = storedManifest.receipt;
+  if (!force && reusable && storedManifest.generated && receipt
+    && receipt.indexVersion === INDEX_VERSION && receipt.extractorVersion === INDEX_EXTRACTOR_VERSION
+    && receipt.buildConfigHash === buildConfigHash && receipt.sourceRoot === path.resolve(cwd)
+    && receipt.metadataSignature && receipt.metadataSignature === fileSignature('metadata.json')
+    && relationsReceiptMatches()
+    && receipt.entriesDigest === entriesDigest(storedManifest.entries)
+    && files.length === Object.keys(storedManifest.entries).length
+    && requiredFiles.every(filename => fs.existsSync(path.join(indexOutputDir, filename)))) {
+    const stats = loadIndexFromDir<IndexStats>(indexOutputDir, 'stats.json');
+    if (stats?.version === INDEX_VERSION && stats.extractorVersion === INDEX_EXTRACTOR_VERSION
+      && stats.totalArtifacts === files.length && files.every(file => {
+        try { return statMatches(fileStats?.get(file) ?? fs.statSync(file), storedManifest.entries[indexPathFor(cwd, file, graph)]); }
+        catch { return false; }
+      })) {
+      unchangedCount = files.length;
+      manifestStats.checked = files.length;
+      manifestStats.statSkipped = files.length;
+      const buildTimeMs = Date.now() - startTime;
+      // Only stats changes on a receipt hit; its existing atomic writer is
+      // sufficient under the owner lock, without staging or backup copies.
+      writeIndexFile(effectiveOutputCwd, 'stats.json', { ...stats, builtAt: new Date().toISOString(), buildTimeMs }, indexOutputDir);
+      if (observation) observation.unchanged = true;
+      reportBuild(buildTimeMs, files.length);
+      return manifestStats;
+    }
+  }
+
+  const publicationDir = preparePublication();
+  const existingIndex = force ? null : outputDir
+    ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
+    : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
+  const canReuseExisting = existingIndex?.version === INDEX_VERSION
+    && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION && existingIndex.buildConfigHash === buildConfigHash;
+  const existingEntries = canReuseExisting ? existingIndex.entries : {};
+  const manifest: ChecksumManifest = canReuseExisting ? storedManifest : { version: 1, generated: '', entries: {} };
+
+  // Establish the complete changed-file batch before any extraction/reduction.
+  // Warm stat hits never create threads or read source contents.
+  const preparationStats = new Map<string, fs.Stats>();
+  const jobs: IndexPreparationJob[] = [];
+  if (!useFilenameMetadata) for (const fullPath of files) {
+    let stat: fs.Stats;
+    try { stat = fileStats?.get(fullPath) ?? fs.statSync(fullPath); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+    preparationStats.set(fullPath, stat);
+    const relativePath = indexPathFor(cwd, fullPath, graph), previous = manifest.entries[relativePath];
+    if (!force && statMatches(stat, previous) && existingEntries[relativePath]?.checksum === previous?.checksum) continue;
+    jobs.push({ fullPath, relativePath, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs, sizeBytes: stat.size,
+      ...(!force && existingEntries[relativePath] ? { existingChecksum: existingEntries[relativePath].checksum } : {}) });
+  }
+  const preparation = await runIndexPreparation(jobs, prepareIndexArtifact, import.meta.url, workers,
+    options.onDiagnostic ?? (message => console.warn(`Index preparation: ${message}`)));
+  manifestStats.reindexed = preparation.results.filter(result => result.entry !== undefined).length;
+  for (const result of preparation.results) for (const warning of result.warnings ?? []) {
+    (options.onDiagnostic ?? (message => console.warn(`Index preparation: ${message}`)))(warning);
+  }
+  const preparedArtifacts = new Map(jobs.map((job, index) => [job.fullPath, preparation.results[index]]));
 
   for (const fullPath of files) {
     const relativePath = indexPathFor(cwd, fullPath, graph);
@@ -1079,7 +1369,7 @@ export async function buildIndex(
       // This is the fast path: unchanged files don't touch the filesystem beyond fs.statSync.
       let stat: fs.Stats;
       try {
-        stat = fs.statSync(fullPath);
+        stat = preparationStats.get(fullPath) ?? fs.statSync(fullPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           manifestStats.pruned++;
@@ -1101,90 +1391,18 @@ export async function buildIndex(
         continue;
       }
 
-      // Phase 2: content read + checksum verification for files that looked changed.
-      const content = fs.readFileSync(fullPath, 'utf-8');
-      const checksum = computeChecksum(content);
-
-      // Skip unchanged files in incremental mode (checksum matched despite stat drift)
+      const prepared = preparedArtifacts.get(fullPath)!;
+      const { checksum } = prepared;
       if (!force && existingEntries[relativePath]?.checksum === checksum) {
         entries[relativePath] = existingEntries[relativePath];
-        // Update manifest with current stat so Phase 1 succeeds next time.
         nextManifestEntries[relativePath] = makeEntry(checksum, stat);
         unchangedCount++;
         manifestStats.checksumSkipped++;
         if (verbose) log(`  unchanged (checksum): ${relativePath}`);
         continue;
       }
-
-      manifestStats.reindexed++;
       nextManifestEntries[relativePath] = makeEntry(checksum, stat);
-      const { data, body } = parseFrontmatter(content);
-      // YAML Flow documents (workflow.aiwg.io/v1) are pure YAML, not
-      // markdown+frontmatter — detect them up front so they classify and
-      // become discoverable (#1540).
-      const flow = parseFlowDoc(content, relativePath);
-      const decision = flow ? null : parseDecisionDoc(content, relativePath);
-      const gatePack = flow || decision ? null : parseGatePackDoc(content, relativePath);
-      const inferredType = inferType(data, relativePath);
-      const physicalType = inferType({ ...data, type: undefined }, relativePath);
-      const runbook = flow || decision || gatePack ? null : parseRunbookDoc(data, body, relativePath);
-      const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
-      const title = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.title ?? extractTitle(data, body);
-      const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
-      const type = flow?.type ?? decision?.type ?? gatePack?.type ?? (runbook ? 'runbook' : inferredType);
-      const tags = flow?.tags ?? decision?.tags ?? gatePack?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
-      const summary = flow?.description ?? decision?.description ?? gatePack?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
-      const dependencies = extractMentions(content);
-      const markdownLinks = extractMarkdownLinks(content);
-
-      // Discovery metadata (#1214, #1540, #1792) — meaningful for operational
-      // AIWG artifact kinds. Kept undefined on document types so the index file
-      // stays small for the common case.
-      const isDiscoverable = OPERATIONAL_DISCOVERY_TYPES.includes(
-        type as typeof OPERATIONAL_DISCOVERY_TYPES[number],
-      );
-      // Declarative processes have no trigger phrases — they rely on their
-      // capability and structure-aware search terms.
-      const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
-      const capability = flow?.capability ?? decision?.capability ?? gatePack?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
-      const kind = flow?.kind ?? decision?.kind ?? gatePack?.kind ?? runbook?.kind;
-      const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
-      const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? gatePack?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
-      const kernel =
-        data.kernel === true || data.kernel === 'true' ? true : undefined;
-      // Script entrypoint metadata is meaningful for skills only (#1227).
-      const script = type === 'skill' ? extractSkillScript(data) : undefined;
-      const operationalState = normalizeOperationalState(data.operational_state);
-      const stateTransfer = normalizeStateTransferProjection(data.state_transfer);
-      // Canonical short name (#1233) — used by the scorer to floor exact-name
-      // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
-      // remain searchable even when the rendered title strips the hyphen.
-      const name = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
-
-      entry = {
-        path: relativePath,
-        type,
-        ...(kind ? { kind } : {}),
-        ...(sourceType ? { sourceType } : {}),
-        phase,
-        title,
-        tags,
-        created: typeof data.created === 'string' ? data.created : stat.birthtime.toISOString(),
-        updated: stat.mtime.toISOString(),
-        checksum,
-        summary,
-        dependencies,
-        ...(markdownLinks.length > 0 ? { markdownLinks } : {}),
-        dependents: [], // Computed after all entries are processed
-        ...(name ? { name } : {}),
-        ...(triggers && triggers.length > 0 ? { triggers } : {}),
-        ...(capability ? { capability } : {}),
-        ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
-        ...(kernel ? { kernel } : {}),
-        ...(script ? { script } : {}),
-        ...(operationalState ? { operationalState } : {}),
-        ...(stateTransfer ? { stateTransfer } : {}),
-      };
+      entry = prepared.entry!;
     }
 
     entries[relativePath] = entry;
@@ -1210,28 +1428,27 @@ export async function buildIndex(
     && manifest.generated && total === Object.keys(manifest.entries).length
     && manifestStats.pruned === 0) {
     const stats = loadIndexFromDir<IndexStats>(indexOutputDir, 'stats.json');
-    const requiredFiles = ['tags.json', 'dependencies.json'];
-    if (backendType === 'sqlite') requiredFiles.push('graph.db');
     if (stats?.version === INDEX_VERSION && stats.extractorVersion === INDEX_EXTRACTOR_VERSION
       && stats.totalArtifacts === total
       && requiredFiles.every(filename => fs.existsSync(path.join(indexOutputDir, filename)))) {
       // A timestamp-only source change needs a manifest refresh, but does not
       // invalidate metadata, tags, dependencies, or the persistent backend.
-      if (manifestStats.checksumSkipped > 0) {
-        writeManifest(indexOutputDir, {
-          version: 1,
-          generated: new Date().toISOString(),
-          entries: nextManifestEntries,
-        });
+      const projectionNeedsRepair = graph === 'framework' && !relationsReceiptMatches();
+      if (graph === 'framework') {
+        const { writeRelations } = await import('./relations-builder.js');
+        if (force || !relationsReceiptMatches()) await writeRelations(entries, effectiveOutputCwd, publicationDir, true);
       }
       const buildTimeMs = Date.now() - startTime;
       writeIndexFile(effectiveOutputCwd, 'stats.json', {
         ...stats,
         builtAt: new Date().toISOString(),
         buildTimeMs,
-      }, indexOutputDir);
+      }, publicationDir);
+      // Preserve no-op manifest bytes after output-only timestamp drift.
+      // Renew receipts only for changed source stats or repaired projections.
+      if (manifestStats.checksumSkipped > 0 || projectionNeedsRepair) writeBuildManifest(nextManifestEntries);
       reportBuild(buildTimeMs, total);
-      return;
+      return manifestStats;
     }
   }
 
@@ -1250,6 +1467,8 @@ export async function buildIndex(
 
   // Build dependency graph and compute dependents
   let markdownLinkEdgeCount = 0;
+  const entryPaths = Object.keys(entries);
+  const dependencyPaths = new Map<string, string | undefined>();
   for (const entry of Object.values(entries)) {
     if (!depGraph[entry.path]) {
       depGraph[entry.path] = { upstream: [], downstream: [] };
@@ -1257,9 +1476,10 @@ export async function buildIndex(
 
     for (const dep of entry.dependencies) {
       // Normalize: check if referenced path exists in the index
-      const normalizedDep = Object.keys(entries).find(
-        p => p === dep || p.endsWith(dep)
-      );
+      if (!dependencyPaths.has(dep)) {
+        dependencyPaths.set(dep, entryPaths.find(p => p === dep || p.endsWith(dep)));
+      }
+      const normalizedDep = dependencyPaths.get(dep);
       if (normalizedDep && normalizedDep !== entry.path) {
         addDependencyEdge(depGraph, entries, entry.path, normalizedDep, 'depends-on');
       }
@@ -1366,6 +1586,12 @@ export async function buildIndex(
     entry.dependents = [...new Set(entry.dependents)];
   }
 
+  if (graph === 'framework') {
+    const { writeRelations } = await import('./relations-builder.js');
+    await writeRelations(entries, effectiveOutputCwd, publicationDir,
+      force || !relationsReceiptMatches(), indexOutputDir);
+  }
+
   const buildTimeMs = Date.now() - startTime;
 
   // Write index files
@@ -1378,14 +1604,14 @@ export async function buildIndex(
     entries,
   };
 
-  writeIndexFile(effectiveOutputCwd, 'metadata.json', index, indexOutputDir);
-  writeIndexFile(effectiveOutputCwd, 'tags.json', tagIndex, indexOutputDir);
-  writeIndexFile(effectiveOutputCwd, 'dependencies.json', depGraph, indexOutputDir);
+  writeIndexFile(effectiveOutputCwd, 'metadata.json', index, publicationDir);
+  writeIndexFile(effectiveOutputCwd, 'tags.json', tagIndex, publicationDir);
+  writeIndexFile(effectiveOutputCwd, 'dependencies.json', depGraph, publicationDir);
 
   // Materialize the configured backend and always retain dependencies.json as
   // the stable compatibility/export contract.
   const { createGraphBackend } = await import('./graph-backend.js');
-  const persistentPath = backendType === 'sqlite' ? path.join(indexOutputDir, 'graph.db') : undefined;
+  const persistentPath = backendType === 'sqlite' ? path.join(publicationDir, 'graph.db') : undefined;
   let selectedBackend;
   try {
     selectedBackend = await createGraphBackend(backendType, persistentPath);
@@ -1398,14 +1624,8 @@ export async function buildIndex(
   // The next manifest contains entries for every file we processed this build.
   // Files that disappeared from disk are pruned; the resulting manifest is
   // written atomically.
-  const nextManifest: ChecksumManifest = {
-    version: 1,
-    generated: new Date().toISOString(),
-    entries: nextManifestEntries,
-  };
   manifestStats.pruned = Object.keys(manifest.entries).length - Object.keys(nextManifestEntries).length;
   if (manifestStats.pruned < 0) manifestStats.pruned = 0;
-  writeManifest(indexOutputDir, nextManifest);
 
   // Write stats
   const downstreamEdges = Object.values(depGraph).reduce(
@@ -1458,8 +1678,10 @@ export async function buildIndex(
       orphanedArtifacts: orphaned,
       mostReferenced,
     },
-  }, indexOutputDir);
+  }, publicationDir);
+  writeBuildManifest(nextManifestEntries);
 
   // Report
   reportBuild(buildTimeMs, total);
+  return manifestStats;
 }

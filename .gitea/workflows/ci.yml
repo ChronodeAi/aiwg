@@ -22,11 +22,16 @@ jobs:
     # npm's registry-key rotation. Keep the signature hard gate on the same
     # digest-pinned npm 11 runtime used by the publication workflow.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
-    timeout-minutes: 25
+    # Preserve setup and post-test headroom around the required UAT and serve steps.
+    # The default Vitest corpus runs once across the four required test-shards legs.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          # The changed-code coverage gate diffs HEAD against its parent (#3641).
+          fetch-depth: 2
 
       - name: Install dependencies
         # Plain `npm ci` (no --omit=optional). Sharp's prebuilt libvips
@@ -73,17 +78,22 @@ jobs:
         # See .aiwg/architecture/adr-publish-time-evidence.md.
         run: npm run lint:audit-signatures
 
-      - name: Lint deployed agent definition sizes (#1602)
-        # Hard gate for the 16 KiB subagent dispatch ceiling. The script scans
-        # deployed provider agent defs and allows only the documented
-        # security-auditor outlier from #1587.
-        run: npm run lint:agent-sizes
-
       - name: Run type check
         run: npm run typecheck
 
       - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
         run: npm run build:cli
+
+      - name: Lint provider context bridge sizes (#3740)
+        run: npm run lint:context-sizes
+
+      - name: Lint deployed agent definition sizes (#1602)
+        # Hard gate for the 16 KiB subagent dispatch ceiling. The script scans
+        # deployed provider agent defs and allows only the documented
+        # security-auditor outlier from #1587.
+        # Runs after the build: provider translators load the compiled
+        # model-wrapper modules from dist/ (#2649).
+        run: npm run lint:agent-sizes
 
       - name: Require bundle provider sandbox suite where bwrap is available (#2846)
         if: gitea.event_name == 'push' && gitea.ref == 'refs/heads/main'
@@ -125,10 +135,13 @@ jobs:
         run: npm run lint:orchestration-packs
 
       - name: Enforce measured testing-quality and audit-foundation coverage
-        run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement
+        run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement && npm run test:coverage:orchestration-changed
 
       - name: Run source-bound testing conformance example
         run: npm run test:conformance:example
+
+      - name: Lint rule activation contracts (#2938)
+        run: npm run lint:rule-activation
 
       - name: Lint schemas
         # Validates schemas/executor-v1.json (draft-2020-12) and all
@@ -156,6 +169,12 @@ jobs:
         # Offline, read-only regeneration into a temporary directory.
         run: npm run lint:plugin-copies
 
+      - name: Lint plugin links and provider context (#3745)
+        run: |
+          npm run lint:plugin-links
+          npm run lint:claude-context
+          npm run lint:context-firewall
+
       - name: Verify vault CI migration
         # Local-only gate: validates workflow secret references, vault fetch
         # specs, the AppRole policy, and migration docs without reading live
@@ -173,6 +192,11 @@ jobs:
         # CI budget intact. Zero network I/O — fully deterministic. (#1183)
         run: npm run test:conformance
 
+      - name: Run evidence traces (S2 scheduler and MC caller verdicts, offline)
+        # Records PASS/FAIL/NOT-EXPRESSIBLE verdicts as data for #2917; the lane
+        # fails only when the harness itself breaks. No network or paid calls.
+        run: npm run test:evidence
+
       - name: Preserve testing conformance evidence
         if: always()
         uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20
@@ -186,6 +210,7 @@ jobs:
             test-results/testing-quality-coverage
             test-results/audit-foundations-coverage
             test-results/coverage-enforcement
+            test-results/orchestration-changed-coverage
           if-no-files-found: error
 
       - name: Run Dataset Intelligence conformance contracts (#2242)
@@ -205,6 +230,15 @@ jobs:
         # state-manager suites' async rot (#1777) is now fixed, so the full
         # `test:node` set is gated here. Deterministic, no network.
         run: npm run test:node
+
+      - name: Run Cockpit UI and smoke suites (#3729)
+        # @aiwg/cockpit owns its own runner: 15 web UI suites (vitest/jsdom via
+        # test:web) plus four deterministic offline smoke harnesses. Uses the
+        # package's own install (via build:web) and test commands. The two poc
+        # harnesses stay manual-only (see optInPackageTests): kill-bridge needs
+        # fixed ports plus SIGKILL timing, and security-checks touches the real
+        # $HOME runtime file.
+        run: npm --prefix apps/cockpit run build:web && npm --prefix apps/cockpit run test:web && npm --prefix apps/cockpit run smoke
 
       - name: Run storage backend conformance gate (#2190/#2191)
         # Enforces the zero-dependency golden corpus, migration safety/fault
@@ -249,18 +283,8 @@ jobs:
         # recurrence carries its environment evidence. Read-only; never fails.
         run: node tools/ci/runner-headroom.mjs .
 
-      - name: Run tests
-        env:
-          # Shared-runner policy: paired Node baselines, median of 7 samples.
-          AIWG_PERF_BUDGET_VERSION_MS: "300"
-          AIWG_PERF_BUDGET_HELP_MS: "750"
-          AIWG_PERF_SAMPLE_COUNT: "7"
-        # See #2521 — bound the full suite below this job's 25m cap so a hang is
-        # reported with a process tree rather than dying anonymously. The unit
-        # pass alone reached 9.1-9.5 min under runner load by 2026-10-14 (UAT
-        # follows), so the former 10m bound tripped on healthy runs mid-UAT;
-        # 20m keeps ~2x headroom while still catching a genuine hang.
-        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm run test:ci
+      - name: Run UAT
+        run: node tools/ci/run-with-hang-report.mjs --timeout 3m -- npm run uat
 
       - name: Run tier-3 integration suite (#1174)
         # Spawns aiwg serve via bin/aiwg.mjs on an ephemeral port. The
@@ -272,6 +296,106 @@ jobs:
           # Allow the serve startup banner up to 30s in docker-in-docker.
           AIWG_SERVE_HTTP_TIMEOUT_MS: "30000"
         run: npm run test:integration:serve
+
+  # Split the default Vitest file set with the duration-balanced native sequencer
+  # (config/test-durations.json; refresh with npm run test:durations).
+  # Exhaustive deployment matrices run in the pre-release test:release-slow lane.
+  # All four required legs retain the production build, optional
+  # SQLite backend, provider sandbox capability gate, owned TMPDIR/leak check,
+  # performance environment and the existing 20-minute watchdog. Four workers
+  # leave headroom for the child CLIs used by deployment-heavy test files on
+  # the smallest qualified runner (8 CPUs / 16 GiB).
+  test-shards:
+    name: Default tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run type check
+        run: npm run typecheck
+
+      - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
+        run: npm run build:cli
+
+      - name: Require bundle provider sandbox suite where bwrap is available (#2846)
+        if: gitea.event_name == 'push' && gitea.ref == 'refs/heads/main'
+        run: |
+          if ! command -v bwrap >/dev/null 2>&1; then
+            echo "::notice::Skipping provider sandbox lane: bwrap is unavailable"
+            exit 0
+          fi
+          if ! bwrap --unshare-all --unshare-user --disable-userns --die-with-parent --ro-bind / / -- /bin/true; then
+            echo "::notice::Skipping provider sandbox lane: bwrap/user namespaces are unavailable"
+            exit 0
+          fi
+          AIWG_REQUIRE_PROVIDER_SANDBOX=1 nice -n 19 ./node_modules/.bin/vitest run --config config/vitest.config.js --maxWorkers=4 \
+            test/conformance/gates-v1/gates-provider-sandbox.test.ts \
+            test/conformance/gates-v1/gates-provider-isolation.test.ts \
+            test/conformance/gates-v1/gates-bundle-providers.test.ts
+
+      - name: Install SQLite test backend
+        run: npm run features:sqlite
+
+      - name: Record runner headroom (#2553)
+        run: node tools/ci/runner-headroom.mjs .
+
+      - name: Verify native shard inventory
+        run: node tools/testing/check-native-shards.mjs 4
+
+      - name: Run default test shard
+        env:
+          # Shared-runner policy: paired Node baselines, median of 7 samples.
+          AIWG_PERF_BUDGET_VERSION_MS: "300"
+          AIWG_PERF_BUDGET_HELP_MS: "750"
+          AIWG_PERF_SAMPLE_COUNT: "7"
+        run: node tools/ci/run-with-hang-report.mjs --timeout 20m -- npm test -- --shard=${{ matrix.shard }}/4 --maxWorkers=4
+
+  # PGlite instantiates WebAssembly in this required offline forks lane.
+  # Worker-thread teardown can abort V8 itself (#3073); the base threads
+  # config excludes these files so native default shards never run them.
+  wasm:
+    name: WebAssembly tests (forks)
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build CLI prerequisites
+        run: npm run build:cli
+      - name: Run WebAssembly tests in forks with TMPDIR leak gate
+        run: node tools/ci/run-with-hang-report.mjs --timeout 8m -- npm run test:wasm
+
+  # Full-corpus provider deployments spawn bounded child CLIs and share one
+  # immutable source cache. Keep them serial and outside the general worker
+  # pool while retaining them as a required build prerequisite.
+  deployment:
+    name: Provider deployment integration
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build CLI prerequisites
+        run: npm run build:cli
+      - name: Run serial provider deployment integration
+        run: node tools/ci/run-with-hang-report.mjs --timeout 18m -- npm run test:deployment
 
   # Full-corpus index performance, real package installation/build, and
   # full-corpus discovery are isolated gates. They must not compete with the
@@ -309,10 +433,14 @@ jobs:
         run: node tools/ci/run-with-hang-report.mjs --timeout 25m -- npm run test:d29-slow
 
   packaging:
-    name: Package lifecycle
+    name: Package lifecycle (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
@@ -325,7 +453,7 @@ jobs:
       - name: Enforce package size and dependency budgets (#3075)
         run: npm run check:budgets
       - name: Run isolated packaging lifecycle tests
-        run: npm run test:packaging
+        run: npm run test:packaging -- --shard=${{ matrix.shard }}/4
 
   release-discovery:
     name: Release discovery and installed package
@@ -347,7 +475,7 @@ jobs:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 10
-    needs: [test, d29-slow, packaging, release-discovery]
+    needs: [test, test-shards, wasm, deployment, d29-slow, packaging, release-discovery]
 
     steps:
       - name: Checkout code

@@ -297,7 +297,7 @@ export async function loadAndValidateManifest(
 
   const result = BundleManifestSchema.safeParse(parsed);
   if (!result.success) {
-    return { errors: zodErrorToValidationErrors(result.error, manifestPath) };
+    return { errors: zodErrorToValidationErrors(result.error, manifestPath, parsed) };
   }
 
   const manifest = result.data;

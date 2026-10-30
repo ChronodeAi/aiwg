@@ -220,16 +220,16 @@ Issue skills will automatically use Gitea after discovery:
 
 ```bash
 aiwg discover "issue create" --type skill
-aiwg show skill issue-create
+aiwg show skill issue-create --body
 aiwg run skill issue-create -- plan --title "Implement user auth" --body "Need login/logout functionality"
 # → Creates issue on Gitea
 
 aiwg discover "issue list" --type skill
-aiwg show skill issue-list
+aiwg show skill issue-list --body
 # → Lists issues from Gitea
 
 aiwg discover "issue update" --type skill
-aiwg show skill issue-update
+aiwg show skill issue-update --body
 # → Updates issue on Gitea
 ```
 
@@ -247,16 +247,16 @@ Issue skills will use local files:
 
 ```bash
 aiwg discover "issue create" --type skill
-aiwg show skill issue-create
+aiwg show skill issue-create --body
 aiwg run skill issue-create -- plan --title "Fix navigation bug" --body "Nav menu not showing on mobile"
 # → Creates .aiwg/issues/ISSUE-001.md
 
 aiwg discover "issue list" --type skill
-aiwg show skill issue-list
+aiwg show skill issue-list --body
 # → Lists files from .aiwg/issues/
 
 aiwg discover "issue update" --type skill
-aiwg show skill issue-update
+aiwg show skill issue-update --body
 # → Updates .aiwg/issues/ISSUE-001.md
 ```
 
@@ -276,16 +276,16 @@ Issue skills will use GitHub:
 
 ```bash
 aiwg discover "issue create" --type skill
-aiwg show skill issue-create
+aiwg show skill issue-create --body
 aiwg run skill issue-create -- plan --title "Add dark mode" --body "Implement dark mode theme toggle"
 # → Creates GitHub issue
 
 aiwg discover "issue list" --type skill
-aiwg show skill issue-list
+aiwg show skill issue-list --body
 # → Lists GitHub issues with 'feature' label
 
 aiwg discover "issue update" --type skill
-aiwg show skill issue-update
+aiwg show skill issue-update --body
 # → Closes GitHub issue #42
 ```
 

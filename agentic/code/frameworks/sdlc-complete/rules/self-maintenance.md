@@ -1,5 +1,20 @@
 ---
 enforcement: medium
+activation: bound
+summary: Use paired AIWG maintenance skills before raw action commands; preserve registry state and perform health checks before long orchestration sessions.
+bound_to:
+  skills:
+    - use
+    - aiwg-doctor
+    - aiwg-refresh
+    - aiwg-regenerate
+    - mission-control
+    - aiwg-mission
+  agents:
+    - aiwg-steward
+  flows: []
+triggers:
+  - how should agents maintain AIWG
 ---
 
 # Self-Maintenance Rule
@@ -40,7 +55,7 @@ For AIWG maintenance operations, the priority order is:
 | Check version | (discovery surface — direct CLI is correct) | `aiwg version` | Read `package.json` |
 | Detect provider | (discovery surface — direct CLI is correct) | `aiwg runtime-info` | Inspect directory structure |
 | Discover a capability | (discovery surface — direct CLI is correct) | `aiwg discover "..."` | Filesystem grep (forbidden — see `skill-discovery`) |
-| Fetch a skill body | (discovery surface — direct CLI is correct) | `aiwg show skill <name>` | Direct file read (forbidden — see `skill-discovery`) |
+| Fetch a skill body | (discovery surface — direct CLI is correct) | `aiwg show skill <name> --body` | Direct file read (forbidden — see `skill-discovery`) |
 
 ### 2. Pre-Flight Check (Long Sessions)
 

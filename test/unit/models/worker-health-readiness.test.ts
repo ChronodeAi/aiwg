@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { diagnoseWorkerHealthReadiness } from '../../../src/models/worker-health-readiness.js';
+import { diagnoseWorkerHealthReadiness, formatWorkerHealthReadinessFinding, workerHealthConfigurationFindings } from '../../../src/models/worker-health-readiness.js';
 import { unqualifiedWorkerRolesFixture, workerResolutionFixture } from '../../fixtures/worker-resolution.js';
-import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
+import { workerConfigDigest, validateParallelismConfig } from '../../../src/config/aiwg-config.js';
 
 // T-OG-12 / #2913 S1: synthetic offline inputs, no credentials, inference,
 // spawned process, MC/admission store or fixture cleanup side effects.
@@ -11,7 +11,143 @@ const fixture = () => {
   return f;
 };
 
+type Fixture = ReturnType<typeof fixture>;
+const paths = { configFile: '/project/.aiwg/aiwg.config', modelsFile: '/project/models.json',
+  catalogFile: '/cache/model-catalog.v1.json' };
+const workerMembers = ['workers/primary', 'workers/alternate'];
+
+const hazards: Array<{ name: string; seed: (f: Fixture) => void; code: string; pointer?: string;
+  configFile: string; configKey: string; members: string[]; nextAction: string }> = [
+  { name: 'missing installation evidence', seed: f => { f.snapshot.installations = {}; },
+    code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/parallelism/groups/workers/members/primary',
+    configFile: paths.configFile, configKey: '/parallelism/groups/workers/members/primary',
+    members: ['workers/primary'], nextAction: 'qualify-installation-and-profile' },
+  { name: 'unqualified required role', seed: f => { Object.assign(f, unqualifiedWorkerRolesFixture()); },
+    code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/parallelism/groups/workers/requiredRoles',
+    configFile: paths.configFile, configKey: '/parallelism/groups/workers/requiredRoles',
+    members: ['workers/efficiency'], nextAction: 'qualify-installation-and-profile' },
+  { name: 'shared malformed catalog', seed: f => {
+    Object.assign(f, unqualifiedWorkerRolesFixture());
+    f.snapshot.catalog.discovery!.instances!.codex.models[0].worker!.observedAt = 'invalid';
+  }, code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/catalog/discovery', configFile: paths.catalogFile,
+    configKey: '/discovery', members: ['workers/efficiency', 'workers/coding', 'workers/reasoning'],
+    nextAction: 'qualify-installation-and-profile' },
+  { name: 'optional role guidance has no covering members', seed: f => {
+    f.snapshot.models.defaults.workerSelection!.roleGuidance!.reasoning = {
+      ...f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding };
+  }, code: 'WORKER_ROLE_NOT_READY', configFile: paths.modelsFile,
+    configKey: '/defaults/workerSelection/roleGuidance/reasoning', members: workerMembers,
+    nextAction: 'qualify-role-route' },
+  { name: 'stale observation', seed: f => {
+    f.request.now = new Date(Date.parse(f.request.now) + 30 * 86400000).toISOString();
+  }, code: 'OG_ADAPTER_UNQUALIFIED', pointer: '/worker/observedAt', configFile: paths.catalogFile,
+    configKey: '/discovery/instances/codex/models/0/worker/observedAt', members: ['workers/primary'],
+    nextAction: 'refresh-worker-catalog' },
+  { name: 'denied ultra effort', seed: f => {
+    const guidance = f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding;
+    guidance.initialEffort = 'ultra'; guidance.effortLadder = ['ultra'];
+  }, code: 'OG_EFFORT_DENIED', configFile: paths.catalogFile,
+    configKey: '/discovery/instances/codex/models/0/worker/efforts', members: ['workers/primary'],
+    nextAction: 'select-qualified-effort' },
+  { name: 'contributor model', seed: f => {
+    const group = f.snapshot.config.parallelism!.groups!.workers;
+    group.members[0].model = 'contributor'; group.members.splice(1); group.fallback = [];
+    const row = f.snapshot.catalog.discovery!.instances!.codex.models[0];
+    row.id = row.apiModelId = 'contributor';
+  }, code: 'OG_MODEL_UNAPPROVED', pointer: '/defaults/workerSelection/guards/deniedModels',
+    configFile: paths.modelsFile, configKey: '/defaults/workerSelection/guards/deniedModels',
+    members: ['workers/primary'], nextAction: 'review-model-policy-and-freshness' },
+  { name: 'unknown quota scope', seed: () => {}, code: 'WORKER_QUOTA_SCOPE_UNKNOWN',
+    configFile: paths.configFile, configKey: '/parallelism/clis/codex/quotaScope', members: workerMembers,
+    nextAction: 'configure-qualified-quota-scope' },
+  { name: 'invalid cross-field health settings', seed: f => {
+    f.snapshot.config.parallelism!.health = { checkSeconds: 100, startupSeconds: 1 };
+  }, code: 'OG_CONFIG_REFERENCE', configFile: paths.configFile,
+    configKey: '/parallelism/health/checkSeconds', members: workerMembers,
+    nextAction: 'review-worker-configuration' },
+  { name: 'unavailable required step cap', seed: f => {
+    f.snapshot.config.parallelism!.health = { requireStepCap: true };
+    f.snapshot.registry.providers.codex.workerAdapter!.invocationProfiles!['fixture-shell'].controls.stepCap.support = 'not-applicable';
+  }, code: 'WORKER_STEP_CAP_NOT_READY', configFile: paths.configFile,
+    configKey: '/parallelism/health/requireStepCap', members: ['workers/primary'],
+    nextAction: 'qualify-step-enforcement' },
+  { name: 'second group lacks qualified model', seed: f => {
+    f.snapshot.config.parallelism!.groups!.reviewers = {
+      maxParallel: 1, members: [{ id: 'review', cli: 'codex', model: 'missing-model', roles: ['reasoning'] }] };
+    f.snapshot.models.defaults.workerSelection!.roleGuidance!.reasoning = {
+      ...f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding, groups: ['reviewers'] };
+  }, code: 'WORKER_ROLE_NOT_READY', configFile: paths.modelsFile,
+    configKey: '/defaults/workerSelection/roleGuidance/reasoning', members: ['reviewers/review'],
+    nextAction: 'qualify-role-route' },
+  { name: 'degraded health profile', seed: () => {}, code: 'WORKER_HEALTH_DEGRADED',
+    configFile: paths.configFile, configKey: '/parallelism/clis/codex/invocationProfile',
+    members: ['workers/primary'], nextAction: 'qualify-health-signals' },
+];
+
 describe('T-OG-12 offline worker health readiness (S1 mapping)', () => {
+  it.each(hazards)('T-OG-12-health-14 reports full repair context for $name', hazard => {
+    const f = fixture();
+    // Make policy ownership explicit, as the real config loader does.
+    hazard.seed(f);
+    f.snapshot.models.workerPolicyOrigins = {};
+    const report = diagnoseWorkerHealthReadiness(f.snapshot, f.request, paths);
+    const errors = validateParallelismConfig(f.snapshot.config.parallelism);
+    if (errors.length) {
+      // Doctor uses the same builder before model/catalog loading is available.
+      expect(workerHealthConfigurationFindings(f.snapshot.config.parallelism, errors, paths)).toEqual(report.findings);
+    }
+    const matching = report.findings.filter(row => row.code === hazard.code
+      && (!hazard.pointer || row.pointer === hazard.pointer));
+    expect(matching).toContainEqual(expect.objectContaining({ configFile: hazard.configFile,
+      configKey: hazard.configKey, members: hazard.members, nextAction: hazard.nextAction }));
+    // Every emitted hazard must retain an actionable owner and affected members.
+    for (const finding of report.findings.filter(row => ['warn', 'error'].includes(row.status))) {
+      expect(finding.configFile).toMatch(/^\//);
+      expect(finding.configKey).toMatch(/^\//);
+      expect(finding.members.length).toBeGreaterThan(0);
+      expect(finding.nextAction).not.toBe('none');
+      const text = formatWorkerHealthReadinessFinding(finding);
+      expect(text).toContain(`config ${finding.configFile} key ${finding.configKey}`);
+      expect(text).toContain(`members: ${finding.members.join(', ')}`);
+      expect(text).toContain(`[next: ${finding.nextAction}]`);
+    }
+  });
+
+  it.each(['user', 'project'] as const)('T-OG-12-health-15 retains the exact %s model-policy owner', authority => {
+    const f = fixture();
+    const guidance = f.snapshot.models.defaults.workerSelection!.roleGuidance!;
+    guidance.reasoning = { ...guidance.coding };
+    const pointer = '/defaults/workerSelection/roleGuidance/reasoning/groups';
+    const owner = `/${authority}/models.json`;
+    f.snapshot.models.workerPolicyOrigins = { [pointer]: [
+      { source: '/builtin/models.json', authority: 'builtin', pointer,
+        digest: workerConfigDigest('builtin'), contribution: ['workers'] },
+      { source: '/user/models.json', authority: 'user', pointer,
+        digest: workerConfigDigest('user'), contribution: ['workers'] },
+      ...(authority === 'project' ? [{ source: owner, authority: 'project' as const, pointer,
+        digest: workerConfigDigest('project'), contribution: ['workers'] }] : []),
+    ] };
+    const report = diagnoseWorkerHealthReadiness(f.snapshot, f.request, paths);
+    expect(report.findings).toContainEqual(expect.objectContaining({ code: 'WORKER_ROLE_NOT_READY',
+      configFile: owner, configKey: '/defaults/workerSelection/roleGuidance/reasoning',
+      members: workerMembers, nextAction: 'qualify-role-route' }));
+  });
+
+  it.each([
+    { source: 'static' as const, file: '/package/agentic/code/providers/model-catalog.v1.json' },
+    { source: 'cache' as const, file: paths.catalogFile },
+  ])('T-OG-12-health-16 retains the $source catalog file owner', ({ source, file }) => {
+    const f = fixture();
+    f.snapshot.catalog.discovery!.source = source;
+    f.request.now = new Date(Date.parse(f.request.now) + 30 * 86400000).toISOString();
+    const report = diagnoseWorkerHealthReadiness(f.snapshot, f.request, { ...paths, catalogFile: file });
+    const finding = report.findings.find(row => row.pointer === '/worker/observedAt')!;
+    expect(finding).toMatchObject({ configFile: file,
+      configKey: '/discovery/instances/codex/models/0/worker/observedAt',
+      members: ['workers/primary'], nextAction: 'refresh-worker-catalog' });
+    expect(formatWorkerHealthReadinessFinding(finding)).toContain(`config ${file} key ${finding.configKey}`);
+  });
+
   it('T-OG-12-health-01 keeps legacy disabled projects unchanged', () => {
     const f = fixture();
     f.snapshot.config.parallelism!.worker_dispatch = false;

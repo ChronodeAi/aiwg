@@ -14,7 +14,7 @@
  * @issue #1183
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   loadFixture,
   hashFixture,
@@ -47,11 +47,11 @@ describe('[Core] Register', () => {
   let registry;
   let mod;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     ({ registry, mod } = await createRegistryForTest());
   });
 
-  afterAll(() => {
+  afterEach(() => {
     try { registry.shutdown(); } catch { /* ignore */ }
   });
 
@@ -133,18 +133,22 @@ describe('[Core] Register', () => {
   it('identity persistence: re-register with same executor_id returns same token', () => {
     const body = fixture.request.body;
     const first  = registry.register(body);
-    const second = registry.register(body);
+    const second = registry.register(body, first.token);
 
+    expect(first).not.toHaveProperty('error');
+    expect(second).not.toHaveProperty('error');
     // Token must be identical (re-register reclaims prior identity per ADR §9)
     expect(second.token).toBe(first.token);
   });
 
   it('identity persistence: re-register updates mutable fields (name, version)', () => {
     const body = fixture.request.body;
-    registry.register(body);
+    const first = registry.register(body);
+    expect(first).not.toHaveProperty('error');
 
     const updated = { ...body, name: 'updated-executor-name', version: '9.9.9' };
-    registry.register(updated);
+    const second = registry.register(updated, first.token);
+    expect(second).not.toHaveProperty('error');
 
     const found = registry.get(body.executor_id);
     expect(found?.name).toBe('updated-executor-name');

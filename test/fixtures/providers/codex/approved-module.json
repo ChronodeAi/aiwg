@@ -7,7 +7,7 @@
     "packageVersion": "1",
     "modulePath": "lib/codex-adapter.mjs",
     "interfaceVersion": 1,
-    "sha256": "sha256:76ab4d47582b59f7a581182790cc0b34d4921232bbae37682fa3400982aeb7a7",
+    "sha256": "sha256:800061ebcbe49dc6907ab03ddd1472d43d9dd89d900d4e325f04376622f02627",
     "adapterIds": ["codex"],
     "platforms": ["linux"]
   }

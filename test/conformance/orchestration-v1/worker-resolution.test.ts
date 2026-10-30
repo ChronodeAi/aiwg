@@ -3,9 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ModelResolver, resolveWorkerPlan } from '../../../src/models/resolver.js';
+import {
+  bindManagedAdmissionPolicy, InMemoryAdmissionStore, SharedHostScheduler,
+} from '../../../src/serve/shared-host-scheduler.js';
 import { PROVIDER_IDS } from '../../../src/providers/provider-definitions.js';
 import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+import { performance } from 'node:perf_hooks';
+import { p95, timingReport } from '../../fixtures/orchestration-timing.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -15,6 +20,70 @@ afterEach(async () => {
     await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' });
   }
 });
+
+it('uses nearest-rank p95 rather than an average for timing gates', () => {
+  expect(p95(Array.from({ length: 100 }, (_, index) => 100 - index))).toBe(95);
+  expect(p95([...Array(94).fill(1), ...Array(6).fill(6_000)] )).toBe(6_000);
+  expect(() => p95([])).toThrow('Invalid timing samples');
+  expect(() => p95([NaN])).toThrow('Invalid timing samples');
+});
+
+it('T-OG-15 NFR-OG-001 P02 1000 cached resolve requests have p95 <= 250 ms', () => {
+  const f = workerResolutionFixture();
+  for (let index = 0; index < 10; index++) resolveWorkerPlan(f.snapshot, f.request);
+  const samples: number[] = [];
+  for (let index = 0; index < 1_000; index++) {
+    const start = performance.now();
+    const plan = resolveWorkerPlan(f.snapshot, f.request);
+    samples.push(performance.now() - start);
+    expect(plan.status).toBe('eligible');
+    expect(plan.selected?.member).toBe('primary');
+  }
+  const report = timingReport('P02', samples, ['cached snapshot policy/identity/freshness validation', 'selection and plan construction']);
+  console.info(JSON.stringify(report));
+  expect(report.samples).toBe(1_000);
+  expect(report.p95Ms).toBeLessThanOrEqual(250);
+}, 30_000);
+
+it('T-OG-05 NFR-OG-001 P01 1000 cached managed plan/admission requests have p95 <= 250 ms', () => {
+  const epoch = Date.parse('2026-10-22T12:00:00Z');
+  const projectId = 'e'.repeat(64);
+  const store = new InMemoryAdmissionStore();
+  const managedPolicy = {
+    maxConcurrent: 2_000, leaseTtlMs: 600_000, agingIntervalMs: 1000, allowPreemption: false,
+    managed: { authorityRef: 'project' as const, projectId, policyDigest: `sha256:${'e'.repeat(64)}`,
+      maxQueued: 2_000, dimensionCaps: {}, installations: {}, members: {} },
+  };
+  bindManagedAdmissionPolicy(store, managedPolicy);
+  const scheduler = new SharedHostScheduler(store, managedPolicy, () => epoch);
+  const submittedAt = new Date(epoch).toISOString();
+  const admit = (index: number) => {
+    const requestId = `managed-overhead-${index}`;
+    return scheduler.submit({ requestId, orchestratorId: 'managed-overhead', environment: 'test',
+      provider: 'synthetic', runtimeKind: 'container', priority: 10, submittedAt, queueTimeoutMs: 600_000,
+      managed: { kind: 'native' },
+      allowance: { runId: 'managed-overhead', taskId: requestId, reservation: { tokens: 10, costUsd: 1 } } });
+  };
+  const f = workerResolutionFixture();
+  for (let index = 0; index < 10; index++) {
+    expect(resolveWorkerPlan(f.snapshot, f.request).status).toBe('eligible');
+    expect(admit(`warm-${index}`).state).toBe('admitted');
+  }
+  const samples: number[] = [];
+  for (let index = 0; index < 1_000; index++) {
+    const start = performance.now();
+    const plan = resolveWorkerPlan(f.snapshot, f.request);
+    const record = admit(index);
+    samples.push(performance.now() - start);
+    expect(plan.status).toBe('eligible');
+    expect(plan.selected?.member).toBe('primary');
+    expect(record.state).toBe('admitted');
+  }
+  const report = timingReport('P01', samples, ['cached snapshot plan', 'managed admission submit']);
+  console.info(JSON.stringify(report));
+  expect(report.samples).toBe(1_000);
+  expect(report.p95Ms).toBeLessThanOrEqual(250);
+}, 30_000);
 
 describe('T-OG-15 S1 resolution from current files without managed services', () => {
   it('D01 reloads user/project files and blocks stale decisions without creating managed state', async () => {

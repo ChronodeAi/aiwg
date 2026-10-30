@@ -14,6 +14,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { validateSkillFrontmatter } from '../../extensions/validation.js';
 import { validateAgentSkillFile } from '../../skills/validator.js';
+import { CLAUDE_SKILL_FIELDS } from '../../skills/provider-extensions.js';
+import { projectClaudeSkillSurfaces } from '../../skills/claude-surface-projection.js';
 import type {
   AgentSkillDiagnostic,
   AgentSkillValidationProfile,
@@ -41,6 +43,7 @@ interface DimensionScore {
 
 interface SkillScore {
   file: string;
+  projections: ReturnType<typeof projectClaudeSkillSurfaces>;
   conformance: {
     profile: AgentSkillValidationProfile;
     state: 'valid' | 'warning' | 'invalid' | 'skipped';
@@ -117,9 +120,12 @@ function scoreSchema(
     ));
     return scoreDimension(false, notes);
   }
-  const result = validateSkillFrontmatter(frontmatter);
+  // Native Claude fields belong to the provider layer, including string effort.
+  const portableAndAiwg = Object.fromEntries(Object.entries(frontmatter as Record<string, unknown>)
+    .filter(([key]) => !(CLAUDE_SKILL_FIELDS as readonly string[]).includes(key)));
+  const result = validateSkillFrontmatter(portableAndAiwg);
   if (result.success) return scoreDimension(true);
-  const notes = result.errors.errors.map(
+  const notes = result.errors.issues.map(
     (e) => `${e.path.join('.') || '<root>'}: ${e.message}`
   );
   return scoreDimension(false, notes);
@@ -308,6 +314,7 @@ export async function lintSkillFile(
   return {
     file: filePath,
     score,
+    projections: projectClaudeSkillSurfaces(body),
     conformance: {
       profile,
       state: validation.state,
@@ -424,13 +431,15 @@ function renderTextReport(report: LintReport): void {
   const { files, threshold, rubric, profile, averageScore, failedCount } = report;
 
   for (const f of files) {
-    if (f.passes && f.conformance.diagnostics.length === 0) continue;
     const mark = !f.passes
       ? '✗'
       : f.conformance.diagnostics.some((item) => item.severity === 'warning')
         ? '⚠'
         : '✓';
     console.log(`${mark} ${f.file} (${f.score}/100, conformance=${f.conformance.state})`);
+    for (const p of f.projections) {
+      console.log(`    ${p.provider}/${p.surface}: ${p.status}${p.shellInterpolation ? ` (shell: ${p.shellInterpolation})` : ''}; ${p.reasons.join(' ')}`);
+    }
     for (const item of f.conformance.diagnostics) {
       console.log(
         `    ${item.severity} ${item.code} ${item.yamlPath}: ${item.message}; `

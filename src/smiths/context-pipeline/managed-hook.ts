@@ -15,7 +15,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { buildProviderBootstrapBlock } from './workspace-context.js';
 import { dominantLineEnding, withLineEnding } from './line-endings.js';
-import { assertSafeContextFile } from './context-file-safety.js';
+import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
+import { hasRuleStartup, normalizeRuleStartup } from './bridge-ownership.js';
 
 export const CONTEXT_HOOK_START = '<!-- AIWG:context-hook:start -->';
 export const CONTEXT_HOOK_END = '<!-- AIWG:context-hook:end -->';
@@ -30,7 +31,7 @@ export function buildContextHookBlock(provider = 'codex'): string {
     '<!--',
     '  This block is managed by `aiwg regenerate` and `aiwg use`.',
     '  Operator content above and below this block is preserved on regenerate.',
-    '  Edit .aiwg/AIWG.md (the normalized source) then run `aiwg regenerate`.',
+    '  Edit WORKSPACE.md Project Context or optional .aiwg/AIWG.md operator notes, then run `aiwg regenerate`.',
     '-->',
     '',
     CONTEXT_HOOK_END,
@@ -66,7 +67,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
     existing = await fs.readFile(filePath, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      await fs.writeFile(filePath, `${block}\n`, 'utf8');
+      writeContextFileSync(filePath, `${block}\n`, 'utf8');
       result.action = 'created';
       return result;
     }
@@ -75,6 +76,15 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
 
   const lineEnding = dominantLineEnding(existing);
   block = withLineEnding(block, lineEnding);
+
+  if (hasRuleStartup(existing)) {
+    const bootstrap = existing.match(/<!-- AIWG:provider-bootstrap:start -->[\s\S]*?<!-- AIWG:provider-bootstrap:end -->/)?.[0]
+      || buildProviderBootstrapBlock(opts.provider || 'codex');
+    const normalized = normalizeRuleStartup(existing, bootstrap, false, false);
+    result.action = normalized === existing ? 'unchanged' : 'updated';
+    if (normalized !== existing) writeContextFileSync(filePath, normalized, 'utf8');
+    return result;
+  }
 
   // Already has both bare includes (operator wired them by hand) — nothing to do.
   if (!existing.includes(CONTEXT_HOOK_START) && /^[ \t]*@WORKSPACE\.md[ \t]*$/m.test(existing) && /^[ \t]*@AIWG\.md[ \t]*$/m.test(existing)) {
@@ -88,7 +98,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
   // No managed block — append it to the end, preserving everything above.
   if (s === -1 && e === -1) {
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
-    await fs.writeFile(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
+    writeContextFileSync(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -97,7 +107,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
   if (s === -1 || e === -1) {
     if (opts.force) {
       const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
-      await fs.writeFile(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
+      writeContextFileSync(filePath, `${trimmed}${lineEnding}${block}${lineEnding}`, 'utf8');
       result.action = 'inserted';
       return result;
     }
@@ -112,7 +122,7 @@ export async function ensureManagedHook(filePath: string, opts: { force?: boolea
     result.action = 'unchanged';
     return result;
   }
-  await fs.writeFile(filePath, existing.substring(0, s) + block + existing.substring(endOff), 'utf8');
+  writeContextFileSync(filePath, existing.substring(0, s) + block + existing.substring(endOff), 'utf8');
   result.action = 'updated';
   return result;
 }

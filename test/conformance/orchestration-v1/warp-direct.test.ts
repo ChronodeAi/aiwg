@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2905 (B-OG-40/Oz) Warp CLI promotion: offline S1 profile work.
  *
@@ -17,7 +18,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile, lstat, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -26,6 +27,9 @@ import {
   WARP_DIRECT_SANDBOX_MODES, WARP_SUPPORTED_VERSIONS, buildWarpBriefSkillFile, buildWarpBriefSkillName,
 } from '../../../tools/ralph-external/lib/warp-adapter.mjs';
 import { createProvider, loadInstalledWorkerAdapters } from '../../../src/models/worker-installation.mjs';
+
+import { materializeWorkerArtifacts } from '../../../tools/ralph-external/session-launcher.mjs';
+import { buildInstalledWorkerTransport } from '../../../src/models/worker-artifact-binding.mjs';
 
 const FAKE = path.resolve('test/fixtures/providers/warp/fake-warp-terminal.mjs');
 const OBSERVATION = { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 };
@@ -55,11 +59,7 @@ async function installWarpPackage(bytes: Buffer) {
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
     version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
   await writeFile(path.join(packageRoot, 'lib', 'warp-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
   await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
   await chmod(resolveImpl, 0o644);
@@ -74,7 +74,7 @@ async function installWarpPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.warp.workerAdapter = structuredClone(registry.providers.warp.workerHealthAdapter);
   return registry;
 }
@@ -250,14 +250,24 @@ describe('T-OG-15 Warp direct command contract (render via production buildWorke
 
   it('WP03 executes the rendered argv against the fake: argv/env stay clean, model/cwd/skill match exactly', async () => {
     const { root, workdir } = await scratch();
-    const { file, recordPath } = await fakeConfig(root, 'success');
-    const argv = argvFor(workdir);
+    const { file, recordPath } = await fakeConfig(root, 'success', { requireSkillFile: true });
+    const input = { invocationId: INVOCATION_ID, cwd: workdir, brief: 'synthetic brief 雪', selected: { model: MODEL } };
+    const transport = buildInstalledWorkerTransport(installed.owner, input, {}, { stdin: 'closed' }, process.execPath, {});
+    const runDir = path.join(root, 'run'); await mkdir(runDir, { mode: 0o700 });
+    const materialized = await materializeWorkerArtifacts({ ...input, ...transport }, runDir);
+    const filename = path.join(workdir, transport.artifacts[0].relativePath);
+    expect(await readFile(filename, 'utf8')).toContain(input.brief);
+    const argv = transport.argv.slice(1);
     const result = await run([FAKE, ...argv], { cwd: workdir,
       env: { PATH: process.env.PATH!, AIWG_FAKE_WORKER_CONFIG: file, WARP_UNRELATED_SECRET: 'fk-synthetic-should-not-pass' } });
     expect(result.code, result.stderr).toBe(0);
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
     expect(record).toMatchObject({ outputFormat: 'json', model: MODEL, cwd: workdir, skill: SKILL_NAME, noSnapshot: true });
     expect(record.argv).toEqual(argv);
+    expect(record.skillContent).toBe(buildWarpBriefSkillFile(input.brief, INVOCATION_ID).content);
+    expect(record.argv.join(' ')).not.toContain(input.brief);
+    await materialized.cleanup();
+    await expect(lstat(filename)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(record.argv).not.toContain('--prompt');
     // Neither structural JSON validity nor schema-valid claims establish
     // an Oz terminal answer; exercise both installed production hooks.
@@ -368,4 +378,27 @@ describe('T-OG-03/20/21/23 Warp run identity and terminal signals', () => {
     const adapter = loadProviderModelCapabilities().providers.warp.workerHealthAdapter!;
     expect((adapter.capabilities as any).sandboxModes).toEqual([...WARP_DIRECT_SANDBOX_MODES]);
   });
+});
+
+
+describe('T-OG-15/23 Warp bounded skill delivery (#2905)', () => {
+  it.each(['traversal', 'absolute', 'symlink', 'existing', 'wrong-id', 'oversize'])(
+    'WP12 refuses %s and preserves workspace contents', async scenario => {
+      const { root, workdir } = await scratch();
+      const runDir = path.join(root, 'run'); await mkdir(runDir, { mode: 0o700 });
+      const invocation: any = { invocationId: INVOCATION_ID, cwd: workdir, brief: 'synthetic brief', selected: { model: MODEL } };
+      const transport = buildInstalledWorkerTransport(installed.owner, invocation, {}, { stdin: 'closed' }, process.execPath, {});
+      const artifact = transport.artifacts[0], filename = path.join(workdir, artifact.relativePath);
+      if (scenario === 'traversal') artifact.relativePath = '../escape';
+      if (scenario === 'absolute') artifact.relativePath = path.join(root, 'escape');
+      if (scenario === 'wrong-id') invocation.invocationId = 'wrong-id';
+      if (scenario === 'oversize') artifact.content = '雪'.repeat(349526);
+      const outside = path.join(root, 'outside'); await mkdir(outside);
+      if (scenario === 'symlink') await symlink(outside, path.join(workdir, '.agents'));
+      if (scenario === 'existing') { await mkdir(path.dirname(filename), { recursive: true }); await writeFile(filename, 'original'); }
+      await expect(materializeWorkerArtifacts({ ...invocation, ...transport }, runDir)).rejects.toThrow();
+      if (scenario === 'existing') expect(await readFile(filename, 'utf8')).toBe('original');
+      expect(await readdir(outside)).toEqual([]);
+      expect(await readdir(runDir)).toEqual([]);
+    });
 });

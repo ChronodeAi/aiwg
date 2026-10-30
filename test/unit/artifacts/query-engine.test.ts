@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { buildIndex } from '../../../src/artifacts/index-builder.js';
-import { discoverCapability, queryIndex, showArtifact } from '../../../src/artifacts/query-engine.js';
+import { discoverCapability, queryIndex, showArtifact, loadLocalCapabilityEntries } from '../../../src/artifacts/query-engine.js';
 import { INDEX_DIR, getGraphIndexDir } from '../../../src/artifacts/types.js';
 import type { ArtifactIndex, MetadataEntry } from '../../../src/artifacts/types.js';
 import { PROJECT_AIWG_LOCATION_FILE } from '../../../src/config/project-artifacts.js';
@@ -62,6 +62,7 @@ describe('Artifact Query Engine', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-query-test-'));
+    for (const key of ['HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) vi.stubEnv(key, path.join(tmpDir, key));
     // Resolution consults the USER-GLOBAL framework index as well as the fixture
     // index below. Unsandboxed, a real `aiwg-steward` entry there changes which
     // duplicate wins, so the outcome depends on whatever another test happened to
@@ -117,6 +118,54 @@ describe('Artifact Query Engine', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it('queries and discovers 3000 synthetic entries without reading source files', async () => {
+    const entries = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => {
+      const entry = createMockEntry({ path: `.aiwg/skills/synthetic-${i}.md`, type: 'skill',
+        name: `synthetic-${i}`, title: `Synthetic ${i}`, capability: 'synthetic capability' });
+      return [entry.path, entry];
+    }));
+    const indexDir = getGraphIndexDir(tmpDir, 'project');
+    fs.mkdirSync(indexDir, { recursive: true });
+    fs.writeFileSync(path.join(indexDir, 'metadata.json'), JSON.stringify({
+      version: '1.0.0', builtAt: new Date().toISOString(), buildTimeMs: 1, entries,
+    } satisfies ArtifactIndex));
+    const read = fs.readFileSync.bind(fs);
+    const sourceReads: string[] = [];
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]).includes('/skills/synthetic-')) {
+        sourceReads.push(String(args[0]));
+        throw new Error('Synthetic sources must never be read');
+      }
+      return read(...args);
+    });
+    try {
+      await queryIndex(tmpDir, { text: 'synthetic' }, { graph: 'project', backend: 'local', json: true });
+      expect(JSON.parse(consoleSpy.mock.calls.at(-1)![0]).results).toHaveLength(20);
+      await discoverCapability(tmpDir, { phrase: 'synthetic', graph: 'project', backend: 'local', json: true });
+      expect(JSON.parse(consoleSpy.mock.calls.at(-1)![0]).results.length).toBeGreaterThan(0);
+      expect(loadLocalCapabilityEntries(tmpDir, 'project')).toHaveLength(3000);
+      expect(sourceReads).toEqual([]);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('keeps active indexed memory available during transient source read errors', async () => {
+    const entry = createMockEntry({ memoryRecord: { lifecycle: 'active', placement: 'indexed' } as MetadataEntry['memoryRecord'] });
+    const indexDir = getGraphIndexDir(tmpDir, 'project');
+    fs.mkdirSync(indexDir, { recursive: true });
+    fs.writeFileSync(path.join(indexDir, 'metadata.json'), JSON.stringify({ version: '1.0.0', entries: { [entry.path]: entry } }));
+    const read = fs.readFileSync.bind(fs);
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]).endsWith('UC-001.md')) throw Object.assign(new Error('temporary I/O error'), { code: 'EIO' });
+      return read(...args);
+    });
+    try {
+      await queryIndex(tmpDir, { text: 'Login' }, { graph: 'project', backend: 'local', json: true });
+      expect(JSON.parse(consoleSpy.mock.calls.at(-1)![0]).results).toHaveLength(1);
+      expect(loadLocalCapabilityEntries(tmpDir, 'project')).toHaveLength(1);
+    } finally { spy.mockRestore(); }
   });
 
   it.each(['hermes', 'openhuman', 'antigravity', 'future-agent'])(
@@ -142,7 +191,7 @@ describe('Artifact Query Engine', () => {
           const found = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
           expect(found.results).toHaveLength(1);
           consoleSpy.mockClear();
-          await showArtifact(tmpDir, { name: found.results[0].id, typeFilter: [type], graph: 'project', backend: 'local', json: true });
+          await showArtifact(tmpDir, { body: true, name: found.results[0].id, typeFilter: [type], graph: 'project', backend: 'local', json: true });
           const shown = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
           expect(shown.content).toContain(`# Portable ${type} body`);
         }
@@ -258,7 +307,7 @@ describe('Artifact Query Engine', () => {
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     let output = '';
     try {
-      await showArtifact(tmpDir, { typeFilter: ['skill'], name: 'project-status', graph: 'project' });
+      await showArtifact(tmpDir, { body: true, typeFilter: ['skill'], name: 'project-status', graph: 'project' });
       output = stdoutSpy.mock.calls.map(c => String(c[0])).join('');
     } finally {
       stdoutSpy.mockRestore();
@@ -295,7 +344,7 @@ describe('Artifact Query Engine', () => {
     const prevRoot = process.env.AIWG_ROOT;
     process.env.AIWG_ROOT = tmpDir;
     try {
-      await showArtifact(tmpDir, { typeFilter: ['agent'], name: 'aiwg-steward', json: true });
+      await showArtifact(tmpDir, { body: true, typeFilter: ['agent'], name: 'aiwg-steward', json: true });
       const parsed = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
       expect(parsed.path).toBe(path.join(tmpDir, canonicalPath));
       expect(parsed.content).toContain('# Canonical Steward');
@@ -349,7 +398,7 @@ describe('Artifact Query Engine', () => {
         } satisfies ArtifactIndex),
       );
 
-      await showArtifact(projectRoot, {
+      await showArtifact(projectRoot, { body: true,
         typeFilter: ['skill'],
         name: 'kb-ingest',
         graph: 'framework',
@@ -455,7 +504,7 @@ describe('Artifact Query Engine', () => {
       } satisfies ArtifactIndex),
     );
 
-    await showArtifact(tmpDir, {
+    await showArtifact(tmpDir, { body: true,
       typeFilter: ['skill'],
       name: 'local-status',
       graph: 'project',
@@ -512,7 +561,7 @@ describe('Artifact Query Engine', () => {
       expect(queryOutput.results[0].matched).toContain('heliotrope');
 
       consoleSpy.mockClear();
-      await showArtifact(tmpDir, {
+      await showArtifact(tmpDir, { body: true,
         typeFilter: ['skill'],
         name: 'portable-status',
         graph: 'project',
@@ -561,7 +610,7 @@ describe('Artifact Query Engine', () => {
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     let output = '';
     try {
-      await showArtifact(tmpDir, { typeFilter: ['agent'], name: 'aiwg-writer', graph: 'project' });
+      await showArtifact(tmpDir, { body: true, typeFilter: ['agent'], name: 'aiwg-writer', graph: 'project' });
       output = stdoutSpy.mock.calls.map(c => String(c[0])).join('');
     } finally {
       stdoutSpy.mockRestore();

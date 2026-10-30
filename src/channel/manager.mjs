@@ -18,6 +18,7 @@ import { spawn } from 'child_process';
 import os from 'os';
 import { resolveUserConfigDir } from '../config/user-config-dir.mjs';
 import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
+import { helperEnvironment } from '../process/cli-command.mjs';
 import {
   assertCanonicalInstallation,
   createInstallationIdentity,
@@ -594,10 +595,12 @@ export async function getVersionInfo() {
     try {
       const gitHash = boundedExecFileSync('git', ['rev-parse', '--short', 'HEAD'], 'quick', {
         cwd: config.edgePath,
+        env: helperEnvironment(),
         encoding: 'utf8',
       }).trim();
       const gitBranch = boundedExecFileSync('git', ['branch', '--show-current'], 'quick', {
         cwd: config.edgePath,
+        env: helperEnvironment(),
         encoding: 'utf8',
       }).trim();
       info.edgePath = config.edgePath;

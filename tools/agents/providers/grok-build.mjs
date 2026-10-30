@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * Grok Build provider (experimental).
  * Project skills under `.grok/skills`; user home via $GROK_HOME (default ~/.grok).
@@ -5,7 +6,7 @@
  *
  * Native agent compilation is deliberately limited to the three AIWG model
  * workers until the wider corpus has a qualified Grok tool mapping (#2577).
- * Rules remain indexed; Grok loads AGENTS.md and native .grok/rules itself.
+ * Rules are written to .grok/rules and loaded by Grok alongside AGENTS.md.
  *
  * @issue #2575
  */
@@ -16,6 +17,8 @@ import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import yaml from 'js-yaml';
 import {
+  withRuleDeployment,
+  replaceBoundRulesBlock,
   createAgentsMdFromTemplate,
   deploySkillsWithKernelRouting,
   collectFrameworkArtifacts,
@@ -33,7 +36,7 @@ export const aliases = [];
 export const paths = {
   agents: '.grok/agents',
   skills: '.grok/skills',
-  rules: '',
+  rules: '.grok/rules',
   hooks: '.grok/hooks',
   config: '.grok/config.toml',
 };
@@ -45,12 +48,15 @@ export const support = {
   agents: 'native',
   commands: 'indexed', // discoverable through the AIWG index; no native command writer
   skills: 'native',
-  rules: 'indexed', // deferred native writer until #2577; host still loads AGENTS.md + .grok/rules hierarchically
+  // CONTEXT_CONTRACTS: https://docs.x.ai/build/features/project-rules
+  // .grok/rules/*.md loads hierarchically on every task; no frontmatter marker
+  // is required for always-on rules (unlike Windsurf's trigger field).
+  rules: 'native', // always-on Markdown rules discovered root-to-cwd by Grok Build
 };
 
 export const capabilities = {
   skills: true,
-  rules: false, // indexed/deferred — do not claim native rule transforms yet
+  rules: true, // Native Markdown; path activation uses the index
   yamlFormat: false,
   aggregatedOutput: false,
   homeDirectoryDeploy: true,
@@ -135,7 +141,8 @@ const ROLE_FROM_ALIAS = { opus: 'reasoning', sonnet: 'coding', haiku: 'efficienc
 const GROK_TOOLS = new Set(['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob']);
 
 /** Grok agent files accept a small YAML frontmatter subset, not AIWG metadata. */
-export function compileGrokAgent(source, content, opts = {}) {
+export const compileGrokAgent = withModelWrapper('grok-build', translateAgent);
+function translateAgent(source, content, opts = {}) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) throw new Error(`${source}: expected YAML agent frontmatter`);
   const metadata = yaml.load(match[1]);
@@ -144,8 +151,8 @@ export function compileGrokAgent(source, content, opts = {}) {
   }
   const name = metadata.name;
   const role = metadata['model-role'] || ROLE_FROM_ALIAS[metadata.model];
-  if (!/^aiwg-model-(reasoning|coding|efficiency)-worker$/.test(String(name)) || !WORKER_ROLES.has(role)) {
-    throw new Error(`${source}: Grok Build native compilation currently supports only the three AIWG model-worker roles; use aiwg show agent for other roles`);
+  if (!/^aiwg-model-((reasoning|coding|efficiency)-worker|explorer|verifier)$/.test(String(name)) || !WORKER_ROLES.has(role)) {
+    throw new Error(`${source}: Grok Build native compilation currently supports only the five AIWG model wrappers; use aiwg show agent for other roles`);
   }
   if (typeof metadata.description !== 'string' || !metadata.description.trim()) {
     throw new Error(`${source}: agent description is required`);
@@ -177,7 +184,7 @@ export function compileGrokAgent(source, content, opts = {}) {
 }
 
 export function deployAgents(agentFiles, targetDir, opts = {}) {
-  const selected = agentFiles.filter(file => /^aiwg-model-(reasoning|coding|efficiency)-worker\.md$/.test(path.basename(file)));
+  const selected = agentFiles.filter(file => /^aiwg-model-((reasoning|coding|efficiency)-worker|explorer|verifier)\.md$/.test(path.basename(file)));
   const dir = assertSafeNativeDirectory(targetDir, paths.agents);
   for (const source of selected) {
     const dest = path.join(dir, path.basename(source));
@@ -224,7 +231,17 @@ function matchesSkillSource(source, target) {
       if (relative.endsWith(path.sep)) return true;
       let content = fs.readFileSync(path.join(source, relative), 'utf8');
       if (relative === 'SKILL.md') content = injectPlatformInContent(content, 'grok-build');
-      return content === fs.readFileSync(path.join(target, relative), 'utf8');
+      const deployed = fs.readFileSync(path.join(target, relative), 'utf8');
+      if (content === deployed) return true;
+      if (relative !== 'SKILL.md' || !deployed.includes('<!-- AIWG:bound-rules:start -->')) return false;
+      // Activation projection appends generated bindings. Verify the complete
+      // deployed bytes against the receipt before comparing the authored body;
+      // an operator edit (including inside the binding block) must survive.
+      const receipt = JSON.parse(fs.readFileSync(path.join(target, '.aiwg-manifest.json'), 'utf8'));
+      const digest = `sha256:${createHash('sha256').update(deployed).digest('hex')}`;
+      return receipt.skillSource === path.resolve(source)
+        && receipt.managed?.[relative]?.hash === digest
+        && replaceBoundRulesBlock(content, []).trimEnd() === replaceBoundRulesBlock(deployed, []).trimEnd();
     });
   } catch { return false; }
 }
@@ -279,7 +296,7 @@ export function uninstall(target, opts = {}) {
     }
     manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     for (const [name, record] of Object.entries(manifest.managed ?? {})) {
-      if (path.basename(name) !== name || !/^aiwg-model-(reasoning|coding|efficiency)-worker\.md$/.test(name)) continue;
+      if (path.basename(name) !== name || !/^aiwg-model-((reasoning|coding|efficiency)-worker|explorer|verifier)\.md$/.test(name)) continue;
       const file = path.join(agentsDir, name);
       const relative = path.relative(root, file);
       if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink() || !fs.lstatSync(file).isFile()) {
@@ -326,14 +343,14 @@ export function uninstall(target, opts = {}) {
 
 export async function postDeploy(target, opts = {}) {
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
-    createAgentsMd(target, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(target, opts.srcRoot, opts.dryRun);
   }
   if (!opts.quiet) {
     const home = resolveGrokHome(opts.env || process.env);
     console.log(
       `Grok Build (experimental): kernel skills → ${kernelSkillsPath}; ` +
         `standard skills index-driven (opt-in mirror → ${standardSkillsPath} with --copy-all); ` +
-        `model-worker agents → ${paths.agents}; rules indexed; user home → ${home || '(unresolved GROK_HOME)'}. ` +
+        `model-worker agents → ${paths.agents}; rules → ${paths.rules}; user home → ${home || '(unresolved GROK_HOME)'}. ` +
         'Distinct from grokbot.',
     );
   }
@@ -344,6 +361,10 @@ export function getFileExtension() {
 }
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const mode = normalizeDeploymentMode(opts.mode);
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
     assertSafeAgentsMd(opts.target);
@@ -361,8 +382,8 @@ export async function deploy(opts) {
   let count = 0;
   if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) {
     const workerDir = path.join(aiwgRoot, 'agentic', 'code', 'addons', 'aiwg-utils', 'agents');
-    const workers = ['reasoning', 'coding', 'efficiency']
-      .map(role => path.join(workerDir, `aiwg-model-${role}-worker.md`))
+    const workers = ['reasoning-worker', 'coding-worker', 'efficiency-worker', 'explorer', 'verifier']
+      .map(role => path.join(workerDir, `aiwg-model-${role}.md`))
       .filter(file => fs.existsSync(file));
     count += deployAgents(workers, opts.target, opts).filter(action => action.type === 'deploy').length;
   }

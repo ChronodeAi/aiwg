@@ -128,7 +128,7 @@ function shouldSkipDir(dirName: string, fullPath: string): boolean {
   return fullPath.split(path.sep).includes('.aiwg') && fullPath.split(path.sep).includes('.index');
 }
 
-function collectSourceFiles(cwd: string): string[] {
+export function collectSourceFiles(cwd: string, includeAssets = false): string[] {
   const results: string[] = [];
   const visit = (dir: string) => {
     if (!fs.existsSync(dir)) return;
@@ -136,7 +136,7 @@ function collectSourceFiles(cwd: string): string[] {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (!shouldSkipDir(entry.name, fullPath)) visit(fullPath);
-      } else if (entry.isFile() && CODE_EXTENSIONS.has(path.extname(entry.name))) {
+      } else if (entry.isFile() && (CODE_EXTENSIONS.has(path.extname(entry.name)) || (includeAssets && ASSET_EXTENSIONS.has(path.extname(entry.name))))) {
         results.push(fullPath);
       }
     }

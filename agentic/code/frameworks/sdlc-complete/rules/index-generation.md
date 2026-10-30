@@ -1,5 +1,14 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Generate current artifact indexes from frontmatter with topic, year, license and full listings; preserve custom sections, validate required fields, and reject orphan entries."
+bound_to:
+  agents: ["context-librarian"]
+  skills: ["artifact-metadata", "build-artifact-index", "index"]
+triggers:
+  - "generate artifact directory INDEX markdown"
+  - "preserve custom index sections"
+  - "validate index entries against frontmatter"
 ---
 
 # Index Generation Rules

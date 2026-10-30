@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -217,9 +217,53 @@ describe('gatesHandler', () => {
     expect(packs.map(pack => pack.id)).toContain('aiwg:decision-engine/integrity-ceiling');
     const namespaced = await gatesHandler.execute(ctx(['list', '--namespace', 'aiwg']));
     expect(JSON.parse(namespaced.message ?? '{}').packs.every((pack: { namespace: string }) => pack.namespace === 'aiwg')).toBe(true);
-    const ruleStub = await gatesHandler.execute(ctx(['list', '--rule']));
-    expect(JSON.parse(ruleStub.message ?? '{}').enforcedBy.status).toBe('stub');
+    const ruleCoverage = await gatesHandler.execute(ctx(['list', '--rule']));
+    expect(ruleCoverage.exitCode).toBe(0);
+    expect(JSON.parse(ruleCoverage.message ?? '{}').rules).toContainEqual(expect.objectContaining({
+      name: 'citation-policy', status: 'gate-backed',
+      enforcedBy: ['aiwg:decision-engine/absolute-screening#false-support-upper'],
+    }));
     const ruleFilter = await gatesHandler.execute(ctx(['list', '--rule', 'no-such-rule']));
     expect(JSON.parse(ruleFilter.message ?? '{}').packs).toEqual([]);
+  });
+
+  it('reports synthetic rule coverage as text and JSON and supports list --rule', async () => {
+    const dir = tmpGatesDir();
+    const pack = projectPack();
+    const packPath = writeJson(dir, 'checks.gatepack.json', pack);
+    mkdirSync(path.join(dir, 'rules'));
+    const references = pack.spec.gates.slice(0, 2).map(gate => `${pack.metadata.id}#${gate.id}`);
+    const source = (refs?: string[]) => `---\nactivation: on-demand\n${refs ? `enforcedBy: ${JSON.stringify(refs)}\n` : ''}---\nBody`;
+    writeFileSync(path.join(dir, 'rules/checked.md'), source(references));
+    writeFileSync(path.join(dir, 'rules/guidance.md'), source());
+    writeFileSync(path.join(dir, 'rules/empty.md'), source([]));
+    writeFileSync(path.join(dir, 'rules/README.md'), '# Documentation');
+    writeFileSync(path.join(dir, 'rules/checked.core.md'), 'Compact body');
+    const extra = ['--aiwg-root', dir, '--pack-dir', packPath];
+    const run = (args: string[]) => gatesHandler.execute({ ...ctx([...args, ...extra], dir), frameworkRoot: dir });
+    const result = await run(['coverage', '--json']);
+    expect(result.exitCode).toBe(0);
+    const rows = [
+      { id: 'rules/checked.md', name: 'checked', enforcedBy: references, status: 'gate-backed' },
+      { id: 'rules/empty.md', name: 'empty', enforcedBy: [], status: 'guidance-only' },
+      { id: 'rules/guidance.md', name: 'guidance', enforcedBy: [], status: 'guidance-only' },
+    ];
+    expect(JSON.parse(result.message ?? '{}')).toMatchObject({ schema: 'aiwg-gates-coverage/v1', rules: rows });
+    expect(JSON.parse(result.message ?? '{}').rules).toHaveLength(3);
+    const text = await run(['coverage']);
+    expect(text.message).toContain('rules/checked.md: gate-backed');
+    expect(text.message).toContain(references.join('\n  '));
+    expect(text.message).toContain('rules/guidance.md: guidance-only');
+    const listed = await run(['list', '--rule', 'checked']);
+    expect(JSON.parse(listed.message ?? '{}')).toMatchObject({
+      rule: 'checked', rules: [rows[0]], packs: [{ id: pack.metadata.id }],
+    });
+    const guidance = await run(['list', '--rule', 'guidance']);
+    expect(JSON.parse(guidance.message ?? '{}')).toMatchObject({ rules: [rows[2]], packs: [] });
+    expect((await run(['coverage', '--rule', 'no-such-rule'])).message).toBe('No rules found.');
+    writeFileSync(path.join(dir, 'rules/checked.md'), source([`${pack.metadata.id}#unknown`]));
+    const invalid = await run(['coverage', '--json']);
+    expect(invalid.exitCode).toBe(1);
+    expect(invalid.message).toContain("unknown gate 'unknown'");
   });
 });

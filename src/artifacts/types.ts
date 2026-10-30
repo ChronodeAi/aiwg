@@ -13,9 +13,11 @@ import fs from 'fs';
 import { validateIndexGraphOverrides, type IndexBuiltinGraphOverride } from '../config/index-graph-overrides.js';
 import os from 'node:os';
 import path from 'node:path';
+import { getFrameworkIndexBaseDir } from './framework-index-paths.js';
 import { load as loadYaml } from 'js-yaml';
 import type { OperationalStateProvenance } from './operational-state.js';
 import type { StateTransferProjection } from './state-transfer.js';
+import type { MemoryRecord } from '../memory/maintenance-record.js';
 import {
   DEFAULT_PROJECT_AIWG_DIR,
   projectAiwgPath,
@@ -27,6 +29,9 @@ import {
  * A single indexed artifact entry
  */
 export interface MetadataEntry {
+  /** Canonical memory lifecycle; retained entries remain addressable as history. */
+  memoryRecord?: MemoryRecord;
+  memoryCategory?: string;
   /** Relative path from project root */
   path: string;
 
@@ -62,6 +67,15 @@ export interface MetadataEntry {
    * the rendered title strips the hyphen.
    */
   name?: string;
+
+  /** Rule activation and typed targets; absent declarations are unbound. */
+  activation?: string;
+  bound_to?: Partial<Record<'skills' | 'agents' | 'flows', string[]>>;
+  ruleSummary?: string;
+  ruleEnforcement?: string;
+  rulePaths?: string[];
+  /** Project paths governed by an action artifact, used for compound discovery. */
+  governedPaths?: string[];
 
   /** Tags from frontmatter */
   tags: string[];
@@ -433,7 +447,7 @@ export const INDEX_VERSION = '1.0.0';
  * making the serialized index schema incompatible; a mismatch simply forces a
  * one-time content re-extraction during the next incremental build.
  */
-export const INDEX_EXTRACTOR_VERSION = '2026.08.24.1';
+export const INDEX_EXTRACTOR_VERSION = '2026.10.24.1';
 
 /**
  * Built-in graph type identifiers
@@ -1163,6 +1177,14 @@ export function loadGlobalGraphConfigs(diagnostics?: GraphConfigWarning[]): stri
 /** Module-scoped guard so the config.yaml deprecation note prints at most once per process. */
 let yamlIndexDeprecationWarned = false;
 
+/** Reload one workspace's registrations, including removals between daemon runs. */
+export function loadWorkspaceGraphs(workspace: string, diagnostics?: GraphConfigWarning[]): void {
+  for (const name of Object.keys(GRAPH_CONFIGS)) delete GRAPH_CONFIGS[name];
+  Object.assign(GRAPH_CONFIGS, structuredClone(BUILTIN_GRAPH_CONFIGS));
+  loadUserGraphConfigs(workspace, diagnostics);
+  loadGlobalGraphConfigs(diagnostics);
+}
+
 /**
  * Get the index output directory for a given graph type
  *
@@ -1171,8 +1193,9 @@ let yamlIndexDeprecationWarned = false;
  * @returns Absolute path to the graph's index directory
  */
 export function getGraphIndexDir(cwd: string, graphType: GraphType): string {
+  if (graphType === 'framework') return path.join(getFrameworkIndexBaseDir(cwd), graphType);
   const config = GRAPH_CONFIGS[graphType];
-  if (graphType === 'framework' || config?.shared) {
+  if (config?.shared) {
     // Shared across projects — XDG data directory
     const xdgData = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
     return path.join(xdgData, 'aiwg', 'index', graphType);

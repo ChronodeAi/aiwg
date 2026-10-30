@@ -1,4 +1,11 @@
 ---
+activation: bound
+summary: "Display colors with lowercase six-digit HEX, swatches, and descriptive names; order palettes consistently and label contrast ratios and accessibility results."
+bound_to:
+  skills:
+    - color-palette
+    - color-trends
+    - color-accessibility
 id: color-output-format
 name: Color Output Format
 enforcement: medium

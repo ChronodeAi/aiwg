@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
-import { SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
+import { multilineSecrets, multilineSecretValue, strictScannerPatterns, syntheticSecrets } from '../../fixtures/sessions/redaction-secrets.js';
+import { median } from '../../helpers/cli-perf-policy.js';
+import { ImportCheckpointSchema, IntelligenceCandidateSchema, SessionRejectionDetailSchema } from '../../../src/sessions/contracts.js';
 import {
   SESSION_PROVIDER_IDS,
   SessionContractError,
@@ -47,12 +48,51 @@ describe('session contracts', () => {
     expect(schemaRejectionDetail(many.error)).toHaveProperty('issues.length', 20);
   });
 
+  it('preserves diagnostic codes and locations for enums, formats and nested discriminators', () => {
+    const schema = z.object({
+      provider: z.enum(['claude', 'codex']),
+      occurredAt: z.string().datetime(),
+      event: z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('user') }),
+        z.object({ kind: z.literal('assistant') }),
+      ]),
+    });
+    const result = schema.safeParse({ provider: 'synthetic-marker', occurredAt: 'synthetic-marker', event: {} });
+    if (result.success) throw new Error('expected validator failure');
+    expect(schemaRejectionDetail(result.error)).toEqual({ issues: [
+      { path: 'provider', code: 'invalid_enum_value' },
+      { path: 'occurredAt', code: 'invalid_string' },
+      { path: 'event.kind', code: 'invalid_union_discriminator' },
+    ] });
+  });
+
+  it('preserves unbounded number acceptance and one-sided numeric limits', () => {
+    expect(SessionRejectionDetailSchema.parse({ limit: 'synthetic', configured: Infinity, observed: -Infinity }))
+      .toEqual({ limit: 'synthetic', configured: Infinity, observed: -Infinity });
+    const checkpoint = { cursor: '', recordsRead: 0, bytesRead: 0 };
+    expect(ImportCheckpointSchema.parse({ ...checkpoint, sourceMtimeMs: Infinity }).sourceMtimeMs).toBe(Infinity);
+    const negative = ImportCheckpointSchema.safeParse({ ...checkpoint, sourceMtimeMs: -Infinity });
+    if (negative.success) throw new Error('expected negative mtime rejection');
+    expect(negative.error.issues).toMatchObject([{ path: ['sourceMtimeMs'], code: 'too_small' }]);
+    expect(ImportCheckpointSchema.safeParse({ ...checkpoint, sourceMtimeMs: NaN }).success).toBe(false);
+  });
+
+  it('parses candidate security defaults independently for each candidate', () => {
+    const security = IntelligenceCandidateSchema.shape.security;
+    const first = security.parse(undefined);
+    first.warnings.push('instruction-like');
+    expect(security.parse(undefined)).toEqual({
+      disposition: 'clear', warnings: [], requiresAcknowledgement: false,
+      acknowledged: false, policyVersion: '1.0.0',
+    });
+  });
+
   it('redacts session diagnostics and dynamic validator paths before they can reach receipts', () => {
     const canary = 'redaction-canary-diagnostic';
     const error = new SessionContractError('MALFORMED_SOURCE', canary, { issues: [{ path: canary, code: 'custom' }] });
     expect(error.message).not.toContain(canary);
     expect(JSON.stringify(error.detail)).not.toContain(canary);
-    const result = z.record(z.string()).safeParse({ [canary]: 42 });
+    const result = z.record(z.string(), z.string()).safeParse({ [canary]: 42 });
     if (result.success) throw new Error('expected validator failure');
     expect(JSON.stringify(schemaRejectionDetail(result.error))).not.toContain(canary);
   });
@@ -69,15 +109,16 @@ describe('session contracts', () => {
     );
   });
 
-  it('fails closed on unknown schema majors but preserves unknown event kinds', () => {
+  it.each(['2026-10-25T09:30Z', '2026-10-25T09:30:00+0200'])(
+    'preserves minute and basic-offset timestamps (%s) and represented large integers', occurredAt => {
     expect(() => assertSupportedSchemaMajor('2.0.0')).toThrowError(
       expect.objectContaining({ code: 'UNKNOWN_SCHEMA_MAJOR' }),
     );
     const event = SessionEventSchema.parse({
       contractVersion: '1.0.0',
       eventId: 'event-1', sessionId: 'session-1', sourceId: 'source-1',
-      importRunId: 'run-1', nativeId: null, sequence: 0,
-      kind: 'provider.future-event', role: null, occurredAt: null,
+      importRunId: 'run-1', nativeId: null, sequence: 2 ** 54,
+      kind: 'provider.future-event', role: null, occurredAt,
       searchableText: '', digest: sha256('future'),
       rawReference: { locatorClass: 'fixture', sequence: 0 },
       adapterVersion: '1.0.0', consistency: 'complete',
@@ -85,6 +126,8 @@ describe('session contracts', () => {
       extensions: { 'native.claude': { future: true } },
     });
     expect(event.opaque).toBe(true);
+    expect(event.sequence).toBe(2 ** 54);
+    expect(event.occurredAt).toBe(occurredAt);
   });
 
   it('enforces fixture dispositions', () => {
@@ -144,6 +187,13 @@ describe('session source and content policy', () => {
     expect(result.sensitivity).toBe('sensitive');
   });
 
+  it('still redacts email after long email-shaped prose without an at-sign', () => {
+    const near = 'a.'.repeat(2_048);
+    expect(redactSessionText(near).text).toBe(near);
+    expect(redactSessionText(`${near} owner@example.com`).text)
+      .toBe(`${near} [REDACTED:email]`);
+  });
+
   it('recursively sanitizes native attributes with typed bounded markers', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
@@ -181,6 +231,59 @@ describe('session source and content policy', () => {
     const result = redactSessionText(value);
     expect(result.text).toBe(`[REDACTED:${classification}]`);
     expect(result.decisions[classification]).toBe(1);
+  });
+
+  it.each(multilineSecrets)('redacts bounded multiline %s and counts it (%#)', (classification, value) => {
+    expect(redactSessionText(value)).toMatchObject({
+      text: `[REDACTED:${classification}]`, decisions: { [classification]: 1 },
+    });
+  });
+
+  it.each(['password', 'token', 'secret', 'api_key', 'MY_API_TOKEN'])('preserves multiline %s prose and bounds the gap', key => {
+    const separator = key === 'MY_API_TOKEN' ? '=' : ':';
+    for (const value of ['- description', 'ordinary prose', '123456789012345678901234',
+      'abcdefghijklmnopqrstuvwxyz', '```sh\necho fixture\n```', '`unterminated', '"unterminated']) {
+      const text = `${key}${separator}\n  ${value}`;
+      expect(redactSessionText(text)).toMatchObject({ text, decisions: {} });
+    }
+    const text = `${key}${separator}\n\n\n${multilineSecretValue}`;
+    expect(redactSessionText(text).text).toBe(text);
+    expect(redactSessionText('token budget:\nnone').text).toBe('token budget:\nnone');
+  });
+
+  it.each(['"', "'", '`'])('accepts short quoted multiline values with %s delimiters', quote => {
+    for (const [key, classification] of [['password:', 'credential'], ['MY_API_TOKEN=', 'environment-assignment']]) {
+      expect(redactSessionText(`${key}\n  ${quote}fake ${quote === '"' ? '\\"' : ''}value${quote}`))
+        .toMatchObject({ text: `[REDACTED:${classification}]`, decisions: { [classification]: 1 } });
+    }
+  });
+
+  it('preserves a prose fence that needs scanner-policy adjudication', () => {
+    // Masked scanner hit: token:<LF><BACKTICK x 3><letters x 10>.
+    const text = 'token:\n```typescript\nconst example = true;\n```';
+    expect(redactSessionText(text)).toMatchObject({ text, decisions: {} });
+    expect(strictScannerPatterns[0].test(text)).toBe(true);
+  });
+
+  it.each(['Bearer', 'Authorization:', 'Cookie:', 'Set-Cookie:', 'https://fixture-user:'])
+    ('bounds the newline gap for %s', prefix => {
+      const text = `${prefix}\n\n\n${multilineSecretValue}${prefix.startsWith('https') ? '@localhost/path' : ''}`;
+      expect(redactSessionText(text)).toMatchObject({ text, decisions: {} });
+    });
+
+  it('redacts a folded authorization header and a next-line cookie assignment', () => {
+    expect(redactSessionText(`Authorization:\r\n\tBearer\r\n  ${multilineSecretValue}`))
+      .toMatchObject({ text: '[REDACTED:authorization]', decisions: { authorization: 1, 'bearer-token': 1 } });
+    expect(redactSessionText(`Set-Cookie:\n  session=${multilineSecretValue}; Path=/; HttpOnly`))
+      .toMatchObject({ text: '[REDACTED:cookie]', decisions: { cookie: 1 } });
+  });
+
+  it('retains same-line unterminated quote coverage', () => {
+    for (const [key, classification] of [['password=', 'credential'], ['MY_API_TOKEN=', 'environment-assignment']]) {
+      expect(redactSessionText(`${key}"${multilineSecretValue}`).text).toBe(`[REDACTED:${classification}]`);
+    }
+    expect(redactSessionText(`MY_API_TOKEN=${multilineSecretValue}\\"fake-suffix`).text)
+      .toBe('[REDACTED:environment-assignment]');
   });
 
   it('redacts JWTs with large claims and lower-case AWS configuration assignments', () => {
@@ -228,38 +331,81 @@ session_0123456789abcdef`;
   });
 
   it('bounds redaction of a 32 MiB record with malformed key blocks and long near matches', () => {
-    const recordSize = 32 * 1024 * 1024;
-    const benignChunk = 'ordinary session prose without sensitive content.\n';
-    const benign = benignChunk.repeat(Math.ceil(recordSize / benignChunk.length)).slice(0, recordSize);
-    const baselineStarted = performance.now();
-    const baseline = redactSessionText(benign);
-    const baselineMs = performance.now() - baselineStarted;
-    expect(baseline.text).toBe(benign);
-    // Compare equal-size records on this runner; shared CI load is not a benchmark.
-    // Local near-match runs take roughly 10x the benign scan; allow scheduling headroom.
+    const sizes = [16 * 1024 * 1024, 32 * 1024 * 1024];
+    const bySize = sizes.map((recordSize) => {
+      const benignChunk = 'ordinary session prose without sensitive content.\n';
+      const benign = benignChunk.repeat(Math.ceil(recordSize / benignChunk.length)).slice(0, recordSize);
+      const chunk = '-----BEGIN PRIVATE KEY-----\n'.repeat(32)
+        + 'password' + ' '.repeat(1024) + 'end\n'
+        + 'eyJ' + 'a-'.repeat(1024) + '\n'
+        + 'a.'.repeat(1024) + '\n';
+      const text = chunk.repeat(Math.ceil(recordSize / chunk.length)).slice(0, recordSize);
+      // Exercise every regex on a large record as well as the unfinished-key scanner.
+      const nearMatch = 'ordinary prose password' + ' '.repeat(1024) + '\neyJ' + 'a-'.repeat(1024) + '\n' + 'a.'.repeat(1024) + '\n';
+      const secretSuffix = '\n' + syntheticSecrets[0][1];
+      const plain = nearMatch.repeat(Math.ceil(recordSize / nearMatch.length))
+        .slice(0, recordSize - secretSuffix.length);
+      const plainInput = plain + secretSuffix;
+      // Sparse incomplete JWTs isolate repeated suffix searches from the
+      // expensive but linear whitespace and email near matches above.
+      const jwtChunk = 'eyJaaaaa\n' + '~'.repeat(4096);
+      const jwtInput = jwtChunk.repeat(Math.ceil(recordSize / jwtChunk.length)).slice(0, recordSize);
+      return [
+        { recordSize, name: 'benign', input: benign, expected: benign, samples: [] as number[] },
+        { recordSize, name: 'malformed key blocks', input: text, expected: '[REDACTED:private-key]', samples: [] as number[] },
+        { recordSize, name: 'JWT suffix near matches', input: jwtInput, expected: jwtInput, samples: [] as number[] },
+        { recordSize, name: 'near matches', input: plainInput, expected: plain + '\n[REDACTED:provider-token]', samples: [] as number[] },
+      ];
+    });
+
+    // Keep each size pair adjacent so unrelated slow paths cannot separate
+    // the measurements used by a growth ratio.
+    const cases = bySize[0].flatMap((entry, index) => entry.name === 'JWT suffix near matches'
+      ? bySize.map((entries) => entries[index]) : [bySize[1][index]]);
+
+    // Warm every full-size path before sampling: first-use JIT and string
+    // flattening costs must not skew either side of the ratio.
+    for (const entry of cases) expect(redactSessionText(entry.input).text).toBe(entry.expected);
+
+    // Scheduling pauses made a single wall-time ratio flaky (#3328). Count
+    // CPU on this Vitest worker thread, excluding waits and other threads.
+    // Interleave adjacent size pairs, alternating order to limit drift;
+    // five samples reject isolated outliers without hiding sustained slowdowns.
+    for (let sample = 0; sample < 5; sample++) {
+      const order = sample % 2 === 0 ? cases : [...cases].reverse();
+      for (const entry of order) {
+        const started = process.threadCpuUsage();
+        const result = redactSessionText(entry.input);
+        const elapsed = process.threadCpuUsage(started);
+        entry.samples.push((elapsed.user + elapsed.system) / 1000);
+        expect(result.text).toBe(entry.expected);
+      }
+    }
+
+    // Doubling linear work should cost about 2x; quadratic suffix rescans
+    // approach 4x. Check growth before the coarser ratio-to-baseline cap.
+    // Compare the fastest samples: contention on a shared runner (other test
+    // shards on the same cores) inflates even thread CPU time, and it only
+    // ever adds cost. A median still reached 3.003 in CI (run 90185) while the
+    // same code measures exactly 2.0x per doubling locally.
+    const maxGrowth = 3;
+    for (const small of cases.filter((entry) => entry.recordSize === sizes[0])) {
+      const large = cases.find((entry) => entry.recordSize === sizes[1] && entry.name === small.name)!;
+      const smallMs = Math.min(...small.samples);
+      const largeMs = Math.min(...large.samples);
+      expect(largeMs / smallMs, `${small.name} CPU growth (32 / 16 MiB; ${largeMs} / ${smallMs} ms)`)
+        .toBeLessThan(maxGrowth);
+    }
     const maxSlowdown = 20;
-    const chunk = '-----BEGIN PRIVATE KEY-----\n'.repeat(32)
-      + 'password' + ' '.repeat(1024) + 'end\n'
-      + 'eyJ' + 'a-'.repeat(1024) + '\n'
-      + 'a.'.repeat(1024) + '\n';
-    const text = chunk.repeat(Math.ceil(recordSize / chunk.length)).slice(0, recordSize);
-    const started = performance.now();
-    const result = redactSessionText(text);
-    const keyBlockMs = performance.now() - started;
-    expect(keyBlockMs / baselineMs, 'malformed key blocks / benign baseline').toBeLessThan(maxSlowdown);
-    expect(result.text).toBe('[REDACTED:private-key]');
-    // Exercise every regex on a large record as well as the unfinished-key scanner.
-    const nearMatch = 'ordinary prose password' + ' '.repeat(1024) + '\neyJ' + 'a-'.repeat(1024) + '\n' + 'a.'.repeat(1024) + '\n';
-    const secretSuffix = '\n' + syntheticSecrets[0][1];
-    const plain = nearMatch.repeat(Math.ceil(recordSize / nearMatch.length))
-      .slice(0, recordSize - secretSuffix.length);
-    const plainInput = plain + secretSuffix;
-    const plainStarted = performance.now();
-    const redacted = redactSessionText(plainInput);
-    const nearMatchMs = performance.now() - plainStarted;
-    expect(nearMatchMs / baselineMs, 'near matches / benign baseline').toBeLessThan(maxSlowdown);
-    expect(redacted.text).toBe(plain + '\n[REDACTED:provider-token]');
-  }, 120_000); // Hang guard only; performance is bounded relative to the baseline.
+    for (const recordSize of sizes.slice(1)) {
+      const sameSize = cases.filter((entry) => entry.recordSize === recordSize);
+      const baselineMs = median(sameSize[0].samples);
+      for (const entry of sameSize.slice(1)) {
+        expect(median(entry.samples) / baselineMs, `${entry.name} / benign baseline (${recordSize / 1024 / 1024} MiB)`)
+          .toBeLessThan(maxSlowdown);
+      }
+    }
+  }, 120_000); // Hang guard only; performance is bounded by CPU growth and baseline ratios.
 
   it('requires operation-specific network consent', () => {
     expect(() => requireNetworkConsent('codex.export', 'claude.export')).toThrowError(

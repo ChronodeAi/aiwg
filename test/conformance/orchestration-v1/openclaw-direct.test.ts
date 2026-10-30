@@ -1,3 +1,5 @@
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2907 (B-OG-42) OpenClaw promotion: offline S1 profile work.
  *
@@ -52,11 +54,7 @@ async function installPackage(bytes: Buffer) {
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
     version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
   await writeFile(path.join(packageRoot, 'lib', 'openclaw-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   // Mirrors the repo layout (tools/ralph-external/lib -> tools/): from
   // pkg/lib, '../../_resolve-impl.mjs' resolves to the install base.
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
@@ -77,7 +75,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.openclaw.workerAdapter = structuredClone(registry.providers.openclaw.workerHealthAdapter);
   return registry;
 }
@@ -219,7 +217,7 @@ describe('OpenClaw version-bound profile (B-OG-42)', () => {
       invocation: { executable: 'openclaw', stdin: 'closed',
         argv: ['agent', 'exec', '--isolated', '--auth-env-only', '--json', '--model', '${model}', '--thinking', '${effort}',
           '--cwd', '${workspace}', '--message-file', '${briefPath}'],
-        envAllowlist: ['OPENROUTER_API_KEY'] },
+        envAllowlist: ['OPENROUTER_API_KEY', 'PATH'] },
       qualification: { status: 'unqualified' } });
     const profile = adapter.invocationProfiles!['direct-shell'];
     expect(profile.supportedVersions).toBe(VERSION);
@@ -469,10 +467,8 @@ describe('T-OG-20/21/23 OpenClaw run identity, stall and security signals', () =
     const { file } = await fakeConfig(root, 'ignore-term');
     const brief = await briefFile(workdir);
     const result = await run(process.execPath, [FAKE, ...argv(brief, workdir)], { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file },
-      timeoutMs: 8_000, onStart: started => { setTimeout(() => {
-        started.kill('SIGTERM');
-        setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-      }, 600); } });
+      timeoutMs: 8_000, onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });

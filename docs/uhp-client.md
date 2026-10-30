@@ -1,5 +1,7 @@
 # Experimental UHP client
 
+Credential sources, exposure and migration status: [Supplying sensitive values](cli/sensitive-values.md).
+
 AIWG can connect to a remote Unified Harness Protocol (UHP) endpoint as an
 experimental client transport. The client is pinned to UHP `2026-08-11`; it
 does not negotiate down or silently retry with another version.
@@ -38,7 +40,8 @@ before deployment.
 Add UHP configuration to the project artifact-root `aiwg.config` (normally
 `.aiwg/aiwg.config`). Store only a secret locator. Never put a bearer value in
 the config, a command argument, a committed file, a transcript, or a shell
-assignment that will be retained in history.
+assignment that will be retained in history. Inline profile credentials, endpoint
+userinfo, and fields other than `source` / `name` inside `credential` are rejected.
 
 ```json
 {

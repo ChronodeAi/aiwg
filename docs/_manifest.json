@@ -175,6 +175,7 @@
     "contributing/maintainer-review-guide",
     "contributing/testing-requirements",
     "contributing/publishing-blog-posts",
+    "contributing/release-announcements",
     "blog",
     "blog/2026-6-aiwg-june-2026-report",
     "blog/2026-6-aiwg-cockpit-desktop-control-plane",
@@ -192,6 +193,15 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.16-announcement",
+    "releases/v2026.10.15-announcement",
+    "releases/v2026.10.14-announcement",
+    "releases/v2026.10.12-announcement",
+    "releases/v2026.10.11-announcement",
+    "releases/v2026.10.10-announcement",
+    "releases/v2026.10.9-announcement",
+    "releases/v2026.10.8-announcement",
+    "releases/v2026.10.7-announcement",
     "releases/v2026.5.11-announcement",
     "releases/v2026.5.10-announcement",
     "releases/v2026.5.9-announcement",
@@ -371,6 +381,8 @@
     "decision/cli-mcp-driver",
     "getting-started/session-history",
     "getting-started/worker-dispatch",
+    "getting-started/worker-dispatch-runtime",
+    "orchestration/guide",
     "sessions/cli",
     "configuration",
     "frameworks/forensics-complete/agent-examples",
@@ -1505,6 +1517,13 @@
       "parent": "contributing"
     },
     {
+      "id": "contributing/release-announcements",
+      "title": "Release Announcements",
+      "summary": "How to write plain, user-focused release announcements",
+      "file": "contributing/release-announcements.md",
+      "parent": "contributing"
+    },
+    {
       "id": "blog",
       "title": "Blog",
       "summary": "AIWG engineering blog",
@@ -1618,6 +1637,69 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.16-announcement",
+      "title": "v2026.10.16 — Start With a Prompt and Check Room for Helpers",
+      "summary": "Guides that open with what to ask your assistant, one resource check before starting helper workers, no AI co-author trailer by default, one AIWG.md, and safer research tools.",
+      "file": "releases/v2026.10.16-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.15-announcement",
+      "title": "v2026.10.15 — Check a Half-Remembered Reference and Find Related Papers",
+      "summary": "Two research commands that resolve partial references and find similar papers, a shorter AGENTS.md hook, prompt-first orchestration docs, and a security fix for aiwg serve.",
+      "file": "releases/v2026.10.15-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.14-announcement",
+      "title": "v2026.10.14 — Approvals in Your Workflows, Focused Helper Agents and Fewer Deploy Surprises",
+      "summary": "Workflows check your approval profile before asking, new explorer and verifier helper agents, tier-pinned helpers, one orchestration guide, and project add-on deploy fixes.",
+      "file": "releases/v2026.10.14-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.12-announcement",
+      "title": "v2026.10.12 — Live Session Follow, Safer Approvals and Checked Worker Results",
+      "summary": "Follow live sessions, import Grok Build and Hermes history automatically, pre-approve bounded routine work, and require cross-model review before worker results count.",
+      "file": "releases/v2026.10.12-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.11-announcement",
+      "title": "v2026.10.11 — Leaner Session Catalogs and Steadier Helper CLIs",
+      "summary": "Grok Bot conversations counted once, tool-output images stored once, every helper worker started with project rules, and runaway workers stopped.",
+      "file": "releases/v2026.10.11-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.10-announcement",
+      "title": "v2026.10.10 — Safer Handoffs to Helper CLIs",
+      "summary": "Private task files fenced off from conductors, checked worker results, fewer false sandbox failures on Ubuntu and smoother add-on installs.",
+      "file": "releases/v2026.10.10-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.9-announcement",
+      "title": "v2026.10.9 — Consistent Sensitive Values",
+      "summary": "Sensitive-value work complete: daemon and storage references, protected resource inputs, credential redaction and reliable SessionStart hooks.",
+      "file": "releases/v2026.10.9-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.8-announcement",
+      "title": "v2026.10.8 — Secret References + Decision Retention",
+      "summary": "Per-value MCP secret sources, private credential validation, decision ledger retention, Grok Build discovery and CI repairs.",
+      "file": "releases/v2026.10.8-announcement.md",
+      "parent": "releases"
+    },
+    {
+      "id": "releases/v2026.10.7-announcement",
+      "title": "v2026.10.7 — Signed Worker Approvals + Release Evidence",
+      "summary": "Signed worker qualification, standard secret inputs, deploy rollback, OpenRouter benchmarks and Knowledge Shard 2.2.0 support.",
+      "file": "releases/v2026.10.7-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.5.11-announcement",
@@ -2856,6 +2938,13 @@
       "parent": "decision"
     },
     {
+      "id": "decision/gate-pack-authoring",
+      "title": "Gate-Pack Authoring",
+      "summary": "Write GatePack files: structure, gate fields, the outcome lattice, floors and ceilings, enforcedBy rule links, and validation",
+      "file": "decision/gate-pack-authoring.md",
+      "parent": "decision"
+    },
+    {
       "id": "getting-started/session-history",
       "title": "Import AI Session History",
       "summary": "Discover, import, and search prior AI conversations across providers in a local, privacy-aware session catalog",
@@ -2867,6 +2956,20 @@
       "title": "Turn On Direct Worker Dispatch",
       "summary": "What parallelism.worker_dispatch does, what it costs, how AIWG offers it, and how to turn it on or off",
       "file": "getting-started/worker-dispatch.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "getting-started/worker-dispatch-runtime",
+      "title": "Worker Dispatch Runtime",
+      "summary": "Qualify installed CLIs, resolve and launch direct workers, and supervise their health",
+      "file": "getting-started/worker-dispatch-runtime.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "orchestration/guide",
+      "title": "Agent Orchestration Guide",
+      "summary": "Hand work to helper CLIs, choose a wrapper, write a bounded brief, and accept the result",
+      "file": "orchestration/guide.md",
       "parent": "getting-started"
     },
     {

@@ -9,6 +9,9 @@ triggers:
   - optimizer adapter review
   - genome engine review
   - self improvement adapter review
+commandHint:
+  modelRole: reasoning
+  modelTier: standard
 ---
 
 # Evolution Surface Review

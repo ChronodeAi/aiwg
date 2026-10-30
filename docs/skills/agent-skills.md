@@ -109,7 +109,7 @@ aiwg doctor
 
 `skills info` reports the managed path, digest, validation profile, source
 locator, requested/resolved Git revisions when applicable, trust, and activation.
-`doctor` compares active provider projections with regenerated strict output and
+`doctor` compares active provider projections with regenerated provider output and
 reports source, sidecar, resource, or projection drift.
 
 ### 6. Preview and deploy
@@ -233,6 +233,29 @@ mismatches.
 
 ### Strict provider projection
 
+Claude-native extensions are an explicit exception to the portable projection.
+The `compatible` and `discovery` profiles recognize `disable-model-invocation`,
+`user-invocable`, `disallowed-tools`, `context`, `agent`, `background`, `model`,
+`effort`, `paths`, `shell`, `argument-hint`, and `arguments`. The `strict` profile
+rejects every one of these top-level fields; unknown fields remain errors in
+both `strict` and `compatible`.
+
+Managed import deployment retains these values under
+`.aiwg-agent-skill.json` → `portable.providers.claude`. Legacy `aiwg.context`
+and `aiwg.effort` sidecars remain readable. For backward compatibility those
+two overlapping fields are also retained in `aiwg`; `providers.claude` is
+authoritative for native projection. No Claude field becomes portable policy.
+Claude receives the original fields and values. A source containing only
+portable and Claude fields is deployed byte-for-byte, including YAML comments.
+AIWG control fields still move to the sidecar when present.
+
+For **every other target in the provider matrix below**, all twelve Claude
+fields are dropped from deployed frontmatter, with one warning naming each
+field and target provider. The result is `degraded`; the values remain in the
+sidecar. Dry-run and inspection return the same warnings. Portable export
+also drops these fields from `SKILL.md` and retains their values under
+`providers.claude` in `.aiwg-agent-skill-export.json`.
+
 ```yaml
 ---
 name: portable-complete
@@ -310,8 +333,14 @@ Normative field/type/name/YAML errors block strict and compatible validation.
   digest.
 - Source bytes remain immutable under the managed import until an explicit
   update succeeds.
-- Project-owned skills outrank user-owned skills, which outrank explicit
-  imports, which outrank packaged AIWG-managed skills.
+- Project-owned skills outrank user-owned (operator) skills, which outrank
+  account-synced skills, which outrank explicit imports, which outrank packaged
+  AIWG-managed skills. This retains the existing project/user/import/packaged
+  order and inserts the account-synced cache below operator ownership.
+  Synced skills are discovered at `~/.claude/skills/synced/<name>/SKILL.md`.
+  Discovery reports both origins for a name collision; equal-origin ties use
+  sorted paths. Deploy refuses higher-precedence owners, including synced
+  skills, and never writes into the synced cache or overwrites operator files.
 - Deployment and uninstall refuse user-owned target collisions, even when a
   partial or forged marker is present.
 
@@ -342,10 +371,29 @@ validated Agent Skills name.
 | `windsurf` | `<project>/.windsurf/skills/<name>` | `projected` | exact | One bundle directly below the one-level surface |
 | `generic` | `<project>/skills/<name>` | `native` | exact | Recursive portable fallback |
 
-Every supported projection is reparsed with the strict validator. Results
+Every supported portable projection is reparsed with the strict validator;
+Claude's native extension projection uses compatible validation. Results
 always include provider, path, source digest, projection status, reasons, and
 warnings. `degraded` and `unsupported` results name the limitation and do not
 silently discard standard data.
+
+### Claude surface projection (D2)
+
+`aiwg skill-lint` reports `projections` per file in JSON and text. These are
+inspection results for a filesystem skill, not account uploads or executions.
+Shell interpolation means the native `!` followed by a backtick command; AIWG
+never executes it during import, validation, export, or deployment.
+
+| Claude surface | Filesystem skill status | `!` shell interpolation status |
+|---|---|---|
+| `cli` | `native` | `native` |
+| `desktop-code` | `native` | `native` |
+| `cowork` | `unsupported` | `degraded`: account-enabled skills receive a policy notice |
+| `cloud` | `unsupported` | `unsupported` for the local skill |
+
+Cowork and cloud read skills enabled on the claude.ai account, not local
+`.claude/skills/` bundles. The Cowork shell status describes that separate
+account surface; it does not make the filesystem deployment usable there.
 
 ## Troubleshooting
 

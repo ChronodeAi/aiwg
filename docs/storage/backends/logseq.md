@@ -28,6 +28,9 @@ Routes a subsystem's persistence into a [Logseq](https://logseq.com) graph. AIWG
 | `graph`  | yes      | Absolute path to the graph directory                                 |
 | `useApi` | no       | Default `true`. When true, probes the HTTP API on init               |
 | `apiUrl` | no       | Default `http://127.0.0.1:12315/api`                                 |
+| `apiTokenEnv` | no | Environment name (default `LOGSEQ_API_TOKEN`), `file:ABSOLUTE_PATH` or `store:NAME` |
+
+Credential references: [Supplying sensitive values](../../cli/sensitive-values.md#storage-backend-references). No prompt is added; private-file checks apply to `file:` sources and missing selected sources fail. With `useApi: false`, no credential is read.
 
 Optional env var: `LOGSEQ_API_TOKEN` — only when `useApi: true`. Generate one in Logseq via Settings → Features → Developer mode.
 
@@ -42,7 +45,7 @@ The adapter does direct filesystem reads/writes against the graph root. Logseq's
   logseq/                   REFUSED (Logseq config)
 ```
 
-When `useApi: true` (default), `init()` POSTs once to `<apiUrl>` with a `Bearer` token from `LOGSEQ_API_TOKEN` to confirm reachability. On missing token or unreachable API, emits a one-time stderr warning and continues with direct filesystem writes.
+When `useApi: true` (default), `init()` POSTs once to `<apiUrl>` with a `Bearer` token from `LOGSEQ_API_TOKEN` to confirm reachability. With the default selector, on missing token or unreachable API, emits a one-time stderr warning and continues with direct filesystem writes.
 
 ### Frontmatter → property:: transform
 
@@ -92,7 +95,7 @@ Same five rules as `fs` (`..`/absolute/`~`/backslash/empty), plus the `logseq/` 
 
 1. Install Logseq and create or open a graph.
 2. (Optional) Enable the HTTP API server: Settings → Features → Developer mode → enable the API token.
-3. Export the API token: `export LOGSEQ_API_TOKEN=<token>` (only needed if `useApi: true`).
+3. (Optional) Save the API token with `aiwg auth secret set logseq-production --value-interactive`, then set `apiTokenEnv` to `store:logseq-production` in the backend config. Existing `LOGSEQ_API_TOKEN` use remains supported.
 4. Add the backend to `.aiwg/storage.config`:
 
    ```jsonc

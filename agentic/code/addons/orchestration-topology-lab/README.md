@@ -1,5 +1,7 @@
 # Orchestration Topology Lab
 
+Evidence status: design intent; local experimental evidence only.
+
 This experimental addon compares orchestration shapes from recorded, trusted
 evaluation observations. It does not route production work and never recommends
 fan-out from agent count alone.

@@ -42,7 +42,7 @@ The old fixed name is retained here solely as probe evidence. It is never
 emitted by the adapter. No new real probes or model calls were made for
 these fixes.
 
-## Brief transport is NOT available today
+## Brief delivery is wired; vendor discovery remains unverified
 
 `--prompt` puts text on argv and is never emitted. The intended transport
 uses a generated skill file. `buildWarpBriefSkillName(invocationId)` maps
@@ -58,10 +58,68 @@ invocation.
 `.agents/skills/aiwg-brief-<invocationId>/SKILL.md`. Both it and
 `buildWorkerArgs` stay pure: resolution writes no files.
 
-Generating the skill file at execution time is **pending #3002**. The
-execution owner must supply the invocation ID, **refuse to overwrite an
-existing path**, clean up the generated file afterward, and **never commit
-it**. The shared execution primitive is unavailable today.
+`buildWorkerArtifacts` now declares that file for the shared session launcher.
+Resolution supplies one invocation ID, which binds both the `--skill` token
+and the workspace path. Revalidation checks the entire saved plan against its
+conductor-owned persisted copy. The plan must be outside cwd and every
+qualified worker-writable root (including symlink aliases); a JSON object alone
+cannot authenticate its invocation ID. The installed loader rechecks the
+declaration against the approved adapter; resolution remains pure. At execution time the launcher
+allows one workspace-relative file under the fixed adapter-owned prefix,
+rejects absolute, traversal, non-normalized and mismatched invocation paths,
+and opens every path component without following symlinks. Creation uses
+`O_EXCL`: collisions are reported and the existing file is preserved.
+Content is limited to 1 MiB of UTF-8 bytes. Materialization completes before the
+worker process starts. Concurrent hostile writers at that stage are leftover
+processes or other tenants of the same tree. Cleanup requires launcher-owned
+stop proof; uncertain termination retains the artifacts and reports
+`artifactCleanup: { status: 'retained', reason: 'stop-proof-uncertain' }` in the
+result and exit record. A direct child's exit in degraded mode does not prove
+that its descendants stopped.
+
+Directory creation uses Node alone on Linux and macOS. The launcher exclusively
+`mkdir`s the invocation-specific `aiwg-brief-<invocation-id>` directory in a
+verified parent, takes an initial `lstat`, opens it with
+`O_NOFOLLOW | O_DIRECTORY`, and checks that it is empty. It compares the opened
+descriptor's device/inode with the initial observation and an `lstat` reached by
+re-walking the parent chain from cwd. Only after those checks is the directory
+recorded as owned. EEXIST fails closed without adopting or deleting any existing
+entry, including an empty directory. Any observed substitution or unprovable
+identity fails closed; an unproven directory is retained without deletion.
+Missing shared prefixes such as `.agents` and `.agents/skills` use the same
+creation checks. Existing prefixes are checked without being adopted; shared
+prefixes are always left in place, including empty ones.
+
+After exclusive file creation, and again after writing, the launcher reopens the
+full declared path from `/` through cwd with per-component `O_NOFOLLOW`, checking
+every directory and the file against the recorded device/inode chain. A mismatch
+fails the launch before spawning a worker. When stop proof permits cleanup, it
+first atomically renames each leaf and owned directory into a private 0700
+quarantine under the run directory on the same filesystem, then checks its
+device/inode there. Only matching entries are deleted. Replacements and nonempty
+directories remain in quarantine and are reported with its path. Linux uses
+pinned directory descriptor paths; other POSIX hosts use checked pathnames and
+retain entries if a relocated parent's identity cannot be recovered. Generated
+skills must never be committed.
+
+**Residual race windows:** Node has neither an atomic beneath-root creation
+operation nor a mkdir operation returning an opened descriptor. These checks
+compare observed identities; they cannot prove that an empty directory was not
+substituted between mkdir and the first identity observation. Re-walking is also
+sequential: a directory can move after its component was checked or after final
+verification. A concurrent writer can relocate a parent just before creation or
+during writing, so an empty directory, empty file, or brief bytes can transiently
+exist outside cwd. The reproduced relocations are detected and the owned leaf is
+reverted by quarantine cleanup on Linux; unproven directories and entries whose
+parents cannot be recovered are retained and reported. Transient creation is
+detected and reverted where identity is established, not prevented. These checks
+do not prove continuous containment against an unrestricted concurrent renamer;
+a filesystem boundary preventing ancestor renames or native atomic primitives
+would be needed for that stronger guarantee.
+
+This extends #3021's run-directory artifacts. Delivery is covered by offline
+launcher and installed-adapter fixtures, including reading the generated skill;
+it does not qualify the real CLI's skill lookup or output grammar.
 
 Help lists `.agents/skills/`, `.warp/skills/`, `.claude/skills/`, and
 `.codex/skills/` as search directories. The skill search root relative to
@@ -106,9 +164,9 @@ text against the shared `workerClaims` schema. A single well-formed JSON
 object alone is insufficient. The actual envelope fields must first be
 established by an authenticated run.
 
-## Manual smoke run (blocked pending authentication and #3002)
+## Manual smoke run (blocked pending authentication)
 
-Once authentication and execution-time generation are available, this
+Once authenticated access is available, this
 manual evidence probe uses a private directory, an invocation-specific
 skill, exclusive creation and cleanup. It assumes the intended search root
 only to investigate that still-unverified behavior:
@@ -137,3 +195,9 @@ A non-zero exit is a failure. Exit zero and valid JSON are evidence to
 inspect, not an adapter success: record the raw envelope, actual answer
 field, skill lookup and execution location before enabling extraction.
 This probe never qualifies the registry profile by itself.
+
+Remaining provider work is an operator capture of authenticated success and
+error envelopes, followed by evidence-backed terminal-answer extraction and a
+manual smoke result with the CLI version. Confirm skill lookup relative to cwd,
+missing-skill behavior and execution location during that run. Until then the
+registry profile stays unqualified and final extraction stays unsupported.

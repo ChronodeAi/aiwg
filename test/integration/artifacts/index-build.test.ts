@@ -11,6 +11,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import type { ArtifactIndex, TagIndex, DependencyGraph, IndexStats } from '../../../src/artifacts/types.js';
 import {
   buildFixtureIndex,
@@ -113,4 +116,50 @@ describe('Artifact Index Build (integration)', () => {
       relocated.cleanup();
     }
   });
+});
+
+// A separate parent process proves that a fatal preparation heap exhaustion is
+// contained, rather than merely exercising a mocked worker error event.
+describe('index preparation heap isolation (integration)', () => {
+  it('survives a real worker heap fatal, retries serially and exits zero with a JSON report', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-index-oom-'));
+    try {
+      const artifact = path.join(root, 'amplifying.json');
+      fs.writeFileSync(artifact, JSON.stringify({ slots: 48 * 1024 ** 2 }));
+      const module = path.join(root, 'extractor.mjs');
+      fs.writeFileSync(module, `
+        import fs from 'node:fs';
+        export function prepareIndexArtifact(job) {
+          const data = JSON.parse(fs.readFileSync(job.fullPath, 'utf8'));
+          // A tiny input with an unexpectedly large preparation working set.
+          const expanded = new Array(data.slots).fill(7);
+          return { checksum: String(expanded.length + expanded[expanded.length - 1]) };
+        }
+      `);
+      fs.writeFileSync(path.join(root, 'small.json'), JSON.stringify({ slots: 1 }));
+      const preparation = new URL('../../../src/artifacts/index-preparation.ts', import.meta.url).href;
+      const report = execFileSync(process.execPath, ['--import', 'tsx', '--max-old-space-size=768', '--input-type=module', '-e', `
+        import os from 'node:os';
+        // Deterministic admission for this deliberately memory-bound fixture.
+        os.availableParallelism = () => 4;
+        os.freemem = process.availableMemory = () => 4 * 1024 ** 3;
+        import { runIndexPreparation } from ${JSON.stringify(preparation)};
+        import { prepareIndexArtifact } from ${JSON.stringify(pathToFileURL(module).href)};
+        const jobs = Array.from({length: 64}, (_, i) => ({
+          fullPath: ${JSON.stringify(artifact)}, relativePath: 'artifact-' + i,
+          mtimeMs: 0, birthtimeMs: 0, sizeBytes: 32,
+        }));
+        // Only one artifact requires the large working set; later results stay cheap.
+        const small = ${JSON.stringify(path.join(root, 'small.json'))};
+        for (const job of jobs.slice(1)) job.fullPath = small;
+        const result = await runIndexPreparation(jobs, prepareIndexArtifact, ${JSON.stringify(pathToFileURL(module).href)}, 2);
+        console.log(JSON.stringify({status:'ok', count:result.results.length, first:result.results[0], diagnostics:result.diagnostics, workers:result.workerCount}));
+      `], { cwd: path.resolve(import.meta.dirname, '../../..'), encoding: 'utf8', timeout: 60_000,
+        env: { ...process.env, HOME: root, XDG_DATA_HOME: root, XDG_STATE_HOME: root,
+          XDG_CONFIG_HOME: root, XDG_CACHE_HOME: root, AIWG_INDEX_WORKERS: '' } });
+      const parsed = JSON.parse(report);
+      expect(parsed).toMatchObject({ status:'ok', count:64, first:{checksum:String(48 * 1024 ** 2 + 7)}, workers:2 });
+      expect(parsed.diagnostics.join(' ')).toMatch(/heap out of memory.*serial/);
+    } finally { fs.rmSync(root, { recursive:true, force:true }); }
+  }, 60_000);
 });

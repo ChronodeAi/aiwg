@@ -14,6 +14,7 @@ import {
 } from '../fixtures/web-resource-release.js';
 import { acquireDirectoryLock } from '../../src/artifacts/prebuilt-build-lock.js';
 import { hasSevenDayReleaseAge } from '../helpers/npm-release-age.js';
+import { formatNpmInstallFailure } from '../helpers/npm-install-diagnostics.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 let tempRoot = '';
@@ -35,10 +36,11 @@ function runInstalledCli(args: string[]): Promise<CliResult> {
   return runInstalledCliIn(project, args);
 }
 
+// Registry isolation must retain an explicit offline policy from the caller.
 function installedEnv(): NodeJS.ProcessEnv {
   const cleanEnv = Object.fromEntries(
     Object.entries(process.env).filter(([key]) =>
-      !key.toLowerCase().startsWith('npm_config_') && key !== 'AIWG_ROOT'),
+      (!key.toLowerCase().startsWith('npm_config_') || key.toLowerCase() === 'npm_config_offline') && key !== 'AIWG_ROOT'),
   );
   return {
     ...cleanEnv,
@@ -122,6 +124,7 @@ describe('global install native lifecycle-script policy', () => {
 
     const releasePackLock = await acquireDirectoryLock(
       path.join(PROJECT_ROOT, 'prebuilt', 'fortemi-core', '.framework-build.lock'),
+      { reclaimDeadOwner: true },
     );
     let pack: ReturnType<typeof spawnSync>;
     try {
@@ -139,13 +142,23 @@ describe('global install native lifecycle-script policy', () => {
 
     const prefix = path.join(tempRoot, 'prefix');
     const npmrc = path.join(tempRoot, 'npmrc');
-    await writeFile(npmrc, 'ignore-scripts=false\n');
+    const npmLogs = path.join(tempRoot, 'npm-logs');
+    await mkdir(npmLogs);
+    // Three 20s attempts plus 1s/5s backoff leave headroom in the 240s install budget.
+    await writeFile(npmrc, [
+      'ignore-scripts=false',
+      'fetch-timeout=20000',
+      'fetch-retries=2',
+      'fetch-retry-mintimeout=1000',
+      'fetch-retry-maxtimeout=5000',
+      '',
+    ].join('\n'));
     const cleanEnv = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_config_')),
+      Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_config_') || key.toLowerCase() === 'npm_config_offline'),
     );
     const installArgs = [
         'install', '--global', '--prefix', prefix,
-        '--cache', path.join(tempRoot, 'cache'), '--userconfig', npmrc,
+        '--cache', process.env.AIWG_PACKAGE_TEST_NPM_CACHE ?? path.join(tempRoot, 'cache'), '--userconfig', npmrc,
         '--min-release-age=7', '--no-audit', '--no-fund', tarball,
     ];
     // Probe the actual install options after environment/userconfig isolation.
@@ -157,13 +170,17 @@ describe('global install native lifecycle-script policy', () => {
     );
     expect(policy.status, policy.stderr).toBe(0);
     expect(hasSevenDayReleaseAge(policy.stdout, policyStartedAt, Date.now()), policy.stdout).toBe(true);
+    const installStartedAt = Date.now();
     const install = spawnSync(
       process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      installArgs,
+      [...installArgs, '--loglevel=verbose', '--logs-dir', npmLogs],
       { cwd: tempRoot, encoding: 'utf8', timeout: 240_000, env: cleanEnv },
     );
+    const installElapsedMs = Date.now() - installStartedAt;
     installOutput = `${install.stdout}\n${install.stderr}`;
-    if (install.status !== 0) throw new Error(installOutput);
+    if (install.status !== 0) {
+      throw new Error(await formatNpmInstallFailure(install, installElapsedMs, npmLogs));
+    }
     installRoot = process.platform === 'win32'
       ? path.join(prefix, 'node_modules', 'aiwg')
       : path.join(prefix, 'lib', 'node_modules', 'aiwg');
@@ -256,7 +273,8 @@ describe('global install native lifecycle-script policy', () => {
     expect(existsSync(path.join(contextProject, 'WORKSPACE.md'))).toBe(true);
     expect(existsSync(path.join(contextProject, 'AIWG.md'))).toBe(true);
     expect(existsSync(path.join(contextProject, 'CLAUDE.md'))).toBe(true);
-    expect(existsSync(path.join(contextProject, '.aiwg', 'AIWG.md'))).toBe(true);
+    // #3762: fresh projects have one generated context, with no operator notes copy.
+    expect(existsSync(path.join(contextProject, '.aiwg', 'AIWG.md'))).toBe(false);
     expect(existsSync(path.join(contextProject, '.claude'))).toBe(false);
     expect(existsSync(path.join(contextProject, '.agents'))).toBe(false);
   });
@@ -278,7 +296,8 @@ describe('global install native lifecycle-script policy', () => {
     expect(existsSync(path.join(globalProject, 'WORKSPACE.md'))).toBe(true);
     expect(existsSync(path.join(globalProject, 'AIWG.md'))).toBe(true);
     expect(existsSync(path.join(globalProject, 'CLAUDE.md'))).toBe(true);
-    expect(existsSync(path.join(globalProject, '.aiwg', 'AIWG.md'))).toBe(true);
+    // #3762: global installs also keep generated framework context at the root.
+    expect(existsSync(path.join(globalProject, '.aiwg', 'AIWG.md'))).toBe(false);
     expect(existsSync(path.join(globalProject, '.claude'))).toBe(false);
     expect(existsSync(path.join(globalProject, '.agents'))).toBe(false);
   }, 180_000);
@@ -292,7 +311,11 @@ describe('global install native lifecycle-script policy', () => {
 
     const shown = await runInstalledCli(['show', 'skill', 'aiwg-status']);
     expectCliSuccess(shown);
-    expect(shown.stdout).toContain('name: aiwg-status');
+    expect(shown.stdout).toContain('# skill: aiwg-status');
+    expect(shown.stdout).toContain('## Outline');
+    expect(shown.stdout).toContain('## Drill in');
+    expect(shown.stdout).toContain('--body');
+    expect(shown.stdout).not.toContain('name: aiwg-status');
     expect(existsSync(path.join(project, '.claude'))).toBe(false);
     expect(existsSync(path.join(project, '.agents'))).toBe(false);
   }, 30_000);
@@ -342,7 +365,7 @@ describe('global install native lifecycle-script policy', () => {
     const id = payload.results[0].id as string;
 
     const shown = await runInstalledCli([
-      'show', 'skill', id,
+      'show', 'skill', id, '--body',
       '--resource-source', 'web',
       '--aiwg-version', TEST_VERSION,
     ]);
@@ -352,7 +375,7 @@ describe('global install native lifecycle-script policy', () => {
 
     const requestsBeforeOffline = fixture.requestPaths.length;
     const offline = await runInstalledCli([
-      'show', 'skill', id,
+      'show', 'skill', id, '--body',
       '--resource-source', 'web',
       '--aiwg-version', TEST_VERSION,
       '--offline',

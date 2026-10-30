@@ -1,4 +1,8 @@
 ---
+activation: bound
+summary: "Respond only to addressed group messages or direct messages; yield to named bots and confirm expensive work."
+bound_to:
+  agents: [fleet-quiet-bot]
 name: quiet-bot
 version: 1.0.0
 description: Mention-only group chat behavior for budget-sensitive bot fleets.

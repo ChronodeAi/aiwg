@@ -510,7 +510,7 @@ Quality gates implement patterns from:
 - Issue #289 - Quality gate hook implementation
 - Issue #264 - Anti-laziness enforcement (REF-071, REF-072, REF-073, REF-074)
 - Claude Code v2.1.3 Release Notes - 10-minute timeout
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md - Avoidance pattern detection
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md - Avoidance pattern detection
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md - Execute before return
 - @.aiwg/research/findings/agentic-laziness-research.md - Research compilation
 

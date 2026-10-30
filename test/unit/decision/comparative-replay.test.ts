@@ -325,3 +325,15 @@ describe('D23 comparative policy replay', () => {
     // runner. 120s keeps ~4x headroom over the observed CI time without trimming the asserted evidence.
   }, 120_000);
 });
+
+it('preserves the D23 verdict table across upstream, compromise and finding inputs (#2829)', () => {
+  for (const upstream of ['PROMOTE', 'HOLD', 'ROLLBACK'] as const) for (const compromised of [false, true]) {
+    const integrity = { ...input.integrity, integrity_state: compromised ? 'compromised' : 'verified',
+      release_gate: { decision: upstream, reasons: [] }, compromise_labels: compromised ? ['fixture_edit'] : [] };
+    const bound = { ...input, integrity, trustedIntegrityDigest: sensitivityDigest(integrity) };
+    const report = buildComparativeReplayReport(bound);
+    // Operator audit remains pending for this replay study, so the clean case holds.
+    expect(report.decision).toBe(upstream === 'ROLLBACK' || compromised ? 'ROLLBACK' : 'HOLD');
+    expect(() => validateComparativeReplayReport(report, bound)).not.toThrow();
+  }
+});

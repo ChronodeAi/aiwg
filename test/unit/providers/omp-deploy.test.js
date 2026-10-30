@@ -2,11 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { transformAgent, transformCommand, transformRule, deployAgents, deploySkills, createAgentsMd, uninstall, deploy } from '../../../tools/agents/providers/omp.mjs';
 const metadata = text => YAML.parse(text.split('---')[1]);
 describe('OMP native deployment', () => {
-  let root; beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-omp-')); });
+  let root; beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-omp-'))); });
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
   it('prevents implicit wildcard task delegation and reports unknown mappings', () => {
     const diagnostics = [];
@@ -95,6 +96,111 @@ describe('OMP native deployment', () => {
     deployAgents([source], target, { scope: 'user', home: root, env: { PI_CODING_AGENT_DIR: path.join(root, 'override') }, quiet: true });
     expect(fs.existsSync(path.join(root, '.omp/agent/agents/leaf.md'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'override/agents/leaf.md'))).toBe(false);
+  });
+  it('projects additional bundles together, retaining both skills and rule selections', async () => {
+    const sources = ['primary', 'extension'].map(name => path.join(root, name));
+    for (const [index, source] of sources.entries()) {
+      const skill = path.join(source, 'skills', `kernel-${index}`);
+      fs.mkdirSync(skill, { recursive: true });
+      fs.mkdirSync(path.join(source, 'rules'));
+      fs.writeFileSync(path.join(skill, 'SKILL.md'), `---\nname: kernel-${index}\ndescription: fixture\nkernel: true\n---\nWork.`);
+      fs.writeFileSync(path.join(source, 'rules', `policy-${index}.md`), `---\nactivation: summary\nsummary: Follow bundle ${index}.\n---\nPolicy ${index}.`);
+      fs.writeFileSync(path.join(source, 'rules/RULES-INDEX.md'), 'LEGACY_BUNDLE_INDEX_BODY');
+    }
+    const target = path.join(root, 'project'); fs.mkdirSync(target);
+    await deploy({ srcRoot: sources[0], additionalSources: [sources[1]], target, mode: 'general',
+      skillsOnly: true, deploySkills: true, deployRules: true, quiet: true,
+      pinConfigs: { project: {}, user: {} } });
+    for (const index of [0, 1]) {
+      expect(fs.existsSync(path.join(target, '.agents/skills', `kernel-${index}`, 'SKILL.md'))).toBe(true);
+      expect(fs.readFileSync(path.join(target, '.omp/AGENTS.md'), 'utf8')).toContain('.omp/rules/RULES-INDEX.md');
+      expect(fs.readFileSync(path.join(target, '.omp/rules/RULES-INDEX.md'), 'utf8')).toContain(`Follow bundle ${index}.`);
+    }
+    expect(fs.readdirSync(path.join(target, '.omp/rules')).filter(name => /^RULES-INDEX.*\.md$/.test(name))).toEqual(['RULES-INDEX.md']);
+    expect(fs.readFileSync(path.join(target, '.omp/rules/RULES-INDEX.md'), 'utf8')).not.toContain('LEGACY_BUNDLE_INDEX_BODY');
+    const manifest = JSON.parse(fs.readFileSync(path.join(target, '.omp/rules/.aiwg-manifest.json'), 'utf8'));
+    expect(manifest.ruleSources).toEqual(expect.arrayContaining(sources.map((source, index) => path.join(source, 'rules', `policy-${index}.md`))));
+  });
+  it('refreshes activated rules and retires only unchanged receipt-owned rules', async () => {
+    const source = path.join(root, 'source');
+    const rules = path.join(source, 'rules');
+    fs.mkdirSync(rules, { recursive: true });
+    const policy = path.join(rules, 'policy.md');
+    fs.writeFileSync(policy, '---\nactivation: kernel\n---\nOriginal policy.');
+    const target = path.join(root, 'project');
+    const opts = { srcRoot: source, target, rulesOnly: true, deployRules: true, quiet: true,
+      pinConfigs: { project: {}, user: {} } };
+    await deploy(opts);
+    const output = path.join(target, '.omp/rules');
+    const receiptFile = path.join(output, '.aiwg-manifest.json');
+    const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
+    // Prior OMP file copying used receipt ownership, not inline markers.
+    const legacy = path.join(output, 'RULES-INDEX-old-bundle.md');
+    fs.writeFileSync(legacy, 'Old source index.');
+    receipt.managed[path.basename(legacy)] = { ...receipt.managed['policy.md'],
+      hash: `sha256:${createHash('sha256').update('Old source index.').digest('hex')}` };
+    fs.writeFileSync(receiptFile, JSON.stringify(receipt));
+    fs.writeFileSync(path.join(output, 'operator.md'), 'Keep operator rule.');
+    fs.writeFileSync(policy, '---\nactivation: kernel\n---\nRevised policy.');
+    await deploy(opts);
+    expect(fs.readFileSync(path.join(output, 'policy.md'), 'utf8')).toContain('Revised policy.');
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(fs.readFileSync(path.join(output, 'operator.md'), 'utf8')).toBe('Keep operator rule.');
+    fs.writeFileSync(path.join(output, 'policy.md'), 'Operator changed the generated rule.');
+    fs.unlinkSync(policy);
+    await deploy(opts);
+    expect(fs.readFileSync(path.join(output, 'policy.md'), 'utf8')).toBe('Operator changed the generated rule.');
+    expect(JSON.parse(fs.readFileSync(receiptFile, 'utf8')).managed['policy.md'].hash)
+      .not.toBe(`sha256:${createHash('sha256').update('Operator changed the generated rule.').digest('hex')}`);
+  });
+  it.each(['unowned rule', 'unowned index', 'edited rule'])('preserves %s on activation projection even with force', async kind => {
+    const source = path.join(root, 'source');
+    fs.mkdirSync(path.join(source, 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'rules/policy.md'), '---\nactivation: kernel\n---\nPolicy.');
+    const target = path.join(root, 'project');
+    const opts = { srcRoot: source, target, rulesOnly: true, deployRules: true, quiet: true, force: true,
+      pinConfigs: { project: {}, user: {} } };
+    if (kind === 'edited rule') await deploy(opts);
+    const output = path.join(target, '.omp/rules');
+    fs.mkdirSync(output, { recursive: true });
+    const file = path.join(output, kind === 'unowned index' ? 'RULES-INDEX.md' : 'policy.md');
+    fs.writeFileSync(file, 'Operator rule.');
+    await expect(deploy(opts)).rejects.toThrow('OMP rules collision');
+    expect(fs.readFileSync(file, 'utf8')).toBe('Operator rule.');
+  });
+  it.each(['rule', 'receipt', 'directory'])('refuses a symlinked %s before rule staging', async kind => {
+    const source = path.join(root, 'source');
+    fs.mkdirSync(path.join(source, 'rules'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'rules/policy.md'), '---\nactivation: kernel\n---\nPolicy.');
+    const target = path.join(root, 'project');
+    const native = path.join(target, '.omp');
+    const output = path.join(native, 'rules');
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(native, { recursive: true });
+    fs.mkdirSync(outside);
+    if (kind === 'directory') fs.symlinkSync(outside, output, 'dir');
+    else {
+      fs.mkdirSync(output);
+      const backing = path.join(outside, 'operator');
+      fs.writeFileSync(backing, 'Operator bytes.');
+      fs.symlinkSync(backing, path.join(output, kind === 'rule' ? 'policy.md' : '.aiwg-manifest.json'));
+    }
+    await expect(deploy({ srcRoot: source, target, rulesOnly: true, deployRules: true, quiet: true,
+      pinConfigs: { project: {}, user: {} } })).rejects.toThrow('symlink destination');
+    expect(fs.readdirSync(outside)).toEqual(kind === 'directory' ? [] : ['operator']);
+    if (kind !== 'directory') expect(fs.readFileSync(path.join(outside, 'operator'), 'utf8')).toBe('Operator bytes.');
+  });
+  it('rejects colliding activated rule basenames before promoting any output', async () => {
+    const sources = ['first', 'second'].map(name => path.join(root, name));
+    for (const [index, source] of sources.entries()) {
+      fs.mkdirSync(path.join(source, 'rules'), { recursive: true });
+      fs.writeFileSync(path.join(source, 'rules/policy.md'), `---\nactivation: kernel\n---\nPolicy ${index}.`);
+    }
+    const target = path.join(root, 'project');
+    await expect(deploy({ srcRoot: sources[0], additionalSources: [sources[1]], target,
+      rulesOnly: true, deployRules: true, quiet: true, pinConfigs: { project: {}, user: {} } }))
+      .rejects.toThrow('OMP rules collision');
+    expect(fs.existsSync(path.join(target, '.omp/rules/policy.md'))).toBe(false);
   });
   it('preserves shell-looking prompt text and reports unsupported metadata without evaluation', () => {
     const diagnostics = [];

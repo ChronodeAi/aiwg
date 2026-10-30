@@ -1,4 +1,8 @@
 ---
+activation: bound
+summary: "Run related tests for matching source changes and report failures within the watcher scope."
+bound_to:
+  agents: [test-engineer]
 name: test-watcher
 version: 1.0.0
 description: Reactive test execution that runs tests on file changes and on a schedule.

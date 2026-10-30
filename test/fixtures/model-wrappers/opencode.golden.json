@@ -1,0 +1,99 @@
+{
+  "aiwg-model-reasoning-worker": {
+    "description": "Choose for architecture, synthesis, difficult analysis, and high-consequence review",
+    "mode": "subagent",
+    "model": "anthropic/claude-opus-5",
+    "temperature": 0.3,
+    "steps": 100,
+    "permission": {
+      "bash": {
+        "aiwg *": "allow",
+        "git status": "allow",
+        "git diff": "allow",
+        "git log*": "allow",
+        "npm test": "allow",
+        "npm run *": "allow",
+        "git push": "ask",
+        "rm -rf": "deny",
+        "*": "ask"
+      }
+    },
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-coding-worker": {
+    "description": "Choose for implementation, tests, debugging, and routine technical delivery",
+    "mode": "subagent",
+    "model": "anthropic/claude-sonnet-5",
+    "temperature": 0.3,
+    "steps": 100,
+    "permission": {
+      "bash": {
+        "aiwg *": "allow",
+        "git status": "allow",
+        "git diff": "allow",
+        "git log*": "allow",
+        "npm test": "allow",
+        "npm run *": "allow",
+        "git push": "ask",
+        "rm -rf": "deny",
+        "*": "ask"
+      }
+    },
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-efficiency-worker": {
+    "description": "Choose for discovery, inventory, focused edits, and bounded low-cost work",
+    "mode": "subagent",
+    "model": "anthropic/claude-haiku-4-5",
+    "temperature": 0.3,
+    "steps": 100,
+    "permission": {
+      "bash": {
+        "aiwg *": "allow",
+        "git status": "allow",
+        "git diff": "allow",
+        "git log*": "allow",
+        "npm test": "allow",
+        "npm run *": "allow",
+        "git push": "ask",
+        "rm -rf": "deny",
+        "*": "ask"
+      }
+    },
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-explorer": {
+    "description": "Choose to explore codebase, search files, inspect docs or logs, and return cited findings",
+    "mode": "subagent",
+    "model": "anthropic/claude-haiku-4-5",
+    "temperature": 0.2,
+    "steps": 30,
+    "permission": {
+      "*": "deny",
+      "read": "allow",
+      "grep": "allow",
+      "glob": "allow",
+      "bash": "ask",
+      "edit": "deny",
+      "task": "deny"
+    },
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-verifier": {
+    "description": "Choose for fresh-context verification and adversarial review using the supplied verification oracle",
+    "mode": "subagent",
+    "model": "anthropic/claude-sonnet-5",
+    "temperature": 0.2,
+    "steps": 30,
+    "permission": {
+      "*": "deny",
+      "read": "allow",
+      "grep": "allow",
+      "glob": "allow",
+      "bash": "ask",
+      "edit": "deny",
+      "task": "deny"
+    },
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  }
+}

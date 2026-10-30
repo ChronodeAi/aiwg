@@ -16,11 +16,15 @@ interface CliResult {
   signal: NodeJS.Signals | null;
   stdout: Buffer;
   stderr: Buffer;
+  argv: string[];
 }
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const SOURCE_CLI = path.join(REPO_ROOT, "test", "fixtures", "source-aiwg-cli.ts");
 const TSX = path.join(REPO_ROOT, "node_modules", ".bin", "tsx");
+// These cases run three source CLI processes sequentially. Keep the default
+// 30-second allowance per cold import on shared runners, rather than per chain.
+const SOURCE_CHAIN_TIMEOUT_MS = 90_000;
 
 describe("artifact CLI signed web resources", () => {
   let cacheRoot: string;
@@ -49,12 +53,16 @@ describe("artifact CLI signed web resources", () => {
     fs.rmSync(cacheRoot, { recursive: true, force: true });
   });
 
-  function runCli(args: string[]): Promise<CliResult> {
+  function runCli(args: string[], input?: { stdin?: string; env?: NodeJS.ProcessEnv; built?: boolean }): Promise<CliResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(TSX, [SOURCE_CLI, ...args], {
+      const child = spawn(input?.built ? process.execPath : TSX,
+        [input?.built ? path.join(REPO_ROOT, 'bin/aiwg.mjs') : SOURCE_CLI, ...args], {
         cwd,
         env: {
           ...process.env,
+          AIWG_RESOURCE_TOKEN: 'synthetic-legacy-test-bearer',
+          AIWG_RESOURCE_TOKEN_FILE: '',
+          AIWG_SKIP_UPDATE_CHECK: '1',
           HOME: home,
           XDG_CACHE_HOME: path.join(home, ".cache"),
           XDG_CONFIG_HOME: path.join(home, ".config"),
@@ -65,9 +73,11 @@ describe("artifact CLI signed web resources", () => {
           AIWG_RESOURCE_TRUST_ROOT_FILE: trustRootFile,
           AIWG_RESOURCE_ALLOW_INSECURE_LOOPBACK_HTTP: "1",
           AIWG_LOG_LEVEL: "silent",
+          ...input?.env,
         },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [input?.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
+      child.stdin?.end(input?.stdin);
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
@@ -76,6 +86,7 @@ describe("artifact CLI signed web resources", () => {
       child.once("close", (code, signal) => resolve({
         code,
         signal,
+        argv: child.spawnargs,
         stdout: Buffer.concat(stdout),
         stderr: Buffer.concat(stderr),
       }));
@@ -86,6 +97,61 @@ describe("artifact CLI signed web resources", () => {
     expect(result.signal).toBeNull();
     expect(result.code, result.stderr.toString("utf8")).toBe(0);
   }
+
+  const protectedCommands = [
+    ['discover', 'signed web regression', '--resource-source', 'web', '--aiwg-version', TEST_VERSION, '--json'],
+    ['show', 'skill', 'web-regression', '--body', '--resource-source', 'web', '--aiwg-version', TEST_VERSION],
+    ['versions', 'resolve', 'stable', '--json'],
+    ['index', 'discover', 'signed web regression', '--resource-source', 'web', '--aiwg-version', TEST_VERSION, '--json'],
+    ['index', 'show', 'skill', 'web-regression', '--body', '--resource-source', 'web', '--aiwg-version', TEST_VERSION],
+  ];
+
+  it.each(protectedCommands.flatMap(args => ['stdin', 'file', 'env'].map(source => [source, args] as const)))(
+    'accepts a %s bearer through the built %j parser without disclosure', async (source, args) => {
+      const secret = 'synthetic-selected-resource-bearer';
+      const file = path.join(cwd, 'selected-token');
+      fs.writeFileSync(file, secret, { mode: 0o600 });
+      const flags = source === 'stdin' ? ['--resource-token-stdin']
+        : source === 'file' ? ['--resource-token-file', file]
+        : ['--resource-token-env=NAMED_RELEASE_FIXTURE'];
+      const offset = args[0] === 'index' ? 2 : 1;
+      const result = await runCli([...args.slice(0, offset), ...flags, ...args.slice(offset)], {
+        built: true,
+        ...(source === 'stdin' ? { stdin: `${secret}\n` } : {}),
+        // A selected source must bypass even an invalid compatibility file.
+        env: { AIWG_RESOURCE_TOKEN_FILE: path.join(cwd, 'must-not-read'), NAMED_RELEASE_FIXTURE: secret },
+      });
+      expectSuccess(result);
+      expect(fixture.requestHeaders.length).toBeGreaterThan(0);
+      expect(fixture.requestHeaders.every(headers => headers.authorization === `Bearer ${secret}`)).toBe(true);
+      expect(Buffer.concat([result.stdout, result.stderr]).toString()).not.toContain(secret);
+      expect(JSON.stringify(result.argv)).not.toContain(secret);
+      if (args[0] === 'show' || args[1] === 'show') expect(result.stdout).toEqual(TEST_SKILL_BODY);
+    },
+  );
+
+  it('preserves byte-identical show output for legacy private-file and environment sources', async () => {
+    const file = path.join(cwd, 'private-token');
+    fs.writeFileSync(file, 'synthetic-legacy-file-bearer', { mode: 0o600 });
+    const args = protectedCommands[1];
+    const legacyFile = await runCli(args, { built: true, env: { AIWG_RESOURCE_TOKEN_FILE: file } });
+    const legacyEnv = await runCli(args, { built: true });
+    expectSuccess(legacyFile);
+    expectSuccess(legacyEnv);
+    expect(legacyFile.stdout).toEqual(TEST_SKILL_BODY);
+    expect(legacyEnv.stdout).toEqual(legacyFile.stdout);
+    expect(legacyFile.stderr.toString()).not.toContain('synthetic-legacy-file-bearer');
+  });
+
+  it.each([...protectedCommands, ['use', 'sdlc', '--dry-run']])('rejects an insecure bearer file before built %s work', async (...args) => {
+    const file = path.join(cwd, 'insecure-token');
+    fs.writeFileSync(file, 'synthetic-insecure-bearer', { mode: 0o644 });
+    const result = await runCli([...args, '--resource-token-file', file], { built: true });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr.toString()).toContain('group or other access');
+    expect(Buffer.concat([result.stdout, result.stderr]).toString()).not.toContain('synthetic-insecure-bearer');
+    expect(JSON.stringify(result.argv)).not.toContain('synthetic-insecure-bearer');
+  });
 
   it("runs real source CLI discover with signed provenance and repeats warm offline with the server unavailable", async () => {
     const cold = await runCli([
@@ -144,7 +210,7 @@ describe("artifact CLI signed web resources", () => {
     const discoveredId = JSON.parse(discovered.stdout.toString("utf8")).results[0].id;
 
     const coldShow = await runCli([
-      "show", "skill", discoveredId,
+      "show", "skill", discoveredId, "--body",
       "--resource-source", "web",
       "--aiwg-version", TEST_VERSION,
     ]);
@@ -155,7 +221,7 @@ describe("artifact CLI signed web resources", () => {
     const requestsBeforeOffline = fixture.requestPaths.length;
     await fixture.stop();
     const warmShow = await runCli([
-      "show", "skill", discoveredId,
+      "show", "skill", discoveredId, "--body",
       "--resource-source", "web",
       "--aiwg-version", TEST_VERSION,
       "--offline",
@@ -164,7 +230,7 @@ describe("artifact CLI signed web resources", () => {
     expect(warmShow.stdout).toEqual(TEST_SKILL_BODY);
     expect(warmShow.stdout.toString("utf8")).not.toContain("LOCAL FALLBACK");
     expect(fixture.requestPaths).toHaveLength(requestsBeforeOffline);
-  });
+  }, SOURCE_CHAIN_TIMEOUT_MS);
 
   it("resolves, shows, and lists signed web resource versions through the source CLI", async () => {
     const resolved = await runCli(["versions", "resolve", "stable", "--json"]);
@@ -205,7 +271,7 @@ describe("artifact CLI signed web resources", () => {
       version: TEST_VERSION,
       channelSequence: 7,
     });
-  });
+  }, SOURCE_CHAIN_TIMEOUT_MS);
 
   it("writes a project resource lockfile from a signed web version resolution", async () => {
     const result = await runCli(["versions", "resolve", "stable", "--json", "--write-lock"]);

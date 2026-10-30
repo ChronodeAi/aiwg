@@ -5,7 +5,10 @@
  * @source src/serve/a2a-terminal-observer.ts
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { observeA2ATerminalState } from '../../../src/serve/a2a-terminal-observer.js';
 import { routeDispatch } from '../../../src/serve/dispatch-router.js';
 import {
@@ -14,6 +17,10 @@ import {
 } from '../../../src/serve/executor-registry.js';
 import type { Task } from '../../../src/a2a/types.js';
 import { AIWG_GRAPH_METADATA_KEY } from '../../../src/flow/graph-metadata.js';
+
+const testState = mkdtempSync(join(tmpdir(), 'a2a-terminal-observer-'));
+beforeAll(() => vi.stubEnv('AIWG_EXECUTOR_IDENTITY_STORE', join(testState, 'identities.json')));
+afterAll(() => { vi.unstubAllEnvs(); rmSync(testState, { recursive: true, force: true }); });
 
 const EXECUTOR_ID = '019da2c3-fde4-7471-8ca7-377d8d09be4b';
 
@@ -46,17 +53,23 @@ function mkTask(state: Task['status']['state'], overrides: Record<string, unknow
   };
 }
 
+// Retain the credential when this fixture reconnects to its persisted identity.
+let executorToken: string | undefined;
 function setupRegistry(): { registry: ExecutorRegistry; executor: ExecutorRegistration } {
-  const registry = new ExecutorRegistry();
+  const registry = new ExecutorRegistry(join(testState, 'trusted', 'executor-identities.json'));
   const executor = mkExecutor();
-  registry.register({
+  const registration = registry.register({
     executor_id: executor.executorId,
     name: executor.name,
     version: executor.version,
     spec_version: executor.specVersion,
     transport_endpoints: executor.transportEndpoints,
     capabilities: executor.capabilities,
-  });
+  }, executorToken);
+  expect(registration).not.toHaveProperty('error');
+  if ('error' in registration) throw new Error(registration.error);
+  executorToken = registration.token;
+  executor.token = registration.token;
   registry.assignMission('mission-1', executor.executorId);
   expect(registry.get(executor.executorId)?.active_mission_count).toBe(1);
   return { registry, executor };

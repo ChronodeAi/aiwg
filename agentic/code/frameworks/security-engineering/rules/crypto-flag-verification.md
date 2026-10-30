@@ -2,8 +2,29 @@
 enforcement: high
 id: crypto-flag-verification
 severity: HIGH
-applies_to: [all-agents, applied-cryptographer]
-tags: [cryptography, cli-tools, openssl, defaults]
+applies_to:
+  - all-agents
+  - applied-cryptographer
+tags:
+  - cryptography
+  - cli-tools
+  - openssl
+  - defaults
+activation: summary
+summary: Specify and verify crypto CLI mode, KDF, and cost parameters explicitly; use authenticated encryption, protect key input, and reject silent defaults.
+bound_to:
+  agents:
+    - applied-cryptographer
+    - code-reviewer
+    - security-auditor
+    - software-implementer
+  skills:
+    - crypto-primitive-selection
+    - auth-factor-design
+    - chain-of-trust-design
+    - secret-handling-runtime
+triggers:
+  - verify explicit crypto CLI KDF flags
 ---
 
 # Cryptographic CLI Flag Verification

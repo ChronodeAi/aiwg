@@ -277,7 +277,7 @@ export class MetadataValidator {
     if (skillResult.success) {
       result.manifest = manifest;
     } else {
-      for (const issue of skillResult.errors.errors) {
+      for (const issue of skillResult.errors.issues) {
         result.errors.push({
           path: filename,
           field: issue.path.join('.'),

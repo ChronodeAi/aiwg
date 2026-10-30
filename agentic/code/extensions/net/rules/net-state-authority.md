@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Treat network-state.yaml as authoritative and update it for every reviewed network change.
 enforcement: high
 ---
 

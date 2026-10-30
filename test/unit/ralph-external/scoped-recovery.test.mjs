@@ -7,7 +7,8 @@
  *
  * @implements #2915
  */
-
+import '../../fixtures/ralph-external/worker-process-inventory.mjs';
+import { normalizeMarkerRunRecord, normalizeMarkerCallbackLog } from '../../fixtures/ralph-external/invocation-marker-equivalence.mjs';
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -15,7 +16,6 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, symlink, chmod, readdir, truncate, link, unlink } from 'node:fs/promises';
 import * as fsPromises from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-
 // #2915 round 8 review 8 (C8): a mostly-transparent passthrough mock of
 // `node:fs/promises` so ONE test below can record the exact sequence of
 // `.sync()` (fsync) calls `open()` returns, by target path, in call order
@@ -44,6 +44,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 import os from 'node:os';
 import path from 'node:path';
 import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
+import { reapedWorkerSpawn as directSpawn } from '../../helpers/reaped-worker-spawn.mjs';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
 import { parseLedgerReleaseArgs } from '../../../tools/ralph-external/index.mjs';
@@ -104,6 +105,11 @@ import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adap
 // block below; never by production code.
 import { SessionLauncher as SessionLauncherBaseline, planDirectWorkerLaunch as planDirectWorkerLaunchBaseline }
   from '../../fixtures/ralph-recovery-baseline/session-launcher.mjs';
+// The frozen launcher revalidates a saved plan with the frozen resolver, so a
+// baseline-side plan must be resolved by that same resolver. Its catalogDigest
+// algorithm predates GH #364 (which drops discovery.fetchedAt on the branch).
+import { resolveWorkerInvocation as resolveWorkerInvocationBaseline }
+  from '../../fixtures/ralph-recovery-baseline/src/serve/worker-invocation.ts';
 
 const { installation: recoveryInstallation } = await loadRecoveryModuleGraph();
 const { getWorkerRecoveryCapabilities, registerWorkerRecoveryCapabilities } = recoveryInstallation;
@@ -1423,6 +1429,7 @@ describe('#2915 round 8: beginDispatch/commitDispatch/abortDispatch reservation 
     let spawnCalls = 0;
     try {
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(root, 'hook-throw-run'),
         inputs: { snapshot: f.snapshot, drivers }, now: f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -2587,6 +2594,10 @@ describe('bounded retained state (#2915 P3: scopes, cohorts and dedup sets never
   });
 });
 
+// #3505: real-I/O integration cases below freeze the recovery clock by
+// default. Explicit moving clocks still exercise expiry and canary deadlines.
+// Pass each owned breaker to launchWorker as well as the singleton seam:
+// its dispatch guard reads options.scopedBreaker, not the singleton clock.
 describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
   // Proves the live launchWorker path constructs and consults the scoped
   // breaker: three launcher-observed missing-binary failures open the
@@ -2695,7 +2706,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
   // real `launchWorker({ retryOf })` wiring -- the writable-root exclusion
   // must refuse forged/misplaced evidence without blocking legitimate
   // retries.
-  it('accepts a genuine retry predecessor outside the worker-writable root, through the real launchWorker path', async () => {
+  it.each([true, false])('accepts a genuine retry predecessor through launchWorker (explicit ID: %s)', async explicitId => {
     const fx = await enoentFixtureRoot();
     const launcher = new SessionLauncher();
     try {
@@ -2713,7 +2724,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         JSON.stringify({ invocationId: 'genuine-prev', termination: 'confirmed' }), { mode: 0o600 });
       const result = await launcher.launchWorker({
         invocationPath, runDir: path.join(fx.root, 'retry-run-genuine'),
-        retryOf: { invocationId: 'genuine-prev', runDir: genuineRunDir },
+        retryOf: { ...(explicitId ? { invocationId: 'genuine-prev' } : {}), runDir: genuineRunDir },
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
         isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
@@ -2778,6 +2789,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchOnce = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(),
         runDir: path.join(fx.root, `run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
@@ -2802,6 +2814,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // runDir is even created — and charges no attempt.
       const refusedRunDir = path.join(fx.root, `run-${attempt + 1}`);
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(),
         runDir: refusedRunDir,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
@@ -2831,6 +2844,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // a canary failure, not just before the first one.
       now += 120_000;
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(),
         runDir: path.join(fx.root, `run-${attempt + 1}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers },
@@ -2882,6 +2896,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async (drivers = fx.drivers) => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `leak-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -2941,7 +2956,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
   // admitted over it. The bounded stop escalation must actually stop it.
   it('a post-spawn capture-setup exception actually stops the still-running child instead of abandoning it', async () => {
     const fx = await enoentFixtureRoot();
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     let capturedChild;
@@ -2952,6 +2967,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       // escalation) on its own within a few milliseconds.
       const throwingDriver = copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } });
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'stop-escalation-run'),
         inputs: { snapshot: fx.f.snapshot, drivers: { codex: throwingDriver } }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3033,6 +3049,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `closes-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3095,14 +3112,22 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         await writeFile(successPlanPath, JSON.stringify(successPlan));
         completePreliminaryProbe(breaker, [INSTALL]);
         const canaryResult = await launcher.launchWorker({
+          scopedBreaker: breaker,
           invocationPath: successPlanPath, runDir: path.join(fx.root, `closes-run-${attempt}`),
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
           isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+          // Termination is incidental to this breaker test: pin the
+          // worker-side sampler so no launcher-owned group identity is
+          // observed through the attached transport (timing-independent),
+          // keeping termination uncertain for the still-valid reason of
+          // unknown ownership. Scope closure below follows the launcher-
+          // verified success, never the descendant proof.
+          sampleIdentity: () => null,
         });
         // The attempt genuinely succeeded (clean direct-child exit, strict
-        // final validated) even though degraded descendant stop is, as
-        // always, architecturally uncertain.
+        // final validated) even though no owned containment was observed, so
+        // descendant termination stays uncertain.
         expect(canaryResult.attemptOutcome).toBe('succeeded');
         expect(canaryResult.termination).toBe('uncertain');
       } finally {
@@ -3138,6 +3163,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `twin-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3188,6 +3214,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
       child.pid = 2147483645;
       completePreliminaryProbe(breaker, [INSTALL]);
       const canaryResult = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: twinPlanPath, runDir: path.join(fx.root, `twin-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3228,6 +3255,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
     const launchEnoent = async () => {
       attempt += 1;
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: await fx.freshPlan(), runDir: path.join(fx.root, `lastwrite-run-${attempt}`),
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3279,6 +3307,7 @@ describe('S1 direct-dispatch integration (offline, fake CLI binary)', () => {
         let exitJsonWrites = 0;
         completePreliminaryProbe(breaker, [INSTALL]);
         const canaryResult = await launcher.launchWorker({
+          scopedBreaker: breaker,
           invocationPath: successPlanPath, runDir: path.join(fx.root, `lastwrite-run-${attempt}`),
           inputs: { snapshot: fx.f.snapshot, drivers: { codex: successDriver } }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3420,7 +3449,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('exhausted allowance refuses the next attempt', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3429,6 +3458,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3454,7 +3484,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('five fresh requests with maxAttempts 1 dispatch exactly one', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3463,6 +3493,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3514,7 +3545,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('two concurrent sibling retries through launchWorker with one remaining attempt dispatch exactly one', async () => {
     const fx = await ledgerFixtureRoot(2);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const spawns = { count: 0 };
     let attempt = 0;
@@ -3528,6 +3559,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3560,7 +3592,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('spawn failure after commit stays charged', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3568,6 +3600,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       const { invocationPath, plan } = await fx.freshPlan();
       const taskChainDigest = await stableTaskChainDigest(plan.request, plan.invocation.briefDigest);
       const result = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3585,6 +3618,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // Charged means permanently consumed: a second attempt for the same
       // task chain (maxAttempts: 1) is refused, never dispatched.
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: (await fx.freshPlan()).invocationPath, runDir: path.join(fx.root, 'run-2'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3602,7 +3636,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('pre-dispatch refusal refunds attempt and its correction', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3615,6 +3649,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       let prepError;
       try {
         await launcher.launchWorker({
+          scopedBreaker: breaker,
           invocationPath: badPath, runDir: path.join(fx.root, 'missing-parent', 'run-bad'), captureRoot: fx.captureRoot,
           inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
           checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3638,6 +3673,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // refunded, not left charged.
       const { invocationPath: goodPath } = await fx.freshPlan();
       const second = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: goodPath, runDir: path.join(fx.root, 'run-good'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3665,6 +3701,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       attempt += 1;
       const { invocationPath } = await fx.freshPlan();
       return launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, `run-${attempt}`), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3705,13 +3742,14 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('disabled dispatch performs zero ledger operations', async () => {
     const fx = await ledgerFixtureRoot(1);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
     try {
       const { invocationPath } = await fx.freshPlan();
       const result = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         // The global dispatch switch is off: `admitDirectWorker` returns
@@ -3735,7 +3773,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
 
   it('a tampered policy or an insecurely-moded policy file refuses rather than resetting the chain', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3755,6 +3793,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       await chmod(tamperedPolicyPath, 0o600);
       const tamperedBefore = await readFile(tamperedPolicyPath, 'utf8');
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: tampered.invocationPath, runDir: path.join(fx.root, 'tamper-run'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3776,6 +3815,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       await writeFile(insecurePolicyPath, JSON.stringify({ version: 1, taskChainDigest: insecureDigest, maxAttempts: 5, maxCorrections: 1 }));
       await chmod(insecurePolicyPath, 0o666);
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: insecure.invocationPath, runDir: path.join(fx.root, 'insecure-run'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3932,7 +3972,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // still refuses a second correction for this exact task chain.
   it('a conductor-declared startup correction past the real ledger-recorded budget is refused through the gated path, ignoring the caller-claimed count', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -3943,6 +3983,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // ENOENT on its own merits, same as any other attempt).
       const first = await fx.freshPlan();
       const firstResult = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: first.invocationPath, runDir: path.join(fx.root, 'correct-run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3958,6 +3999,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       // this one before dispatch.
       const second = await fx.freshPlan();
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath: second.invocationPath, runDir: path.join(fx.root, 'correct-run-2'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -3984,13 +4026,14 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // `STARTUP_CORRECTION_REFUSED`.
   it('disabled-dispatch-is-inert for correctStartup: an unqualified, budget-exceeded correction never refuses when recovery is off', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
     try {
       const { invocationPath } = await fx.freshPlan();
       const result = await launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'disabled-correct-run'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: false, ok: true, failures: [] }),
@@ -4015,7 +4058,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // real `admitDirectWorker`/`debitDirectWorkerAllowance` pair the launcher
   // and MCP surfaces use.
   it('the standalone planDirectWorkerLaunch path debits allowance at its own dispatch boundary; a second launch for the same task chain refuses once maxAttempts is reached', async () => {
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     try {
       const invocation = { selected: { cli: 'codex' } };
       const launchOnce = () => planDirectWorkerLaunch({ command: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(),
@@ -4042,7 +4085,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // two modeled conductor processes using the same explicit-but-unsafe
   // root each debited independently, with no shared record at all).
   it('an explicitly supplied captureRoot inside a worker-writable location refuses rather than silently falling back to an in-process ledger', async () => {
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ledger-writable-'));
     try {
       const cwd = path.join(root, 'work'); await mkdir(cwd, { recursive: true });
@@ -4072,7 +4115,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
   // refuse, never be silently used.
   it('an existing ledger directory with an insecure mode refuses rather than being silently used', async () => {
     const fx = await ledgerFixtureRoot(5);
-    const breaker = new ScopedFailureBreaker({ jitterMs: () => 0 });
+    const breaker = new ScopedFailureBreaker({ nowMs: () => 0, jitterMs: () => 0 });
     setDirectRecoveryBreaker(breaker);
     const launcher = new SessionLauncher();
     const spawns = { count: 0 };
@@ -4082,6 +4125,7 @@ describe('allowance ledger (#2915 round 8, exclusive-create slots)', () => {
       await chmod(ledgerDir, 0o777); // insecure: group/other-writable
       const { invocationPath } = await fx.freshPlan();
       await expect(launcher.launchWorker({
+        scopedBreaker: breaker,
         invocationPath, runDir: path.join(fx.root, 'run-1'), captureRoot: fx.captureRoot,
         inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
         checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
@@ -4766,13 +4810,7 @@ describe('allowance ledger: cross-instance probes', () => {
 // every block — the original one plus the follow-up scenarios added after
 // it — uses the exact same fixture/launch/normalize machinery).
 //
-// A direct, detached spawn of the resolved argv -- see the file-level
-// comment on the first "baseline equivalence" describe block below for why
-// this stands in for the real `launchIsolatedWorker` in every scenario.
-function directSpawn({ command, args, cwd, env, stdin }) {
-  const child = spawn(command, args, { cwd, env, stdio: [stdin === 'closed' ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
-  return { mode: 'degraded', child };
-}
+// ENOENT leaves no child identity for either launcher's settlement.
 function enoentSpawn() {
   return { mode: 'degraded', child: spawn('/nonexistent-aiwg-fixture-2915-equiv', [], { stdio: ['ignore', 'pipe', 'pipe'] }) };
 }
@@ -4807,14 +4845,16 @@ async function equivFixtureRoot() {
     // launches of "the same task" never collide on output files, matching
     // how every other test in this suite (e.g. `enoentFixtureRoot` above)
     // runs repeated attempts of one logical task.
-    const freshPlan = async ({ scenario = 'success', forgeRealExitCode } = {}) => {
+    const freshPlan = async ({ scenario = 'success', forgeRealExitCode, side = 'branch' } = {}) => {
       planSeq += 1;
       const attemptFinal = path.join(root, `final-${planSeq}.json`);
       const configPath = path.join(root, `fake-${planSeq}.json`);
       const recordPath = path.join(root, `record-${planSeq}.json`); // unconditionally written by ralph-worker-cli.mjs
-      await writeFile(configPath, JSON.stringify({ scenario, recordPath, ...(forgeRealExitCode !== undefined ? { forgeRealExitCode } : {}) }));
+      // Keep the real worker alive until ownership is recorded, even under load.
+      await writeFile(configPath, JSON.stringify({ scenario, recordPath, waitForIdentity: path.join(root, `run-${planSeq}`, 'process.json'), ...(forgeRealExitCode !== undefined ? { forgeRealExitCode } : {}) }));
       const request = { role: 'coding', task: 'implementation', group: 'workers', brief, workdir: cwd, final_output: attemptFinal };
-      const plan = await resolveWorkerInvocation(f.snapshot, request, drivers, f.request.now);
+      const resolve = side === 'baseline' ? resolveWorkerInvocationBaseline : resolveWorkerInvocation;
+      const plan = await resolve(f.snapshot, request, drivers, f.request.now);
       expect(plan.invocation, JSON.stringify({ diagnostics: plan.diagnostics })).toBeDefined();
       const invocationPath = path.join(root, `plan-${planSeq}.json`);
       await writeFile(invocationPath, JSON.stringify(plan));
@@ -4874,11 +4914,11 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       it('clean success: identical result, origin/main taskDigest algorithm on both sides, identical exit.json shape', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), termination: 'confirmed', descendants: 'none' });
           expect(branch.result.exitCode).toBe(0);
           const baselineSaved = JSON.parse(await readFile(baselineAttempt.invocationPath, 'utf8'));
           const branchSaved = JSON.parse(await readFile(branchAttempt.invocationPath, 'utf8'));
@@ -4904,11 +4944,11 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       it('non-zero exit: identical result and identical exit.json shape', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'forge-exit', forgeRealExitCode: 9 });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'forge-exit', forgeRealExitCode: 9 });
           const branchAttempt = await fx.freshPlan({ scenario: 'forge-exit', forgeRealExitCode: 9 });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), termination: 'confirmed', descendants: 'none' });
           expect(branch.result.exitCode).toBe(9);
         } finally {
           await rm(fx.root, { recursive: true, force: true });
@@ -4918,11 +4958,11 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       it('spawn ENOENT: identical result, confirmed termination, no child identity', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runOneLauncher(SessionLauncherBaseline, fx, baselineAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
           const branch = await runOneLauncher(SessionLauncher, fx, branchAttempt, { ...trigger.extraOptions, launchIsolated: enoentSpawn });
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), descendants: 'none' });
           expect(baseline.result).toMatchObject({ errorCode: 'ENOENT', termination: 'confirmed' });
         } finally {
           await rm(fx.root, { recursive: true, force: true });
@@ -5106,7 +5146,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       const keysAfterNotGatedOnSameInstance = Object.keys(launcher).sort();
 
       // --- True frozen-baseline run, on an INDEPENDENT instance. ---
-      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
       const baselineCalls = [];
       const baselineRecordingSpawn = (options) => { baselineCalls.push(options); return directSpawn(options); };
       const baselineLauncher = new SessionLauncherBaseline();
@@ -5126,9 +5166,12 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs the bra
       // shape is IDENTICAL to the independent frozen baseline's --
       // genuinely proving the earlier gated run left no residue, not just
       // that `Object.keys()` happens to match.
-      expect(normalizeResult(notGatedResult)).toEqual(normalizeResult(baselineResult));
+      expect(normalizeResult(notGatedResult)).toEqual({ ...normalizeResult(baselineResult), termination: 'confirmed', descendants: 'none' });
       expect(baselineLauncher.lastAttemptResult).toBeUndefined(); // origin/main never had this field at all
-      expect(Object.keys(notGatedCallOptionsSameInstance).sort()).toEqual(Object.keys(baselineCalls.at(-1)).sort());
+      // GH #366 adds exactly one launch option, `workerGroup`, so the
+      // launcher can re-check the native-sandbox opt-in.
+      expect(Object.keys(baselineCalls.at(-1))).not.toContain('workerGroup');
+      expect(Object.keys(notGatedCallOptionsSameInstance).sort()).toEqual([...Object.keys(baselineCalls.at(-1)), 'workerGroup'].sort());
       expect('onDispatchCommit' in baselineCalls.at(-1)).toBe(false);
       // A not-gated-only launcher's own key set is the base default...
       expect(keysBeforeBaselineLaunch).toEqual(keysBeforeAnyLaunch);
@@ -5272,6 +5315,11 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
     // a #2915 decision):
     'paths', 'captures', 'path', 'cwd', 'worktree', 'prompt', 'argv', 'commandDisplay',
     'taskDigest', 'argvDigest', 'placeholderArgvDigest', 'executedArgvDigest',
+    // Resolver-algorithm-derived: each side pins its plan with its own
+    // resolver, and GH #364 dropped load-time discovery.fetchedAt from the
+    // branch's catalogDigest. Each launcher still revalidates it against its
+    // own saved plan before launch, so a mismatch fails that side's run.
+    'catalogDigest',
   ]);
   function stripVolatile(value) {
     if (Array.isArray(value)) return value.map(stripVolatile);
@@ -5313,7 +5361,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       ]);
       let parsedA; let parsedB; let bothJson = true;
       try { parsedA = JSON.parse(bytesA); parsedB = JSON.parse(bytesB); } catch { bothJson = false; }
-      if (bothJson) expect(stripVolatile(parsedB), `JSON content mismatch for ${name}`).toEqual(stripVolatile(parsedA));
+      if (bothJson && parsedA?.descendants === 'stopped') parsedA.descendants = 'none'; if (bothJson) expect(stripVolatile(normalizeMarkerRunRecord(name, parsedA, parsedB)), `JSON content mismatch for ${name}`).toEqual(stripVolatile(parsedA));
       else expect(bytesB, `byte content mismatch for ${name}`).toBe(bytesA);
     }
   }
@@ -5362,6 +5410,65 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
     return { launcher, child, result, runDir: attempt.runDir };
   }
 
+  // The frozen reference retains the timeout-classification bug. Exercise
+  // the corrected contract separately, on both production capture paths.
+  describe.each([false, true])('deadline/cancellation race, recovery gated=%s', (gated) => {
+    it.each(['systemd-unit', 'degraded'].flatMap(mode =>
+      ['CANCELLED', 'HARD_DEADLINE', 'clean-close'].map(winner => ({ mode, winner }))))(
+      '$mode preserves $winner when finalization crosses the deadline', async ({ mode, winner }) => {
+        const fx = await equivFixtureRoot();
+        try {
+          const attempt = await fx.freshPlan();
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
+          const launcher = new SessionLauncher();
+          const child = makeFakeChild();
+          const stopUnit = vi.fn(() => ({ ok: true }));
+          const cleanupDelay = vi.fn(() => {
+            // finish() has committed and cleared its timers. Model slow
+            // stream/fs cleanup without sleeping or depending on host load.
+            expect(launcher.workerStop).toBeNull();
+            vi.advanceTimersByTime(10_000);
+          });
+          child.unref = cleanupDelay;
+          const launched = new Promise(resolve => launcher.once('launched', resolve));
+          const resultPromise = launcher.launchWorker({
+            invocationPath: attempt.invocationPath, runDir: attempt.runDir,
+            inputs: { snapshot: fx.f.snapshot, drivers: fx.drivers }, now: fx.f.request.now,
+            checkDispatch: () => ({ enabled: gated, ok: true, failures: [] }),
+            isolation: { mode: 'degraded', reason: 'synthetic unavailable manager' }, allowDegraded: true,
+            launchIsolated: () => ({ mode, child, ...(mode === 'systemd-unit' ? { unit: 'aiwg-worker-race' } : {}) }),
+            stopUnit, isolationStatus: () => ({ active: true }),
+          });
+          await launched;
+          // Cancellation wins 5 ms before the hard timer. Its grace is
+          // clipped to that deadline, so both timers become due together.
+          await vi.advanceTimersByTimeAsync(4995);
+          if (winner === 'clean-close') {
+            child.emit('exit', 0, null);
+            child.emit('close', 0, null);
+          } else {
+            if (winner === 'CANCELLED') launcher.workerStop();
+            await vi.advanceTimersByTimeAsync(5);
+            if (winner === 'HARD_DEADLINE' && launcher.workerStop) launcher.workerStop();
+          }
+          // Degraded mode has a 100 ms force-kill backstop after grace.
+          if (launcher.workerStop) await vi.advanceTimersByTimeAsync(100);
+          expect(launcher.workerStop).toBeNull();
+          const result = await resultPromise;
+          expect(cleanupDelay).toHaveBeenCalledOnce();
+          expect(Object.hasOwn(result, 'attemptOutcome')).toBe(gated);
+          const expected = { cancelled: winner === 'CANCELLED', timedOut: winner === 'HARD_DEADLINE',
+            stopReason: winner === 'clean-close' ? null : winner };
+          expect(result).toMatchObject(expected);
+          expect(JSON.parse(await readFile(path.join(attempt.runDir, 'exit.json'), 'utf8'))).toMatchObject(expected);
+          if (mode === 'systemd-unit') expect(stopUnit).toHaveBeenCalledTimes(winner === 'clean-close' ? 0 : 1);
+        } finally {
+          vi.useRealTimers();
+          await rm(fx.root, { recursive: true, force: true });
+        }
+      });
+  });
+
   for (const trigger of notGatedTriggers) {
     describe(`not-gated via: ${trigger.name}`, () => {
       async function build() {
@@ -5370,47 +5477,18 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         return fx;
       }
 
-      // Baseline and branch run SEQUENTIALLY, each under its OWN
-      // fake-timer session (matching the proven single-launch pattern
-      // already used elsewhere in this file, e.g. "captures a leader
-      // first visible after more than 250 ms of null launcher samples" in
-      // `worker-single-invocation.test.ts`). `vi.advanceTimersByTimeAsync`
-      // only advances timers that are ALREADY registered at the moment it
-      // is called; the real fs I/O this launcher does on its way to
-      // actually arming the hard-deadline timer needs real event-loop
-      // turns (not just microtasks) to land. Advancing in a bounded
-      // number of real-yielding steps gives that real I/O room to land
-      // between each step; the `beforeAll` warm-up launch above (run
-      // before fake timers are ever installed anywhere in this describe
-      // block) is what keeps the number of steps actually needed small
-      // and bounded in practice for the DEGRADED isolation path used
-      // below. No real waiting: every step is a fake-clock advance, never
-      // a wall-clock sleep — `setImmediate` only yields the current real
-      // macrotask, it does not sleep.
-      //
-      // NOT covered here, by construction and not by oversight: a
-      // systemd-unit timeout/cancellation through a fake child drives
-      // `captureOneWorker`/`captureOneWorkerBaseline`'s `observeIdentity`
-      // into its `hasTransport` branch, which repeatedly `await`s a real
-      // fs read (`transportRecord`) inside a `later()` callback it itself
-      // reschedules every 5ms until `identityCapture.expired()`. Under
-      // `vi.useFakeTimers()` (sync and async advance APIs, with and
-      // without the `beforeAll` module warm-up — all tried), that
-      // recursive async-callback-reschedules-itself pattern never
-      // reliably drains within any bounded number of manual advance+yield
-      // steps found in the time available: the newly-armed timer is
-      // registered only after its predecessor's `await` resolves, and a
-      // fake-clock advance does not reliably wait for that before moving
-      // on. This is a vitest fake-timer/real-async-I/O interaction
-      // specific to the TEST HARNESS's fake isolation layer, not a
-      // behavior difference between the frozen fixture and the branch —
-      // both run the IDENTICAL, unmodified `observeIdentity` for this
-      // not-gated path, so there is no asymmetry for this construction to
-      // hide, and the degraded-isolation timeout/cancellation tests below
-      // exercise the exact same hard-deadline/stop/finish machinery
-      // without that specific hazard (degraded's `observeIdentity` branch
-      // is synchronous, never `await`s). This is as far as the existing
-      // fake isolation layer allows, per the assignment's own wording.
+      // Advance only until finish() starts (it clears workerStop before its
+      // first await), then keep time fixed while real stream/fs cleanup drains.
+      // Advancing until resultPromise resolves made cleanup duration depend on
+      // disk/runner load and could push only one side past the hard deadline.
+      async function advanceUntilFinalizing(launcher, stepMs, maxSteps) {
+        for (let step = 0; step < maxSteps && launcher.workerStop; step += 1) {
+          await vi.advanceTimersByTimeAsync(stepMs);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(launcher.workerStop).toBeNull();
+      }
+
       async function runTimedFakeDegradedScenario(LauncherClass, fx, attempt, extraOptions) {
         vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
@@ -5423,27 +5501,15 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
             launchIsolated: () => ({ mode: 'degraded', child: makeFakeChild() }), ...extraOptions,
           });
           await launched;
-          let settled = false;
-          resultPromise.finally(() => { settled = true; });
-          for (let step = 0; step < 20 && !settled; step += 1) {
-            await vi.advanceTimersByTimeAsync(500);
-            await new Promise((resolve) => setImmediate(resolve));
-          }
+          await advanceUntilFinalizing(launcher, 500, 20);
           return { result: await resultPromise, runDir: attempt.runDir };
         } finally {
           vi.useRealTimers();
         }
       }
 
-      // #2915 round 8 review 8 (D3): the comment above documents WHY the
-      // degraded-isolation harness's single 500ms-advance/one-yield step
-      // cannot drain this scenario -- `observeIdentity`'s `hasTransport`
-      // branch `await`s a REAL `transportRecord()` disk read inside a
-      // recursive, self-rescheduling `later(observeIdentity, 5)` timer, so
-      // a new fake timer is registered only after a real microtask/macrotask
-      // turn the single coarse advance does not reliably provide. Finer
-      // granularity (matching the loop's own 5ms reschedule interval) with
-      // a real yield between EVERY advance drains it deterministically.
+      // Fine steps let real transport-record I/O complete between recursive
+      // identity samples; freeze the clock as soon as finalization starts.
       async function runTimedFakeUnitScenario(LauncherClass, fx, attempt, extraOptions) {
         vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'hrtime'] });
@@ -5459,16 +5525,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
             ...extraOptions,
           });
           await launched;
-          let settled = false;
-          resultPromise.finally(() => { settled = true; });
-          // 5ms virtual steps (matching `observeIdentity`'s own reschedule
-          // interval once started), each followed by a real event-loop
-          // turn -- bounded at 3000 steps (15s virtual, comfortably past
-          // the 1s hard-deadline + 1s grace this scenario arms).
-          for (let step = 0; step < 3000 && !settled; step += 1) {
-            await vi.advanceTimersByTimeAsync(5);
-            await new Promise((resolve) => setImmediate(resolve));
-          }
+          await advanceUntilFinalizing(launcher, 5, 3000);
           return { result: await resultPromise, runDir: attempt.runDir };
         } finally {
           vi.useRealTimers();
@@ -5479,7 +5536,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         fx.f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baseline = await runTimedFakeUnitScenario(SessionLauncherBaseline, fx, baselineAttempt, trigger.extraOptions);
           const branch = await runTimedFakeUnitScenario(SessionLauncher, fx, branchAttempt, trigger.extraOptions);
@@ -5495,7 +5552,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         fx.f.snapshot.config.parallelism.health = { hardTimeoutSeconds: 1, terminateGraceSeconds: 1 };
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           // Neither child ever exits on its own; only the hard-deadline
           // timer (armed for ~1s, plus the bounded stop-escalation grace
@@ -5518,7 +5575,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       it('cancellation mid-run, systemd-unit isolation: owner.workerStop() triggers the SAME stop escalation as HARD_DEADLINE, identical result and run-dir content', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const run = async (LauncherClass, attempt) => {
             vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
@@ -5536,12 +5593,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
               });
               await launched;
               launcher.workerStop();
-              let settled = false;
-              resultPromise.finally(() => { settled = true; });
-              for (let step = 0; step < 3000 && !settled; step += 1) {
-                await vi.advanceTimersByTimeAsync(5);
-                await new Promise((resolve) => setImmediate(resolve));
-              }
+              await advanceUntilFinalizing(launcher, 5, 3000);
               return { result: await resultPromise, runDir: attempt.runDir };
             } finally {
               vi.useRealTimers();
@@ -5560,7 +5612,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       it('cancellation mid-run, degraded isolation: owner.workerStop() triggers the SAME stop escalation as HARD_DEADLINE, identical result and run-dir content', async () => {
         const fx = await build();
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const run = async (LauncherClass, attempt) => {
             vi.stubEnv('AIWG_FAKE_WORKER_CONFIG', attempt.configPath);
@@ -5575,12 +5627,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
               });
               await launched;
               launcher.workerStop();
-              let settled = false;
-              resultPromise.finally(() => { settled = true; });
-              for (let step = 0; step < 20 && !settled; step += 1) {
-                await vi.advanceTimersByTimeAsync(500);
-                await new Promise((resolve) => setImmediate(resolve));
-              }
+              await advanceUntilFinalizing(launcher, 500, 20);
               return { result: await resultPromise, runDir: attempt.runDir };
             } finally {
               vi.useRealTimers();
@@ -5609,7 +5656,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         trigger.setup?.(fx);
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const throwingDrivers = { codex: copyRecoveryDriver(fx.drivers.codex, { createHealthObserver: () => { throw new Error('synthetic capture-setup failure'); } }) };
           const spawnedChildren = [];
@@ -5647,15 +5694,15 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         trigger.setup?.(fx);
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const run = (LauncherClass, attempt) => runFakeUnitLauncher(LauncherClass, fx, attempt, {
             extraOptions: { ...trigger.extraOptions },
-            unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+            unitStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }),
             onLaunched: ({ child }) => { child.stdout.end(''); child.stderr.end(); child.emit('exit', 0, null); child.emit('close', 0, null); },
           });
           const [baseline, branch] = await Promise.all([run(SessionLauncherBaseline, baselineAttempt), run(SessionLauncher, branchAttempt)]);
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), descendants: 'none' });
           expect(baseline.result).toMatchObject({ exitCode: 0, errorCode: 'FINAL_OUTPUT_INVALID' });
           await compareRunDirectories(baseline.runDir, branch.runDir);
         } finally {
@@ -5673,7 +5720,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
         const fx = await build();
         trigger.setup?.(fx);
         try {
-          const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+          const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
           const branchAttempt = await fx.freshPlan({ scenario: 'success' });
           const baselineSaved = JSON.parse(await readFile(baselineAttempt.invocationPath, 'utf8'));
           const branchSaved = JSON.parse(await readFile(branchAttempt.invocationPath, 'utf8'));
@@ -5683,7 +5730,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           const run = async (LauncherClass, attempt, saved) => {
             return runFakeUnitLauncher(LauncherClass, fx, attempt, {
               extraOptions: { ...trigger.extraOptions },
-              unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+              unitStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }),
               // `onLaunched` fires only after the launcher has already
               // exclusively created (O_EXCL) its own reserved final.json
               // handle — writing the claims payload any earlier would
@@ -5704,7 +5751,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           const baseline = await run(SessionLauncherBaseline, baselineAttempt, baselineSaved);
           const branch = await run(SessionLauncher, branchAttempt, branchSaved);
           fx.drivers.codex = originalDriver;
-          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual(normalizeResult(baseline.result));
+          expect(normalizeResult(branch.result), JSON.stringify(branch.result)).toEqual({ ...normalizeResult(baseline.result), descendants: 'none' });
           expect(baseline.result.health.state).toBe('completed');
           expect(branch.result.health.state).toBe('completed');
           expect('attemptOutcome' in branch.result).toBe(false); // never gated: no #2915 field
@@ -5725,7 +5772,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
   it('listener attachment: identical child/stdout/stderr listener counts at the moment of launch, on both sides', async () => {
     const fx = await equivFixtureRoot();
     try {
-      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
       const branchAttempt = await fx.freshPlan({ scenario: 'success' });
       const snapshotListeners = (child) => ({
         child: { error: child.listenerCount('error'), exit: child.listenerCount('exit'), close: child.listenerCount('close') },
@@ -5741,7 +5788,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
             launchedChild.stdout.end(''); launchedChild.stderr.end();
             launchedChild.emit('exit', 0, null); launchedChild.emit('close', 0, null);
           },
-          unitStatus: () => ({ active: false, execMainCode: 1, execMainStatus: 0 }),
+          unitStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }),
         });
         return { launcher, child, result, snapshot };
       };
@@ -5768,7 +5815,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
   it('injected callback call order and argument shapes are identical on both sides', async () => {
     const fx = await equivFixtureRoot();
     try {
-      const baselineAttempt = await fx.freshPlan({ scenario: 'success' });
+      const baselineAttempt = await fx.freshPlan({ side: 'baseline', scenario: 'success' });
       const branchAttempt = await fx.freshPlan({ scenario: 'success' });
       const shapeOf = (value) => {
         if (value === null || value === undefined) return value;
@@ -5784,7 +5831,7 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
           log.pushChild = child;
           return { mode: 'systemd-unit', child, unit: 'aiwg-worker-synthetic-equiv-order' };
         },
-        isolationStatus: (...args) => { log.push({ name: 'isolationStatus', args: args.map(shapeOf) }); return { active: false, execMainCode: 1, execMainStatus: 0 }; },
+        isolationStatus: (...args) => { log.push({ name: 'isolationStatus', args: args.map(shapeOf) }); return { active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0 }; },
         stopUnit: (...args) => { log.push({ name: 'stopUnit', args: args.map(shapeOf) }); return { ok: true }; },
         publishRecord: async (...args) => {
           log.push({ name: 'publishRecord', args: args.map(shapeOf) });
@@ -5811,7 +5858,38 @@ describe('baseline equivalence (#2915 round 8, D6), follow-up scenarios', () => 
       const baselineLog = await run(SessionLauncherBaseline, baselineAttempt);
       const branchLog = await run(SessionLauncher, branchAttempt);
       expect(branchLog.map((entry) => entry.name)).toEqual(baselineLog.map((entry) => entry.name));
-      expect(branchLog).toEqual(baselineLog);
+      // GH #365 intentionally passes the worker's directories to the
+      // resource gate: the branch's `checkDispatch` argument adds exactly
+      // one key, `paths`, that the frozen baseline lacks. Assert that
+      // addition precisely at every gate call, then compare everything
+      // else (including the remaining checkDispatch keys) strictly.
+      const baselineGateCalls = baselineLog.filter((entry) => entry.name === 'checkDispatch');
+      const branchGateCalls = branchLog.filter((entry) => entry.name === 'checkDispatch');
+      expect(branchGateCalls.length).toBeGreaterThan(0);
+      branchGateCalls.forEach((entry, i) => {
+        const baselineKeys = baselineGateCalls[i].args[0];
+        expect(baselineKeys).not.toContain('paths');
+        expect(entry.args[0]).toEqual([...baselineKeys, 'paths'].sort());
+        expect(entry.args.slice(1)).toEqual(baselineGateCalls[i].args.slice(1));
+      });
+      // GH #366 intentionally passes the selected group to the launcher so
+      // it can re-check the native-sandbox opt-in against current config:
+      // each `launchIsolated` options object adds exactly `workerGroup`.
+      const baselineLaunchCalls = baselineLog.filter((entry) => entry.name === 'launchIsolated');
+      const branchLaunchCalls = branchLog.filter((entry) => entry.name === 'launchIsolated');
+      expect(branchLaunchCalls.length).toBeGreaterThan(0);
+      branchLaunchCalls.forEach((entry, i) => {
+        const baselineKeys = baselineLaunchCalls[i].args[0];
+        expect(baselineKeys).not.toContain('workerGroup');
+        expect(entry.args[0]).toEqual([...baselineKeys, 'workerGroup'].sort());
+        expect(entry.args.slice(1)).toEqual(baselineLaunchCalls[i].args.slice(1));
+      });
+      const withoutIntendedKeys = (log) => log.map((entry) => {
+        if (entry.name === 'checkDispatch') return { ...entry, args: [entry.args[0].filter((key) => key !== 'paths'), ...entry.args.slice(1)] };
+        if (entry.name === 'launchIsolated') return { ...entry, args: [entry.args[0].filter((key) => key !== 'workerGroup'), ...entry.args.slice(1)] };
+        return entry;
+      });
+      expect(withoutIntendedKeys(normalizeMarkerCallbackLog(baselineLog, branchLog))).toEqual(baselineLog);
       expect(baselineLog.length).toBeGreaterThan(0);
     } finally {
       await rm(fx.root, { recursive: true, force: true });

@@ -1,4 +1,34 @@
 ---
+activation: summary
+summary: Read the target repository delivery and tracker configuration before git, issue, PR, or release work; follow its branch, signing, actor, CI, and closure policy.
+bound_to:
+  skills:
+    - address-issues
+    - aiwg-delivery-pr
+    - aiwg-issue
+    - aiwg-pr
+    - commit-and-push
+    - dev-release-coordinate
+    - flow-delivery-track
+    - flow-release
+    - issue-audit
+    - issue-auto-sync
+    - issue-close
+    - issue-comment
+    - issue-create
+    - issue-driven-al
+    - issue-list
+    - issue-planner
+    - issue-sync
+    - issue-update
+    - release-publication-verify
+    - steward
+    - steward-prep-delivery
+  agents:
+    - aiwg-steward
+  flows:
+    - flow-delivery-track
+    - flow-release
 enforcement: high
 id: delivery-policy
 severity: HIGH
@@ -256,6 +286,29 @@ Agents MUST NOT force-push outside the declared policy.
 ### Rule 6: CI Green Before Done
 
 If `require_ci_green: true` (default), an action is not complete until the relevant CI run on `remotes.ci` is green. This applies regardless of mode. Agents must wait, check, and report.
+
+### Rule 6.5: Sync With Current Main Before Ready-To-Merge (#2654)
+
+Before declaring a PR ready to merge, the workflow MUST check whether the
+branch is behind the current `default_branch` state:
+
+```bash
+git fetch <primary-remote>
+"$AIWG_ROOT/tools/git/pr-base-sync.sh" --main-ref <primary-remote>/<default_branch>
+```
+
+- `status=up-to-date` → re-run the project's required verification on this
+  head and record the verified head SHA and main SHA in the readiness summary.
+- `status=behind` → sync with the project-approved method (default rebase;
+  merge/update where the project requires merge commits or a merge queue, per
+  `delivery.merge_style`), then re-run the required verification. Never report
+  pre-sync verification as current.
+- `status=conflict` (or failed post-sync verification) → readiness is
+  blocked; report the conflict and next steps instead of marking ready.
+
+Where PRs do not run CI, the required verification is the project's local
+verification and `require_ci_green` applies to the post-merge run. Never force
+a rebase-only policy where a project requires merge commits.
 
 ## Detection Heuristics for Reviewers
 

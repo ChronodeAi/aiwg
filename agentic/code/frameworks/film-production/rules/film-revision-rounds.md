@@ -3,6 +3,12 @@ id: film-revision-rounds
 name: Film Revision Rounds
 description: Batch revision notes into budgeted rounds and present a ship-or-fix decision when only minor residuals remain.
 enforcement: high
+activation: bound
+summary: Batch revision notes into budgeted rounds and present a ship-or-fix decision when only minor residuals remain.
+bound_to:
+  agents: [film-producer, film-story-director, film-scene-supervisor, film-continuity-supervisor, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-review-gate, film-edit-conform, film-delivery, film-retrospective]
+  flows: [film-finish, film-deliver, film-resume, film-revise-with-impact]
 ---
 
 # Film Revision Rounds

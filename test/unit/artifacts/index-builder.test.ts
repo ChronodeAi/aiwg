@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { getFrameworkIndexBaseDir } from '../../../src/artifacts/framework-index-paths.js';
 import { parseFrontmatter, extractMentions, extractMarkdownLinks, buildIndex, normalizeNamedCaptures, buildFilenameMetadataEntry } from '../../../src/artifacts/index-builder.js';
 import { INDEX_DIR, GRAPH_CONFIGS, loadUserGraphConfigs, loadModuleGraphConfigs, loadGlobalGraphConfigs, normalizeEdge, normalizeEdges, getGraphIndexDir } from '../../../src/artifacts/types.js';
 import type { TypedEdge, DependencyGraph } from '../../../src/artifacts/types.js';
@@ -411,7 +412,10 @@ describe('getGraphIndexDir', () => {
     delete process.env.XDG_DATA_HOME;
 
     expect(getGraphIndexDir(tmpDir, 'framework')).toBe(
-      path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'framework'),
+      path.join(getFrameworkIndexBaseDir(tmpDir), 'framework'),
+    );
+    expect(getFrameworkIndexBaseDir(tmpDir)).toMatch(
+      new RegExp(`^${path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'roots')}/[a-f0-9]{64}$`),
     );
     expect(getGraphIndexDir(tmpDir, 'framework')).not.toContain('undefined');
   });
@@ -420,8 +424,9 @@ describe('getGraphIndexDir', () => {
     process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg-data');
 
     expect(getGraphIndexDir(tmpDir, 'framework')).toBe(
-      path.join(tmpDir, 'xdg-data', 'aiwg', 'index', 'framework'),
+      path.join(getFrameworkIndexBaseDir(tmpDir), 'framework'),
     );
+    expect(getFrameworkIndexBaseDir(tmpDir)).toContain(path.join(tmpDir, 'xdg-data', 'aiwg', 'index', 'roots'));
   });
 });
 
@@ -534,6 +539,39 @@ References:
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    it('keeps owner-private aggregate stores and maintenance journals out of every project index', async () => {
+      const files = ['context/compound-memory/context.json', 'context/compound-memory/maintenance/receipt.json',
+        'memory/line-memory.meta.json', 'memory/line-memory.config.json', 'memory/transactions/pending.json',
+        'memory/maintenance/journal.json', 'wiki/public.md'];
+      for (const file of files) {
+        const target = path.join(tmpDir, '.aiwg', file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, file.endsWith('.md') ? '# Public source\nRetained source fact.\n' : '{"value":"retired private fact"}');
+      }
+      for (const graph of [undefined, 'project'] as const) {
+        await buildIndex(tmpDir, { graph, force: true, quiet: true, workers: 0 });
+        const indexDir = graph ? getGraphIndexDir(tmpDir, graph) : path.join(tmpDir, INDEX_DIR);
+        const index = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf8'));
+        expect(Object.keys(index.entries)).toEqual(['.aiwg/wiki/public.md']);
+      }
+    });
+
+    it('quarantines malformed memory metadata with a warning and keeps indexing every file', async () => {
+      const aiwgDir = path.join(tmpDir, '.aiwg/wiki');
+      fs.mkdirSync(aiwgDir, { recursive: true });
+      fs.writeFileSync(path.join(aiwgDir, 'corrupt.md'), '---\ntitle: Corrupt stamp\nmemoryRecord: { schemaVersion: broken, lifecycle: retired }\n---\nStill searchable body.\n');
+      fs.writeFileSync(path.join(aiwgDir, 'healthy.md'), '# Healthy page\nRetained content.\n');
+      const diagnostics: string[] = [];
+      await buildIndex(tmpDir, { force: true, quiet: true, workers: 0, onDiagnostic: message => diagnostics.push(message) });
+      const index = JSON.parse(fs.readFileSync(path.join(tmpDir, INDEX_DIR, 'metadata.json'), 'utf8'));
+      expect(Object.keys(index.entries)).toHaveLength(2);
+      expect(index.entries['.aiwg/wiki/corrupt.md']).toMatchObject({ title: 'Corrupt stamp' });
+      expect(index.entries['.aiwg/wiki/corrupt.md'].memoryRecord).toBeUndefined();
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatch(/corrupt.md: invalid memoryRecord metadata quarantined/);
+      await expect(buildIndex(tmpDir, { quiet: true, workers: 0 })).resolves.toMatchObject({ reindexed: 0, statSkipped: 2 });
+    });
+
     it('should build index from .aiwg/ directory', async () => {
       // Create test artifacts
       const aiwgDir = path.join(tmpDir, '.aiwg', 'requirements');
@@ -583,7 +621,7 @@ New users can register.
       // Check metadata content
       const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf-8'));
       expect(metadata.version).toBe('1.0.0');
-      expect(metadata.extractorVersion).toBe('2026.08.24.1');
+      expect(metadata.extractorVersion).toBe('2026.10.24.1');
       expect(Object.keys(metadata.entries)).toHaveLength(2);
 
       const uc001 = metadata.entries['.aiwg/requirements/UC-001.md'];
@@ -782,7 +820,7 @@ state_transfer:
       logSpy.mockRestore();
       const rebuilt = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
       expect(rebuilt.version).toBe('1.0.0');
-      expect(rebuilt.extractorVersion).toBe('2026.08.24.1');
+      expect(rebuilt.extractorVersion).toBe('2026.10.24.1');
       expect(rebuilt.buildConfigHash).toMatch(/^[a-f0-9]{64}$/);
       expect(rebuilt.entries[entryPath].type).toBe('runbook');
       expect(rebuilt.entries[entryPath].kind).toBe('Runbook');
@@ -815,6 +853,7 @@ description: Preserve forensic evidence.
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
+      const indexDir = getGraphIndexDir(tmpDir, 'framework');
       try {
         await buildIndex(tmpDir, { graph: 'framework', force: true, explicit: true });
       } finally {
@@ -824,7 +863,6 @@ description: Preserve forensic evidence.
         else process.env.XDG_DATA_HOME = oldXdgData;
       }
 
-      const indexDir = path.join(tmpDir, 'xdg', 'aiwg', 'index', 'framework');
       const deps = JSON.parse(fs.readFileSync(path.join(indexDir, 'dependencies.json'), 'utf-8')) as DependencyGraph;
       const skillPath = 'agentic/code/frameworks/forensics-complete/skills/evidence-preservation/SKILL.md';
       const rulePath = 'agentic/code/frameworks/forensics-complete/rules/evidence-integrity.md';
@@ -1049,26 +1087,49 @@ type: use-case
       expect(fs.existsSync(path.join(indexDir, 'graph.db'))).toBe(true);
     });
 
-    it('completes a no-op 3000-artifact build in under 25 percent of a forced build', async () => {
-      const sourceDir = path.join(tmpDir, 'src');
-      fs.mkdirSync(sourceDir, { recursive: true });
-      for (let i = 0; i < 3000; i++) {
-        const refs = [1, 2, 3].map(offset => `@src/artifact-${(i + offset) % 3000}.ts`).join('\n');
-        fs.writeFileSync(path.join(sourceDir, `artifact-${i}.ts`),
-          `---\ntitle: Artifact ${i}\ntags: [synthetic]\n---\n# Artifact ${i}\n\n${refs}\n`);
-      }
-      const start = performance.now();
-      await buildIndex(tmpDir, { graph: 'codebase', force: true, quiet: true });
-      const forcedMs = performance.now() - start;
-      const incrementalStart = performance.now();
-      await buildIndex(tmpDir, { graph: 'codebase', quiet: true });
-      const incrementalMs = performance.now() - incrementalStart;
+    it('reuses unchanged metadata without reading it and rejects a changed manifest receipt', async () => {
+      const source = path.join(tmpDir, '.aiwg/requirements/a.md');
+      fs.mkdirSync(path.dirname(source), { recursive: true });
+      fs.writeFileSync(source, '# A\n');
+      await buildIndex(tmpDir, { force: true, quiet: true });
+      const metadata = path.join(tmpDir, INDEX_DIR, 'metadata.json');
+      const manifestFile = path.join(tmpDir, INDEX_DIR, 'checksum-manifest.json');
+      const reads = vi.spyOn(fs, 'readFileSync');
+      await buildIndex(tmpDir, { quiet: true });
+      expect(reads.mock.calls.filter(args => args[0] === metadata)).toHaveLength(0);
 
-      const stats = JSON.parse(fs.readFileSync(path.join(tmpDir, INDEX_DIR, 'codebase', 'stats.json'), 'utf8'));
-      expect(stats.totalArtifacts).toBe(3000);
-      expect(stats.graphMetrics.totalEdges).toBe(9000);
-      console.info(`3000 artifacts: forced=${forcedMs.toFixed(1)}ms, no-op=${incrementalMs.toFixed(1)}ms (${(100 * incrementalMs / forcedMs).toFixed(1)}%)`);
-      expect(incrementalMs).toBeLessThan(forcedMs * 0.25);
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      manifest.entries['.aiwg/requirements/a.md'].checksum = 'tampered';
+      fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+      await buildIndex(tmpDir, { quiet: true });
+      expect(reads.mock.calls.filter(args => args[0] === metadata)).toHaveLength(1);
+      const rebuilt = JSON.parse(fs.readFileSync(metadata, 'utf8'));
+      expect(JSON.parse(fs.readFileSync(manifestFile, 'utf8')).entries['.aiwg/requirements/a.md'].checksum)
+        .toBe(rebuilt.entries['.aiwg/requirements/a.md'].checksum);
+    });
+
+    it.each([undefined, 'project', 'codebase'])('does no source reads, backup copies or staging on a no-op %s build', async graph => {
+      const sourceDir = path.join(tmpDir, graph === 'codebase' ? 'src' : '.aiwg/requirements');
+      fs.mkdirSync(sourceDir, { recursive: true });
+      const extension = graph === 'codebase' ? 'ts' : 'md';
+      const sources = ['one', 'two'].map(name => path.join(sourceDir, `${name}.${extension}`));
+      for (const source of sources) fs.writeFileSync(source, `# ${path.basename(source)}\n`);
+      await buildIndex(tmpDir, { graph, force: true, quiet: true });
+      const indexDir = path.join(tmpDir, INDEX_DIR, ...(graph ? [graph] : []));
+      expect(JSON.parse(fs.readFileSync(path.join(indexDir, 'stats.json'), 'utf8')).totalArtifacts).toBe(2);
+
+      const reads = vi.spyOn(fs, 'readFileSync');
+      const copies = vi.spyOn(fs, 'copyFileSync');
+      const staging = vi.spyOn(fs, 'mkdtempSync');
+      const stats = vi.spyOn(fs, 'lstatSync');
+      await buildIndex(tmpDir, { graph, quiet: true });
+
+      expect(reads.mock.calls.filter(([file]) => sources.includes(String(file)))).toHaveLength(0);
+      expect(copies).not.toHaveBeenCalled();
+      expect(staging).not.toHaveBeenCalled();
+      for (const source of sources) {
+        expect(stats.mock.calls.filter(([file]) => String(file) === source)).toHaveLength(1);
+      }
     });
 
     it('should infer type from filename patterns', async () => {

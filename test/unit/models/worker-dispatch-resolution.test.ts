@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadWorkerInputs, modelsHandler } from '../../../src/cli/handlers/models.js';
 import { resolveWorkerPlan } from '../../../src/models/resolver.js';
 import * as workerInstallation from '../../../src/models/worker-installation.mjs';
+import * as modelDiscovery from '../../../src/models/model-discovery.js';
 import { WORKER_DISPATCH_ENABLE_COMMAND, WORKER_DISPATCH_READINESS_COMMAND } from '../../../src/models/worker-dispatch-offer.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 
@@ -62,7 +63,8 @@ describe('models resolve dispatch gate before installation qualification (#3070)
     const ctx = await project(true);
     const load = vi.spyOn(workerInstallation, 'loadRecordedWorkerInstallations');
     await expect(loadWorkerInputs(ctx)).rejects.toMatchObject({
-      code: 'OG_ADAPTER_UNQUALIFIED', message: 'Trusted installation qualification is required',
+      code: 'OG_ADAPTER_UNQUALIFIED', message: 'Trusted installation qualification is required (no-records)',
+      details: { rejections: [{ registration: null, reason: 'no-records' }] },
     });
     expect(load).toHaveBeenCalledOnce();
     const output = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -70,5 +72,27 @@ describe('models resolve dispatch gate before installation qualification (#3070)
     const refusal = JSON.parse(output.mock.calls[0][0]);
     expect(refusal.status).toBe('blocked');
     expect(refusal.diagnostics[0]).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED' });
+  });
+
+  it.each(['explicit', 'not-applicable'] as const)('preserves missing-installation errors with configured workers and null effort (%s)', async effortSupport => {
+    const ctx = await project(true);
+    await writeFile(path.join(ctx.cwd, '.aiwg', 'aiwg.config'), JSON.stringify({ version: '1', parallelism: {
+      worker_dispatch: true, clis: { codex: { adapter: 'providers:codex', accountScope: 'fixture', quotaScope: 'fixture' } },
+      groups: { workers: { maxParallel: 1, members: [{ id: 'primary', cli: 'codex', model: 'synthetic-model', roles: ['coding'] }] } },
+    } }));
+    await writeFile(path.join(ctx.cwd, 'models.json'), JSON.stringify({ defaults: { workerSelection: { roleGuidance: {
+      coding: { groups: ['workers'], tier: 'standard', initialEffort: null, effortLadder: [], allowNotApplicableEffort: true },
+    } } } }));
+    const catalog = workerResolutionFixture().snapshot.catalog;
+    const observation = catalog.discovery!.instances!.codex;
+    observation.models[0].id = 'synthetic-model';
+    observation.models[0].worker!.effortSupport = effortSupport;
+    catalog.discovery!.providers = { codex: observation };
+    delete catalog.discovery!.instances;
+    vi.spyOn(modelDiscovery, 'resolveDynamicModelCatalog').mockResolvedValue(catalog);
+    const load = vi.spyOn(workerInstallation, 'loadRecordedWorkerInstallations');
+    await expect(loadWorkerInputs(ctx)).rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED',
+      details: { rejections: [{ registration: null, reason: 'no-records' }] } });
+    expect(load).toHaveBeenCalledOnce();
   });
 });

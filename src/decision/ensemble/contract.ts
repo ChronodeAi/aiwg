@@ -1,3 +1,5 @@
+import { evaluateUpstreamCeiling, integrityProblems } from '../../gates/upstream-ceiling.js';
+import { assertDecisionCeiling, GATE_RANK, GateDecisionUpgradeError } from '../../gates/lattice.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -16,8 +18,8 @@ import type {
 
 /** Pure D17 contract validation. Nothing here resolves credentials, calls an adapter or opens a transport. */
 export class EnsembleContractError extends Error {
-  constructor(message: string, readonly layer: 'admission' | 'schema' | 'semantic' = 'semantic', readonly details: readonly string[] = []) {
-    super(message); this.name = 'EnsembleContractError';
+  constructor(message: string, readonly layer: 'admission' | 'schema' | 'semantic' = 'semantic', readonly details: readonly string[] = [], cause?: GateDecisionUpgradeError) {
+    super(message, { cause }); this.name = 'EnsembleContractError';
   }
 }
 
@@ -47,7 +49,6 @@ export const ENSEMBLE_DISAGREEMENT_PRIMITIVES: Readonly<Record<EnsembleDisagreem
 const UNCERTAINTY_COMBINING = new Set<string>(['mean-probability-v1', 'jensen-shannon-v1']);
 export const REQUIRED_PAIRED_METRICS: readonly PairedMetric[] = ['quality', 'calibration', 'risk-coverage', 'abstention', 'latency', 'tokens', 'cost', 'slice'];
 const CEILING_FIELDS = ['members', 'attempts', 'deadlineMs', 'tokens', 'costMicros', 'concurrency', 'fallbackDepth'] as const;
-const GATE_RANK: Readonly<Record<IntegrityGateDecision, number>> = { PROMOTE: 0, HOLD: 1, ROLLBACK: 2 };
 
 let validators: Map<EnsembleSchemaKind, ValidateFunction> | null = null;
 function schemaValidator(kind: EnsembleSchemaKind): ValidateFunction {
@@ -269,17 +270,7 @@ export function validateEnsembleAggregate(value: unknown): DecisionEnsembleAggre
 
 /** D17 findings derived from the carried #2037/#2048 integrity fields alone. */
 export function integrityMetadataFindings(integrity: DecisionEnsembleIntegrityReport['integrity'], minimumPairs: number): string[] {
-  const findings: string[] = [];
-  if (integrity.integrity_state !== 'verified') findings.push('integrity-not-verified');
-  if (integrity.integrity_mode === 'standard') findings.push('integrity-mode-standard');
-  if (integrity.trusted_score_source === 'local-unverified') findings.push('untrusted-score-source');
-  if (integrity.fresh_workspace_required && !integrity.fresh_workspace_verified) findings.push('fresh-workspace-unverified');
-  if (integrity.uncertainty === null) findings.push('uncertainty-missing');
-  if (integrity.paired_baseline === null) findings.push('paired-baseline-missing');
-  if (integrity.weak_signal_reason !== null) findings.push('weak-signal');
-  if (integrity.compromise_labels.length > 0) findings.push('compromised');
-  if (integrity.sample_n < minimumPairs) findings.push('insufficient-samples');
-  return findings;
+  return integrityProblems(integrity, 'ensemble', minimumPairs);
 }
 
 /** The finding for one paired delta against its preregistered threshold, or null when it passes. */
@@ -293,9 +284,7 @@ export function pairedDeltaFinding(threshold: PairedMetricThreshold, item: { del
 
 /** Upstream ROLLBACK or any compromise gives ROLLBACK; upstream HOLD or any finding gives HOLD. */
 export function ensembleIntegrityDecision(integrity: DecisionEnsembleIntegrityReport['integrity'], findingCount: number): IntegrityGateDecision {
-  const upstream = integrity.release_gate.decision;
-  const compromised = integrity.integrity_state === 'compromised' || integrity.compromise_labels.length > 0;
-  return upstream === 'ROLLBACK' || compromised ? 'ROLLBACK' : upstream === 'HOLD' || findingCount > 0 ? 'HOLD' : 'PROMOTE';
+  return evaluateUpstreamCeiling(integrity, { policy: 'upstream', findings: findingCount }).ceiling;
 }
 
 /** A D17 report may keep or tighten the upstream #2037/#2048 decision, never loosen it. Every
@@ -307,6 +296,9 @@ export function validateEnsembleIntegrityReport(value: unknown): DecisionEnsembl
   const { digest, ...payload } = report;
   const problems: string[] = [];
   if (report.upstreamDecision !== report.integrity.release_gate.decision) problems.push('upstream decision must be the eval-integrity release gate decision');
+  let upgrade: GateDecisionUpgradeError | undefined;
+  try { assertDecisionCeiling(report.decision, report.upstreamDecision, ensembleIntegrityDecision(report.integrity, report.findings.length)); }
+  catch (error) { if (!(error instanceof GateDecisionUpgradeError)) throw error; upgrade = error; }
   if (GATE_RANK[report.decision] < GATE_RANK[report.upstreamDecision]) problems.push(`D17 cannot upgrade ${report.upstreamDecision} to ${report.decision}`);
   if (report.decision === 'PROMOTE' && (report.findings.length > 0 || report.pairedDeltas.some(item => !item.passed))) problems.push('PROMOTE requires every D17 check to pass');
   const metrics = report.pairedDeltas.map(item => item.metric);
@@ -323,6 +315,7 @@ export function validateEnsembleIntegrityReport(value: unknown): DecisionEnsembl
   const decision = ensembleIntegrityDecision(report.integrity, report.findings.length);
   if (report.decision !== decision) problems.push(`decision ${report.decision} does not follow from its integrity and findings (${decision})`);
   if (digest !== ensembleContractDigest(payload)) problems.push('integrity report digest does not match its content');
+  if (upgrade) throw new EnsembleContractError('ensemble integrity report rejected', 'semantic', problems, upgrade);
   semantic(problems, 'ensemble integrity report rejected');
   return report;
 }

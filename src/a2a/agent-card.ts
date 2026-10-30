@@ -95,6 +95,21 @@ export async function fetchAgentCard(
   instanceId: string,
   opts: FetchAgentCardOptions = {}
 ): Promise<VerifiedAgentCard> {
+  try {
+    return await fetchAgentCardImpl(host, instanceId, opts);
+  } catch (error) {
+    // Transport, JSON and signature errors can repeat remote input or headers.
+    // Drop the original cause/stack rather than retaining secret-bearing errors.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(opts.bearer ? message.split(opts.bearer).join('[REDACTED]') : message);
+  }
+}
+
+async function fetchAgentCardImpl(
+  host: string,
+  instanceId: string,
+  opts: FetchAgentCardOptions,
+): Promise<VerifiedAgentCard> {
   const fetchImpl = opts.fetch ?? fetch;
   const base = host.replace(/\/+$/, '');
   const encoded = encodeURIComponent(instanceId);

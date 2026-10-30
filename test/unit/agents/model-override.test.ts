@@ -11,7 +11,10 @@
  * @issue #411
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   FACTORY_DEPLOY_MODELS,
   DEFAULT_SHORTHAND,
@@ -153,9 +156,22 @@ describe('Model Override - Factory Provider', () => {
 });
 
 describe('loadModelConfig', () => {
+  let directory: string;
+  beforeEach(() => {
+    directory = mkdtempSync(path.join(os.tmpdir(), 'aiwg-model-defaults-'));
+    vi.stubEnv('HOME', directory);
+    vi.stubEnv('USERPROFILE', directory);
+    vi.spyOn(process, 'cwd').mockReturnValue(directory);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it('should return an object with shorthand mappings', () => {
-    // This loads from the AIWG defaults (since we are in the repo)
-    const repoRoot = process.cwd();
+    // Load shipped defaults, independent of project and user configuration.
+    const repoRoot = path.resolve(import.meta.dirname, '../../..');
     const config = loadModelConfig(repoRoot);
     expect(config).toBeDefined();
     expect(config.shorthand).toBeDefined();
@@ -165,7 +181,7 @@ describe('loadModelConfig', () => {
   });
 
   it('should include provider configs', () => {
-    const repoRoot = process.cwd();
+    const repoRoot = path.resolve(import.meta.dirname, '../../..');
     const config = loadModelConfig(repoRoot);
     expect(config.factory).toBeDefined();
     expect(config.factory.reasoning).toBeDefined();
@@ -174,16 +190,16 @@ describe('loadModelConfig', () => {
   });
 
   it('pins Claude Code tiers to standard-context variants by default, keeping 1M an explicit opt-in (#2563)', () => {
-    const repoRoot = process.cwd();
+    const repoRoot = path.resolve(import.meta.dirname, '../../..');
     const config = loadModelConfig(repoRoot);
     // A bare alias inherits a 1M-context parent and subagent dispatch then
     // hits the usage-credit gate (#1442); the defaults are pinned variants.
-    expect(config.claude.reasoning.model).toBe('claude-opus-5');
-    expect(config.claude.coding.model).toBe('claude-sonnet-5');
-    expect(config.claude.efficiency.model).toBe('claude-haiku-4-5');
+    expect(config.claude.reasoning.model).toBe('claude-opus-5-5');
+    expect(config.claude.coding.model).toBe('claude-sonnet-5-5');
+    expect(config.claude.efficiency.model).toBe('claude-haiku-5-5');
     expect(config.claude_shorthand.sonnet).toBe('sonnet');
     expect(config.claude_shorthand['sonnet-1m']).toBe('sonnet[1m]');
-    expect(config.shorthand.sonnet).toBe('claude-sonnet-5');
+    expect(config.shorthand.sonnet).toBe('claude-sonnet-5-5');
     // Flagship is resolvable only by explicit election, never as a role default.
     expect(config.shorthand.fable).toBe('claude-fable-5-1');
     expect(Object.values(config.claude).map((role: { model: string }) => role.model))
@@ -191,7 +207,7 @@ describe('loadModelConfig', () => {
   });
 
   it('should tag config with _source', () => {
-    const repoRoot = process.cwd();
+    const repoRoot = path.resolve(import.meta.dirname, '../../..');
     const config = loadModelConfig(repoRoot);
     expect(config._source).toBeDefined();
     expect(typeof config._source).toBe('string');

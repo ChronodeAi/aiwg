@@ -1,3 +1,10 @@
+import { MODELS_HELP } from './models-help.js';
+import { updateJson } from '../../models/config-writer.js';
+import { atomicConfigWrite as atomicWrite } from '../../config/worker-write.js';
+import { handleWorkerAdoptionArgs } from '../../config/worker-adoption-cli.js';
+import type { HostResourceReaders } from '../../config/host-resource-runtime.mjs';
+import { sampleWorkerHostResources } from './models-resource-sample.js';
+import { resolveParallelism } from '../../config/aiwg-config.js';
 /**
  * Safe model-policy audit, resolution, and mutation commands.
  * @implements #1804
@@ -9,8 +16,8 @@ import path from 'node:path';
 import { glob } from 'glob';
 import { load as loadYaml } from 'js-yaml';
 import {
-  compileModelPolicy, validateCanonicalModelPolicy, validateUserProjectModelConfig,
-  loadProviderModelCapabilities, WorkerPolicyError,
+  compileModelPolicy, validateCanonicalModelPolicy,
+  loadProviderModelCapabilities, WorkerPolicyError, assertWorkerRoleEffort,
   type ProviderModelCatalog,
 } from '../../models/provider-policy.js';
 import type { CanonicalModelPolicy, ModelTier } from '../../models/types.js';
@@ -22,7 +29,6 @@ import { ConfigLoader } from '../../models/config-loader.js';
 import { loadRecordedWorkerInstallations, normalizeWorkerVersionBanner } from '../../models/worker-installation.mjs';
 import type { WorkerPlanSnapshot } from '../../models/resolver.js';
 import { parseWorkerCommandArgs, resolveWorkerInvocation, workerInvocationDiagnostic, type WorkerInvocationDriver } from '../../serve/worker-invocation.js';
-
 /** Compare selection facts without observation times or approval/provenance metadata. */
 function approvalFacts(row: DiscoveredModel) {
   if (!row.worker) return null;
@@ -31,7 +37,6 @@ function approvalFacts(row: DiscoveredModel) {
   return { id: row.id, apiModelId: row.apiModelId, llmProvider: row.llmProvider,
     hidden: row.hidden, reasoningEfforts: row.reasoningEfforts, facts };
 }
-
 /** #2885's trusted installation owner supplies qualified bindings and installed drivers.
  * This is an in-process dependency, never a CLI flag or project-config module path. */
 export interface ModelsWorkerServices {
@@ -45,19 +50,44 @@ export interface ModelsWorkerServices {
  * without shelling out to the CLI. No new loader is introduced; this is the
  * CLI's own existing default `ModelsWorkerServices.load`.
  */
-export async function loadWorkerInputs(ctx: HandlerContext) {
+export async function loadWorkerInputs(ctx: HandlerContext, resourceReaders?: HostResourceReaders) {
   const config = await readAiwgConfig(ctx.cwd) ?? emptyConfig();
   const loader = new ConfigLoader(ctx.cwd);
   const models = await loader.load(config.parallelism);
   const catalog = await effectiveCatalog(ctx, ctx.cwd, false, parseArgs(['resolve']));
   const registry = loadProviderModelCapabilities();
-  // Let the resolver explain the dispatch gate before requiring host qualification (#3070).
   if (!config.parallelism?.worker_dispatch) {
     return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
       registry, installations: {} }, drivers: {} };
   }
+  // Explain missing policy before a recorded approval's digest check can
+  // mask it. The host owner first preserves its missing-installation errors.
+  const parallelism = resolveParallelism(config.parallelism, config.providers[0]);
+  const precheckPolicy = () => {
+    if (!ctx.args.some(arg => arg === '--role' || arg.startsWith('--role='))) return;
+    const request = parseWorkerCommandArgs(ctx.args.slice(1));
+    const members = Object.entries(parallelism.groups ?? {})
+      .filter(([id]) => !request.group || request.group === id)
+      .flatMap(([, group]) => group.members ?? []).filter(member => member.enabled !== false
+        && parallelism.clis?.[member.cli]?.enabled !== false && member.roles.includes((models.defaults.workerSelection?.roleGuidance?.[request.role]?.baseRole ?? request.role) as 'coding' | 'reasoning' | 'efficiency'));
+    const requiresExplicit = members.length > 0 && members.every(member => {
+      // Health metadata can identify the provider before an operator has
+      // qualified its dispatch adapter. It grants no dispatch authority.
+      const [namespace, id] = (parallelism.clis?.[member.cli]?.adapter ?? `providers:${member.cli}`).split(':');
+      const provider = namespace === 'providers' ? registry.providers[id as keyof typeof registry.providers] : undefined;
+      const adapter = namespace === 'workerAdapters' ? registry.workerAdapters?.[id]
+        : provider?.workerAdapter ?? provider?.workerHealthAdapter;
+      const observation = (catalog.discovery?.instances?.[member.cli]
+        ?? catalog.discovery?.providers?.[adapter?.provider ?? id])?.models.find(row => row.id === member.model)?.worker;
+      if (observation?.effortSupport === 'explicit') return true;
+      if (observation?.effortSupport === 'not-applicable') return false;
+      return adapter?.capabilities.effort === 'explicit';
+    });
+    // With no matching worker, do not invent policy needs.
+    if (members.length) assertWorkerRoleEffort(models.defaults.workerSelection, request.role, requiresExplicit);
+  };
   const { registry: qualifiedRegistry, installations, drivers, observations } = await loadRecordedWorkerInstallations({
-    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection, parallelism: config.parallelism,
+    registry, cwd: ctx.cwd, policy: models.defaults.workerSelection, parallelism: config.parallelism, precheckPolicy,
   });
   catalog.discovery ??= { source: 'static', fetchedAt: new Date().toISOString(), providers: {} };
   catalog.discovery.instances = { ...catalog.discovery.instances };
@@ -92,7 +122,7 @@ export async function loadWorkerInputs(ctx: HandlerContext) {
     }) };
   }
   return { snapshot: { config, models, modelDigests: loader.getInputDigests()!, catalog,
-    registry: qualifiedRegistry, installations }, drivers };
+    registry: qualifiedRegistry, installations, hostResources: sampleWorkerHostResources(ctx, { ...resourceReaders, groupNames: Object.keys(config.parallelism?.groups ?? {}) }) }, drivers };
 }
 
 async function resolveDirect(ctx: HandlerContext, services: ModelsWorkerServices): Promise<HandlerResult> {
@@ -133,7 +163,7 @@ interface ParsedArgs {
   positionals: string[];
   flags: Map<string, string | boolean>;
 }
-const TIERS = new Set(['economy', 'standard', 'premium', 'max-quality']);
+const TIERS = new Set(['economy', 'standard', 'premium', 'flagship', 'max-quality']);
 const PROVIDERS = new Set(Object.keys(loadProviderModelCapabilities().providers));
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -224,7 +254,7 @@ function select(artifacts: Artifact[], parsed: ParsedArgs, useTierSelector = tru
   ));
 }
 function normalizedTier(tier: ModelTier | undefined): CanonicalModelPolicy['tier'] {
-  return tier === 'max-quality' ? 'premium' : tier ?? 'standard';
+  return tier === 'max-quality' ? 'flagship' : tier ?? 'standard';
 }
 function resolved(item: Artifact, provider: string, catalog?: ProviderModelCatalog) {
   const policy: CanonicalModelPolicy = {
@@ -251,26 +281,6 @@ function print(value: unknown, json: boolean): void {
     }
   } else if (typeof value === 'string') console.log(value);
   else console.log(JSON.stringify(value, null, 2));
-}
-async function atomicWrite(file: string, content: string): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.tmp-${process.pid}`;
-  let mode = 0o600;
-  try { mode = (await fs.stat(file)).mode; } catch { /* new file */ }
-  await fs.writeFile(temporary, content, { encoding: 'utf8', mode });
-  await fs.rename(temporary, file);
-}
-async function updateJson(file: string, mutate: (value: Record<string, any>) => void, dryRun: boolean) {
-  let value: Record<string, any> = {};
-  try { value = JSON.parse(await fs.readFile(file, 'utf8')); } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-  mutate(value);
-  const validation = validateUserProjectModelConfig(value);
-  if (!validation.valid) throw new Error(validation.diagnostics.map(item => item.message).join('; '));
-  const content = `${JSON.stringify(value, null, 2)}\n`;
-  if (!dryRun) await atomicWrite(file, content);
-  return { file, beforeWrite: value, dryRun };
 }
 async function effectiveCatalog(
   ctx: HandlerContext,
@@ -323,53 +333,6 @@ function replaceFrontmatter(raw: string, item: Artifact, tier: string): string {
   }
   return `---\n${frontmatter}\n---\n${match[2]}`;
 }
-const MODELS_HELP = `Usage: aiwg models <subcommand> [options]
-
-Subcommands:
-  list                         List discovered agent and skill model policies
-  audit                        Compile selected policies and report diagnostics
-  resolve                      Resolve artifact policies, or a direct worker invocation
-  validate                     Validate selected artifact policies (not worker configuration)
-  sources                      Show the effective model catalog without network refresh
-  refresh                      Refresh model discovery (may access the network)
-  set-default <TIER>           Write defaults.tier to models.json
-  set --tier <TIER>            Update selected agent/skill frontmatter; requires a selector or --all
-  migrate                      Add canonical role/tier hints to legacy skills
-
-Artifact selectors and options:
-  --agent <name>  --skill <name>  --glob <pattern>  --role <role>
-  --tier <tier>  --framework <name>  --all
-  --provider <provider>         Provider for artifact compilation (default: claude)
-  --model <id>                  Explicit Grok Build model for artifact resolve
-  --target <directory>         Artifact/project root (default: current directory)
-  --scope project|user         set-default destination (default: project)
-  --dry-run                    Preview mutations without writing
-  --json                       Emit JSON
-  --drift                      Include catalog drift for sources/refresh
-  --url <url>                  Remote catalog URL for refresh
-  --help, -h                   Show this reference
-  TIER: economy | standard | premium | max-quality
-
-Direct worker resolution (plans an invocation; does not launch it):
-  aiwg models resolve --role <role> --task <class> --group <group>
-    --brief <file> --workdir <tree> --final-output <file>
-    [--transport shell|mcp] [--format json|shell] [--authorize-premium]
-  --role                       efficiency | coding | reasoning
-  --task                       Task class from defaults.workerSelection.taskClasses
-                               Built-ins: inventory, implementation, architecture, review
-  --group                      Group from parallelism.groups and the role's guidance
-  --brief                      Absolute path to the task brief
-  --workdir                    Absolute path to the worker tree
-  --final-output               Absolute path for the final result
-  --transport                  Must match group execution transport (default: shell)
-  --format                     JSON plan or POSIX shell command (default: json)
-  --json                       Alias for --format json
-  --authorize-premium          Authorize premium for this resolution only
-                               Agents require explicit human confirmation of escalation
-
-Worker groups live in .aiwg/aiwg.config; role guidance lives in project-root models.json.
-Configure both, then run aiwg doctor --probe-workers --qualify.
-See docs/getting-started/worker-dispatch.md for a complete example.`;
 
 async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { load: loadWorkerInputs }): Promise<HandlerResult> {
   if (ctx.args.length === 0 || ctx.args[0] === 'help' || ctx.args.includes('--help') || ctx.args.includes('-h')) {
@@ -378,9 +341,10 @@ async function execute(ctx: HandlerContext, services: ModelsWorkerServices = { l
   }
   // Preserve artifact/native resolve when direct-only flags are absent.
   if (ctx.args[0] === 'resolve' && ctx.args.slice(1).some(arg =>
-    /^--(?:task|group|brief|workdir|final-output|transport|format|authorize-premium)(?:=|$)/.test(arg))) {
+    /^--(?:task|group|brief|workdir|final-output|transport|format|authorize-premium|max-attempts|timeout-ms|max-output-tokens|max-usd)(?:=|$)/.test(arg))) {
     return resolveDirect(ctx, services);
   }
+  if (await handleWorkerAdoptionArgs(ctx.args, ctx.cwd, 'models', ctx.signal, ctx.dryRun)) return { exitCode: 0 };
   const parsed = parseArgs(ctx.args);
   if (parsed.subcommand === 'resolve') {
     const supported = new Set(['agent', 'skill', 'glob', 'role', 'tier', 'framework', 'all', 'target', 'provider', 'model', 'json', 'help', 'dry-run']);

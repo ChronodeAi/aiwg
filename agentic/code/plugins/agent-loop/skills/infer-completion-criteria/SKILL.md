@@ -15,6 +15,15 @@ commandHint:
 
 # Infer Completion Criteria
 
+## HITL authorization checkpoints
+
+Before any confirmation below, read and apply
+[agent-loop authorization checkpoints](../../docs/hitl-authorization.md).
+Call `aiwg config authorization check --action-file "$ACTION_FILE" --target "$TARGET_REPO"`
+for host-classified effects. Only `auto-authorized` with a signed receipt skips
+that workflow prompt; retain existing prompts/refusals otherwise. Platform
+prompts are never bypassed. Limits, regression and threat overrides still require review.
+
 ## Purpose
 
 When a user starts an `agent-loop` task without supplying `--completion`, this skill derives a measurable, verifiable completion criterion from project state. The output must satisfy the `vague-discretion` rule: a concrete shell command or file-inspection check that returns pass/fail unambiguously.
@@ -30,7 +39,7 @@ This skill is invoked by:
 - The `agent-loop` detection-and-routing skill when it parses a user request without explicit completion criteria
 - The `ralph` executor skill during Phase 1 initialization when `--completion` is omitted
 - The `agent-loop-ext` external-loop launcher during pre-launch resolution when `--completion` is omitted
-- Direct invocation via `aiwg discover "infer completion"` → `aiwg show skill infer-completion-criteria` when a user wants to preview the inferred criterion before committing to a loop
+- Direct invocation via `aiwg discover "infer completion"` → `aiwg show skill infer-completion-criteria --body` when a user wants to preview the inferred criterion before committing to a loop
 
 This skill does **not** run when `--completion` is explicit. The user's word is authoritative.
 

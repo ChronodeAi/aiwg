@@ -1,4 +1,12 @@
 ---
+activation: bound
+summary: "Tie every factor finding to reproducible evidence or mark it missing; use explicit statuses, attach remediation to gaps, and separate observations from recommendations."
+bound_to:
+  skills:
+    - twelve-factor-audit
+    - twelve-factor-design
+  agents:
+    - twelve-factor-reviewer
 enforcement: high
 ---
 

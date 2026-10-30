@@ -29,6 +29,19 @@ writeFileSync(settings.recordPath, JSON.stringify({
   ...(settings.permissions ? { permissions: await permissionChecks(settings.permissions) } : {}),
 }));
 
+// Selected containment tests keep the fake worker alive until kernel ownership is recorded.
+if (settings.waitForIdentity) {
+  let owned = false;
+  for (let n = 0; n < 200 && !owned; n++) {
+    try {
+      const record = JSON.parse(readFileSync(settings.waitForIdentity, 'utf8'));
+      owned = record.worker?.pid === process.pid && record.identityObservation === 'stable-owned-group';
+    } catch { /* The launcher may still be publishing the record. */ }
+    if (!owned) await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  if (!owned) throw new Error('Synthetic worker ownership was not observed within two seconds');
+}
+
 const final = JSON.stringify({ type: 'result', result: claims(settings.worker) });
 let output;
 switch (scenario) {

@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2906 (B-OG-41) Grok Build CLI promotion: offline S1 profile work.
  *
@@ -68,11 +69,7 @@ async function installPackage(bytes: Buffer) {
   // grok-build-adapter.mjs imports classifyWorkerHealthFailure/
   // healthEventMatchesBinding from ./worker-health.mjs and ProviderAdapter
   // from ./provider-adapter.mjs: copy both siblings alongside.
-  for (const name of ['worker-health.mjs', 'provider-adapter.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
   await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
   await chmod(resolveImpl, 0o644);
@@ -92,7 +89,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers['grok-build'].workerAdapter = structuredClone(registry.providers['grok-build'].workerHealthAdapter);
   return registry;
 }
@@ -480,6 +477,17 @@ describe('T-OG-03/20/21 Grok Build run identity and ACP-grammar health signals',
 describe('GB12 parseDirectFinal: latching, ordering and malformed-anywhere rejection', () => {
   const ev = (obj: Record<string, unknown>) => JSON.stringify(obj);
   const owner = () => installed.owner;
+
+  it('keeps final text through response and whole-turn usage while requiring end', () => {
+    const frames = [
+      { type: 'text', data: 'final answer' },
+      { type: 'usage', messageId: 'response-1', stopReason: 'end_turn', usage: { input_tokens: 1 } },
+      { type: 'usage', usage: { input_tokens: 2 } },
+    ];
+    expect(owner().parseDirectFinal(frames.map(ev).join('\n'))).toBeNull();
+    const stdout = [...frames, { type: 'end', stopReason: 'end_turn', sessionId: 's1' }].map(ev).join('\n');
+    expect(owner().parseDirectFinal(stdout)).toEqual({ text: 'final answer', stopReason: 'end_turn', sessionId: 's1' });
+  });
 
   it('a bare end with no text fails (empty final content)', () => {
     const stdout = `${ev({ type: 'end', stopReason: 'end_turn', sessionId: 's1' })}\n`;

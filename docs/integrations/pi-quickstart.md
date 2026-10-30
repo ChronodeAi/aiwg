@@ -16,9 +16,18 @@ setup journey.
 
 ## Install, preview, and deploy
 
+> "Install AIWG in this project for the Pi Coding Agent, preview the deployment, then deploy it."
+
+Your assistant previews with `aiwg use all --provider pi --dry-run`, then deploys, which refreshes AIWG's shared project context and prints a verification result.
+
+> "How do I pick the model backend for Pi itself, separately from the AIWG integration?"
+
+Naming the backend question points to Pi's own `--provider` option and model flags, which select the LLM backend — distinct from AIWG's `--provider pi`.
+
 Pi 0.85.0 requires Node.js 22.19 or newer and is published as
 [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/package.json).
 
+### Command reference
 ```bash
 npm install -g @earendil-works/pi-coding-agent
 npm install -g aiwg
@@ -39,6 +48,14 @@ README](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#pro
 
 ## Trust and verification
 
+> "Trust this project in Pi and verify that AIWG is loaded."
+
+Your assistant approves the project trust, restarts, and checks AIWG with `aiwg doctor --provider pi` and `aiwg steward capabilities --provider pi`.
+
+> "I want to run Pi non-interactively in automation — how should approval be handled?"
+
+Stating the non-interactive mode gets the explicit choice: every automated invocation must choose between `--approve` and `--no-approve`.
+
 Project-local settings, extensions, skills, and prompts are trust-gated;
 context files such as `AGENTS.md` load independently of that decision. In
 interactive Pi, run `/trust` and restart after approving the project.
@@ -47,6 +64,7 @@ invocation must choose explicitly between `--approve` and `--no-approve`;
 see Pi's [project trust
 documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/security.md#project-trust).
 
+### Command reference
 ```bash
 pi
 # In Pi: /trust, approve, then restart
@@ -57,17 +75,16 @@ aiwg steward capabilities --provider pi
 
 Try one small task immediately after trust and verification:
 
-```text
-Review this project's README and getting-started docs for unclear positioning,
-missing setup steps, or unsupported claims. Return the three highest-priority
-fixes with file references and a recommended next edit.
-```
+> "Review this project's README and getting-started docs for unclear positioning, missing setup steps, or unsupported claims. Return the three highest-priority fixes with file references and a recommended next edit."
+
+Your assistant loads `AGENTS.md` and the trusted AIWG project resources and produces a concrete review you can inspect.
 
 Success means Pi names the intended project, loads `AGENTS.md` and the trusted
 AIWG project resources, and produces a concrete review you can inspect.
 
 For a bounded, non-interactive check that loads trusted project resources:
 
+### Command reference
 ```bash
 PI_CODING_AGENT_SESSION_DIR="$(mktemp -d)" \
   pi --approve --mode json -p "List the AIWG skills available in this project"
@@ -95,6 +112,11 @@ is non-recursive.
 
 ## Refresh and remove
 
+> "Refresh the Pi deployment and show me what is installed. If I remove a framework, what stays behind?"
+
+Your assistant refreshes with `aiwg refresh --provider pi`, lists installed items, and removes only receipted files, preserving operator-owned settings, prompts, skills, extensions, packages, sessions, and trust decisions.
+
+### Command reference
 ```bash
 aiwg refresh --provider pi --dry-run
 aiwg refresh --provider pi

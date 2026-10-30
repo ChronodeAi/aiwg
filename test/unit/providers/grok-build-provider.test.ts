@@ -100,8 +100,8 @@ describe('grok-build provider definition', () => {
     expect(def?.paths.artifacts.skills).toBe('.grok/skills');
     expect(def?.paths.kernelSkills).toBe('.grok/skills');
     expect(def?.paths.artifacts.agents).toBe('.grok/agents');
-    expect(def?.paths.artifacts.rules).toBeNull();
-    expect(def?.upstream?.revision).toBe('4247f661689354b831191f11eeeac8424993fe3d');
+    expect(def?.paths.artifacts.rules).toBe('.grok/rules');
+    expect(def?.upstream?.revision).toBe('2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8');
     expect(def?.upstream?.revision).not.toBe('0'.repeat(40));
   });
 
@@ -207,7 +207,7 @@ describe('grok-build writer dry-run', () => {
     expect(String(grokBuildPaths.skills)).toContain('.grok');
     expect(String(grokBuildPaths.skills)).not.toContain('.cursor');
     expect(grokBuildSupport.agents).toBe('native');
-    expect(grokBuildSupport.rules).toBe('indexed');
+    expect(grokBuildSupport.rules).toBe('native');
     expect(resolveFromWriter()).toMatch(/\.grok$/);
   });
 
@@ -306,7 +306,8 @@ describe('grok-build kernel-only dry-run', () => {
     expect(result.status).toBe(0);
     const out = `${result.stdout || ''}${result.stderr || ''}`;
     const skillLines = out.split('\n').filter((line) =>
-      line.includes('[dry-run] deploy') && line.includes('SKILL.md') && line.includes('.grok/skills/'));
+      // #3471 uses the shared transaction planner for kernel rule delivery.
+      line.includes('[dry-run] Would write') && line.endsWith('/SKILL.md') && line.includes('.grok/skills/'));
     // Full corpus was ~525; kernel-only should be the kernel set (tens, not hundreds).
     expect(skillLines.length).toBeGreaterThan(0);
     expect(skillLines.length).toBeLessThan(80);

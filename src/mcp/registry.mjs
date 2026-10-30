@@ -8,7 +8,7 @@ import { manageGrokBuildMcp } from './grok-build-config.mjs';
 import { replaceServer } from './toml-editor.mjs';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { applyJsonToolFilterPlan, claudeSettingsPath, prepareClaudePermissions, planToolFilters } from './tool-filters.mjs';
-import { assertCredentialPolicy, resolveCredentialPolicy, validateEnvReferenceName } from './credentials.mjs';
+import { assertCredentialPolicy, resolveCredentialPolicy, validateEnvReferenceName, validateCredentialReferences, assertEnvironmentCredentialReferences } from './credentials.mjs';
 /**
  * MCP Server Registry (Runtime ESM)
  *
@@ -72,23 +72,6 @@ const DEFAULT_REGISTRY = {
   servers: {},
 };
 
-const ENV_REFERENCE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function validateCredentialReferences(def) {
-  for (const [header, envName] of Object.entries(def.headerEnv || {})) {
-    if (!header.trim()) throw new Error('MCP header-env header name must not be empty');
-    if (!ENV_REFERENCE_NAME.test(envName)) {
-      throw new Error(`Invalid MCP header environment variable reference "${envName}"`);
-    }
-  }
-  for (const [key, envName] of Object.entries(def.envFrom || {})) {
-    if (!ENV_REFERENCE_NAME.test(key)) throw new Error(`Invalid MCP env-from variable name "${key}"`);
-    if (!ENV_REFERENCE_NAME.test(envName)) {
-      throw new Error(`Invalid MCP env-from environment variable reference "${envName}"`);
-    }
-  }
-}
-
 // The typed worker dispatch boundary owns qualification. Legacy runtime edits
 // invalidate its binding without importing the TypeScript policy owner.
 export function workerServerDigest(server) {
@@ -115,33 +98,9 @@ export class McpServerRegistry {
   async load() {
     if (this.#cache) return this.#cache;
 
-    if (this.#layers) {
-      const layered = await loadLayered(this.#layers, REGISTRY_FILENAME, 'servers', DEFAULT_REGISTRY);
-      this.#cache = layered.data;
-      this.#layering = layered.layering;
-      return this.#cache;
-    }
-
-    const filePath = this.getPath();
-    try {
-      const content = await readFile(filePath, 'utf-8');
-      const parsed = JSON.parse(content);
-      this.#cache = {
-        ...DEFAULT_REGISTRY,
-        ...parsed,
-        servers: parsed.servers || {},
-      };
-    } catch {
-      this.#cache = { ...DEFAULT_REGISTRY, servers: {} };
-    }
-
-    try {
-      resolveCredentialPolicy({ registryPolicy: this.#cache.credentialPolicy, env: {} });
-    } catch (error) {
-      this.#cache = null;
-      throw new Error(`Invalid MCP credential policy in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
+    const loaded = await loadLayered(this.#layers ?? [this.#configDir], REGISTRY_FILENAME, 'servers', DEFAULT_REGISTRY);
+    this.#cache = loaded.data;
+    this.#layering = this.#layers ? loaded.layering : null;
     return this.#cache;
   }
 
@@ -304,6 +263,7 @@ function tomlInlineTable(values) {
 }
 
 export function buildServerToml(server) {
+  assertEnvironmentCredentialReferences(server, 'codex');
   const lines = [];
   lines.push(`[mcp_servers.${tomlKey(server.name)}]`);
 
@@ -488,6 +448,9 @@ async function injectJson(registry, servers, configPath, provider, dryRun, resul
 }
 
 async function injectToml(registry, servers, configPath, provider, dryRun, result, userScope, projectRoot, toolPlan = null) {
+  // A deliberately aliased Codex home is trusted; descendants below it are not.
+  const destinationRoot = projectRoot ?? (process.env.CODEX_HOME || resolve(process.env.HOME || process.env.USERPROFILE || homedir(), '.codex'));
+  await assertConfigDestination(configPath, destinationRoot);
   let existing = '';
   try {
     existing = await readFile(configPath, 'utf-8');
@@ -504,7 +467,7 @@ async function injectToml(registry, servers, configPath, provider, dryRun, resul
   }
 
   if (!dryRun) {
-    await writeConfigAtomic(configPath, existing, { userScope, projectRoot });
+    await writeConfigAtomic(configPath, existing, { userScope, projectRoot: destinationRoot });
 
     for (const server of servers) {
       await registry.recordInjection(server.name, provider);

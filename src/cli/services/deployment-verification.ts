@@ -1,6 +1,7 @@
 import { access, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { loadPrebuiltDeploymentIndex } from '../../artifacts/prebuilt-deployment.js';
 import { loadGraphIndexFile } from '../../artifacts/index-reader.js';
 import type { ArtifactIndex, IndexStats } from '../../artifacts/types.js';
 import { readAiwgConfig, type DeployedArtifactCounts } from '../../config/aiwg-config.js';
@@ -85,6 +86,8 @@ export interface DiscoveryInventory {
 
 export interface UseDeploymentResult {
   schema: 'aiwg.use.result.v1';
+  contextFiles?: import('../../smiths/context-pipeline/types.js').ContextPipelineResult[];
+  contextRollback?: import('../../smiths/context-pipeline/context-file-safety.js').ContextRollbackResult;
   generatedAt: string;
   projectRoot: string;
   frameworkRoot: string;
@@ -220,7 +223,7 @@ export function normalizeFrameworkDiscoveryInventory(stats: IndexStats): Discove
 }
 
 function frameworkDiscoveryInventory(frameworkRoot: string): DiscoveryInventory | null {
-  const stats = loadGraphIndexFile<IndexStats>(frameworkRoot, 'stats.json', 'framework');
+  const stats = loadPrebuiltDeploymentIndex(frameworkRoot, { strictRoot: true })?.stats ?? loadGraphIndexFile<IndexStats>(frameworkRoot, 'stats.json', 'framework');
   return stats ? normalizeFrameworkDiscoveryInventory(stats) : null;
 }
 
@@ -779,11 +782,14 @@ export async function verifyProviderDeployment(
     stats?: IndexStats | null;
     graph: 'framework' | 'project' | 'user';
     bundles: string[];
+    prebuiltValidated?: boolean;
   }> = [];
   if (frameworkBundles.length > 0) {
+    const prebuilt = loadPrebuiltDeploymentIndex(options.frameworkRoot, { strictRoot: true });
     indexesToVerify.push({
-      index: loadGraphIndexFile<ArtifactIndex>(options.frameworkRoot, 'metadata.json', 'framework'),
-      stats: loadGraphIndexFile<IndexStats>(options.frameworkRoot, 'stats.json', 'framework'),
+      index: prebuilt?.index ?? loadGraphIndexFile<ArtifactIndex>(options.frameworkRoot, 'metadata.json', 'framework'),
+      stats: prebuilt?.stats ?? loadGraphIndexFile<IndexStats>(options.frameworkRoot, 'stats.json', 'framework'),
+      prebuiltValidated: Boolean(prebuilt),
       graph: 'framework',
       bundles: frameworkBundles,
     });
@@ -798,7 +804,7 @@ export async function verifyProviderDeployment(
     });
   }
 
-  for (const { index, stats, graph, bundles } of indexesToVerify) {
+  for (const { index, stats, graph, bundles, prebuiltValidated } of indexesToVerify) {
     if (!index || !index.entries || Object.keys(index.entries).length === 0) {
       findings.push(finding(
         normalized,
@@ -850,7 +856,7 @@ export async function verifyProviderDeployment(
         { requestedBundles: bundles, entryCount: entryPaths.length },
       ));
     }
-    if (options.invocationStartedAt) {
+    if (options.invocationStartedAt && !prebuiltValidated) {
       // No-op builds preserve metadata bytes and record the refresh in stats.
       const refreshedAt = Math.max(...[index.builtAt, stats?.builtAt]
         .map((timestamp) => Date.parse(timestamp ?? ''))
@@ -892,7 +898,6 @@ export async function verifyProviderDeployment(
     const requiredContext = [
       path.join(options.projectRoot, 'WORKSPACE.md'),
       ...(definition?.paths.contextFiles.aiwgMd === false ? [] : [path.join(options.projectRoot, 'AIWG.md')]),
-      path.join(options.projectRoot, '.aiwg', 'AIWG.md'),
     ];
     for (const contextPath of requiredContext) {
       if (!(await exists(contextPath))) {
@@ -1150,9 +1155,12 @@ export async function buildDeploymentStatusProbe(
   const notConfigured = result.requestedBundles.length === 0
     && result.findings.length > 0
     && result.findings.every((item) => item.id === 'deployment-not-configured');
+  const { rulePinState } = await import('../../rules/pin-state.js');
+  const rulePins = rulePinState(projectRoot, frameworkRoot);
   const engaged = result.outcome === 'ready' || result.outcome === 'ready-restart-required' || result.outcome === 'degraded';
   return {
     schema: 'aiwg.status.probe.v1',
+    rule_pins: { rules: rulePins.rules, warnings: rulePins.warnings },
     generated_at: result.generatedAt,
     project_root: result.projectRoot,
     engaged,

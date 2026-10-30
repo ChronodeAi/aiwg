@@ -8,8 +8,30 @@ vi.mock('node:fs', async importOriginal => {
 });
 vi.mock('../../../src/cli/handlers/ralph-launcher.js', () => ({ launchExternalRalph: mocks.launch }));
 import { mcHandler } from '../../../src/cli/handlers/mc.js';
+import { decodeMission, encodeMission } from '../../../src/mission-protocol/codecs.js';
 
 describe('Mission Control worker boundary', () => {
+  it('preserves managed generation, launch claim, execution identity and artifacts in Mission checkpoints', () => {
+    const checkpoint = {
+      admissionRequestId: 'synthetic.request', admissionGeneration: 7, admissionState: 'uncertain',
+      admissionLaunchClaimed: true, admissionExecution: { pid: 4242, startedAt: 'synthetic-boot:123:1000' },
+      ralphLoopId: 'synthetic-loop',
+    };
+    const mission = decodeMission({ id: 'synthetic', objective: 'synthetic', status: 'paused', ...checkpoint,
+      artifacts: [{ id: 'partial', kind: 'other', uri: 'file:///synthetic/partial' }],
+    }, 'mission-control-session').value;
+    expect(mission.extensions?.['aiwg.source.mission-control-session']).toMatchObject(checkpoint);
+    expect(mission.status.state).toBe('blocked');
+    for (const target of ['mission-control-session', 'mission-ledger', 'graph-flow-v1'] as const) {
+      const encoded = encodeMission(mission, target).value as any;
+      const extensions = encoded.extensions ?? encoded.metadata;
+      expect(extensions['aiwg.source.mission-control-session']).toMatchObject(checkpoint);
+    }
+    expect(encodeMission(mission, 'mission-control-session').value).toMatchObject({
+      artifacts: [expect.objectContaining({ id: 'partial', uri: 'file:///synthetic/partial' })],
+    });
+  });
+
   it.each([
     ['run', 'session'], ['run', 'mission'],
     ['dispatch', 'session'], ['dispatch', 'mission'],

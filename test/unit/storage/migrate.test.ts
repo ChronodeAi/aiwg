@@ -15,13 +15,11 @@ import { resetStorage, initStorage } from '../../../src/storage/index.js';
 
 describe('aiwg storage migrate (#955)', () => {
   let projectRoot: string;
-  let originalCwd: string;
   let stdout: string[];
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'aiwg-storage-migrate-test-'));
-    originalCwd = process.cwd();
     // We CAN'T process.chdir() in vitest workers; the migrate handler
     // accepts projectRoot via process.cwd() — fortunately our test
     // builds adapters directly via fs paths in --from/--to, so cwd-
@@ -277,17 +275,10 @@ describe('aiwg storage migrate (#955)', () => {
         `fs:${dst}`,
       ], projectRoot);
 
-      // The log path uses cwd-relative .aiwg/ — we can't predict cwd in
-      // workers, but we can scan the project root for it
-      const logDir = join(process.cwd(), '.aiwg', '.storage-cache', 'migrations');
-      // Any file matching memory-fs-* should exist in *some* cwd-relative
-      // location; we verify the summary line at minimum
-      expect(stdout.join('\n')).toMatch(/Migration log:/);
-      // Cleanup any log we may have created in cwd
-      const { rm: rmAsync } = await import('fs/promises');
-      try {
-        await rmAsync(logDir, { recursive: true, force: true });
-      } catch { /* ignore */ }
+      const logPath = stdout.find(line => line.startsWith('Migration log: '))!.slice('Migration log: '.length);
+      expect(logPath.startsWith(join(projectRoot, '.aiwg', '.storage-cache', 'migrations'))).toBe(true);
+      const records = (await readFile(logPath, 'utf-8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(records).toEqual([expect.objectContaining({ path: 'a.md', action: 'copied', reason: 'not yet migrated' })]);
     });
   });
 

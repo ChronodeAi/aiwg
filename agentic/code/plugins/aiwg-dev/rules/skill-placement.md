@@ -1,5 +1,45 @@
 ---
 enforcement: high
+activation: paths
+summary: Author AIWG skills, agents, commands, rules, and templates in addon or framework source; regenerate provider copies from that source.
+bound_to:
+  skills:
+    - devkit-create-addon
+    - devkit-create-extension
+    - devkit-create-framework
+    - devkit-create-agent
+    - devkit-create-command
+    - devkit-create-skill
+    - scaffold-addon
+    - scaffold-extension
+    - scaffold-framework
+    - new-bundle
+    - add-agent
+    - add-skill
+    - add-command
+    - add-behavior
+    - add-template
+    - validate-addon
+    - validate-component
+    - devkit-validate
+    - dev-doctor
+  agents:
+    - aiwg-developer
+paths:
+  - agentic/code/**
+  - .claude/**
+  - .github/agents/**
+  - .github/prompts/**
+  - .github/instructions/**
+  - .cursor/**
+  - .warp/**
+  - .codex/**
+  - .factory/**
+  - .opencode/**
+  - .windsurf/**
+  - .openclaw/**
+  - .gitea/workflows/**
+  - .github/workflows/**
 ---
 
 # Skill Placement Rules
@@ -10,7 +50,7 @@ enforcement: high
 
 ## Overview
 
-New skills, agents, commands, rules, and templates MUST go into an addon or framework directory under `agentic/code/`. Files placed directly into provider deployment directories (`.claude/`, `.github/`, `.cursor/`, etc.) are silently overwritten on the next `aiwg sync` and are invisible to the installer.
+New skills, agents, rules, templates, and any legacy command bridge definitions MUST go into an addon or framework directory under `agentic/code/`. Files placed directly into provider deployment directories (`.claude/`, `.github/`, `.cursor/`, etc.) are silently overwritten on the next `aiwg sync` and are invisible to the installer. AIWG skills are the canonical authoring surface; provider command/prompt files are deployment compatibility views.
 
 ## Problem Statement
 
@@ -20,7 +60,7 @@ Common mistakes:
 
 - Creating `SKILL.md` directly in `.claude/skills/my-skill/` instead of `agentic/code/addons/<name>/skills/my-skill/`
 - Placing an agent definition in `.claude/agents/my-agent.md` without a corresponding source file in `agentic/code/`
-- Editing a deployed command file in `.github/prompts/` and expecting the change to persist
+- Editing a deployed provider prompt/command compatibility file in `.github/prompts/` and expecting the change to persist
 - Treating `.claude/rules/` as a place to author new rules
 
 ## Mandatory Rules
@@ -32,7 +72,7 @@ All framework artifacts MUST be authored in `agentic/code/addons/<name>/` or `ag
 **FORBIDDEN**:
 ```
 .claude/skills/my-new-skill/SKILL.md         ← deployment target, will be overwritten
-.github/prompts/my-command.md                ← deployment target
+.github/prompts/my-shortcut.md               ← deployment target / compatibility view
 .cursor/agents/my-agent.md                   ← deployment target
 .warp/skills/my-skill/SKILL.md               ← deployment target
 ```
@@ -55,7 +95,7 @@ The only exception is `.aiwg/` for project-local artifacts (requirements, archit
 
 ### Rule 3: Edits to Deployed Files Do Not Propagate
 
-If you need to fix a skill, agent, or command that is already deployed, edit the SOURCE file in `agentic/code/`, then run `aiwg use <addon>` or `aiwg sync` to redeploy. Editing the deployed copy has no effect on the source and will be overwritten.
+If you need to fix a skill, agent, rule, or provider shortcut that is already deployed, edit the SOURCE file in `agentic/code/`, then run `aiwg use <addon>` or `aiwg sync` to redeploy. Editing the deployed copy has no effect on the source and will be overwritten.
 
 ## Detection Patterns
 
@@ -63,7 +103,7 @@ A placement violation exists when:
 
 - A `SKILL.md` is found in `.claude/skills/`, `.cursor/skills/`, `.warp/skills/`, etc. but has NO corresponding source in `agentic/code/`
 - An agent `.md` is found in `.claude/agents/`, `.github/agents/`, etc. but has NO corresponding source in `agentic/code/`
-- A command `.md` is found in `.claude/commands/`, `.github/prompts/`, etc. but has NO corresponding source in `agentic/code/` or `src/extensions/commands/`
+- A provider shortcut/prompt `.md` is found in `.claude/commands/`, `.github/prompts/`, etc. but has NO corresponding source skill in `agentic/code/` or explicit legacy bridge in `src/extensions/commands/`
 - A rule is found in `.claude/rules/` but has NO corresponding source in `agentic/code/`
 
 The `validate-addon` and `dev-doctor` skills check for these violations automatically.
@@ -86,14 +126,14 @@ This rule applies to all AIWG deployment targets:
 
 | Provider Directory | Is a Deployment Target |
 |-------------------|----------------------|
-| `.claude/skills/`, `.claude/agents/`, `.claude/commands/`, `.claude/rules/` | YES |
-| `.github/agents/`, `.github/prompts/`, `.github/instructions/` | YES — Copilot provider artifacts |
-| `.cursor/agents/`, `.cursor/commands/`, `.cursor/skills/`, `.cursor/rules/` | YES |
-| `.warp/agents/`, `.warp/commands/`, `.warp/skills/` | YES |
+| `.claude/skills/`, `.claude/agents/`, `.claude/commands/`, `.claude/rules/` | YES — skills are canonical; commands are compatibility views |
+| `.github/agents/`, `.github/prompts/`, `.github/instructions/` | YES — Copilot provider artifacts; prompts are compatibility views |
+| `.cursor/agents/`, `.cursor/commands/`, `.cursor/skills/`, `.cursor/rules/` | YES — skills are canonical; commands are compatibility views |
+| `.warp/agents/`, `.warp/commands/`, `.warp/skills/` | YES — skills are canonical; commands are compatibility views |
 | `.codex/agents/`, `~/.codex/prompts/`, `~/.codex/skills/` | YES |
 | `.windsurf/workflows/`, `.windsurf/skills/`, `.windsurf/rules/` | YES |
-| `.opencode/agent/`, `.opencode/command/`, `.opencode/skill/` | YES |
-| `~/.openclaw/agents/`, `~/.openclaw/commands/`, `~/.openclaw/skills/` | YES |
+| `.opencode/agent/`, `.opencode/command/`, `.opencode/skill/` | YES — skills are canonical; commands are compatibility views |
+| `~/.openclaw/agents/`, `~/.openclaw/commands/`, `~/.openclaw/skills/` | YES — skills are canonical; commands are compatibility views |
 | `agentic/code/addons/<name>/` | SOURCE — author here |
 | `agentic/code/frameworks/<name>/` | SOURCE — author here |
 

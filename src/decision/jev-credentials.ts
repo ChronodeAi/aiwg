@@ -1,10 +1,11 @@
 import { resolveDecisionEnablement } from '../config/decision-config.js';
 import { constants } from 'node:fs';
-import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { JevCredentialError } from './adapters/jev.js';
+import { readPrivateValueFile } from '../auth/sensitive-input.js';
 
 export interface JevCredentialRecord {
   token: string;
@@ -19,6 +20,12 @@ export interface JevCredentialLookupResult {
   region: string;
   endpoint?: string;
   enabled: boolean;
+}
+
+export interface JevCredentialInspection {
+  configured: boolean | null;
+  enabled: boolean | null;
+  source: 'env' | 'file' | 'none' | 'unknown';
 }
 
 export interface JevCredentialOptions {
@@ -70,9 +77,20 @@ function parseRecord(raw: string): JevCredentialRecord {
 async function readCredentialFile(options: JevCredentialOptions = {}): Promise<JevCredentialRecord | null> {
   const credentialPath = jevCredentialPath(options);
   try {
-    const [fileStat, parentStat] = await Promise.all([stat(credentialPath), stat(path.dirname(credentialPath))]);
-    if (isInsecureMode(fileStat.mode) || isInsecureMode(parentStat.mode)) throw new JevCredentialError('denied');
-    return parseRecord(await readFile(credentialPath, 'utf8'));
+    // Preserve the missing-file result and the existing directory requirement.
+    // The shared reader validates the opened descriptor, including ownership
+    // and link checks, before any credential record is parsed.
+    const [, parentStat] = await Promise.all([lstat(credentialPath), stat(path.dirname(credentialPath))]);
+    if (isInsecureMode(parentStat.mode)) {
+      throw Object.assign(new JevCredentialError('denied'), { message: 'Jev credential directory must not allow group or other access (chmod 700).' });
+    }
+    let raw: string;
+    try { raw = await readPrivateValueFile(credentialPath, 'Jev credential file'); }
+    catch (error) {
+      // Shared private-file diagnostics contain no path or credential bytes.
+      throw Object.assign(new JevCredentialError('denied'), { message: (error as Error).message });
+    }
+    return parseRecord(raw);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     if (error instanceof JevCredentialError) throw error;
@@ -98,6 +116,17 @@ export async function lookupJevCredential(options: JevCredentialOptions = {}): P
   };
   if (!fileRecord) return null;
   return { source: 'file', token: fileRecord.token, region: fileRecord.region, ...(fileRecord.endpoint ? { endpoint: fileRecord.endpoint } : {}), enabled };
+}
+
+/** Offline metadata-only inspection. Never probes Jev and never returns credential bytes. */
+export async function inspectJevCredential(options: JevCredentialOptions = {}): Promise<JevCredentialInspection> {
+  try {
+    const credential = await lookupJevCredential(options);
+    if (!credential) return { configured: false, enabled: false, source: 'none' };
+    return { configured: true, enabled: credential.enabled, source: credential.source };
+  } catch {
+    return { configured: null, enabled: null, source: 'unknown' };
+  }
 }
 
 export async function resolveJevCredentialBytes(logicalRef: string, options: JevCredentialOptions = {}): Promise<Uint8Array> {

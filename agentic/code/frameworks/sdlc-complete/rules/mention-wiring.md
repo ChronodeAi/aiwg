@@ -1,5 +1,28 @@
 ---
 enforcement: medium
+activation: summary
+summary: Wire valid project-relative @-mentions while creating artifacts; connect requirements, implementation, tests, and sources as you go.
+bound_to:
+  skills:
+    - artifact-orchestration
+    - mention-wire
+    - mention-validate
+    - mention-lint
+  agents:
+    - requirements-analyst
+    - requirements-documenter
+    - architecture-designer
+    - architecture-documenter
+    - software-implementer
+    - test-engineer
+    - test-documenter
+    - technical-writer
+    - agentsmith
+    - commandsmith
+    - skillsmith
+  flows: []
+triggers:
+  - when to add traceability mentions
 ---
 
 # @-Mention Wiring Rules

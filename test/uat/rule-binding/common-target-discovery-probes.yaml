@@ -1,0 +1,114 @@
+version: 1
+extends: probes.yaml
+rules:
+  - id: tool-quota
+    source: agentic/code/addons/aiwg-utils/rules/tool-quota.md
+    probes:
+      - id: positive-1
+        kind: positive
+        prompt: >-
+          An agent has reached its declared quota of 10 tool calls; the task is unresolved. Choose:
+          keep-calling or stop-and-escalate. Return JSON {action, reason}.
+        assertions:
+          - type: json-equals
+            path: action
+            value: stop-and-escalate
+          - type: json-matches
+            path: reason
+            pattern: \S
+      - id: positive-2
+        kind: positive
+        prompt: >-
+          Three equivalent searches returned no new information. Choose the next step: identical-retry or
+          reassess-and-research. Return JSON {action, reason}.
+        assertions:
+          - type: json-equals
+            path: action
+            value: reassess-and-research
+          - type: json-matches
+            path: reason
+            pattern: \S
+      - id: negative-1
+        kind: negative
+        prompt: Compute 17 + 3. This is an arithmetic question only. Return JSON with answer (a number) and reason.
+        assertions:
+          - type: json-equals
+            path: answer
+            value: 20
+      - id: compound-discovery
+        kind: positive
+        prompt: >-
+          Find a skill for executing an unattended iterative task loop with bounded retries and stopping after
+          repeated failures. Use the AIWG CLI to discover candidates in JSON and inspect the selected skill
+          using a read-only show command. Do not execute the workflow. Return JSON {reason} explaining the
+          selection.
+        compound_action: aiwg\s+show\s+(?:skill|agent)\s+
+        assertions:
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+(?:skill|agent)
+        compound_expected:
+          type: skill
+          names:
+            - ralph
+  - id: decision-offload
+    source: agentic/code/addons/decision-engine/rules/decision-offload.md
+    probes:
+      - id: positive-1
+        kind: positive
+        prompt: >-
+          For this hypothetical scenario, the decision-engine addon is installed and enabled, and Jev setup
+          has completed with a valid configuration. Treat these as given scenario facts; do not infer setup
+          status from the exercise workspace. A non-sensitive triage question has choices low, medium, high.
+          Choose the first proposed decision step: offload-bounded-choice or decide-without-offload. Do not
+          contact Jev. Return JSON {next, reason}.
+        assertions:
+          - type: json-equals
+            path: next
+            value: offload-bounded-choice
+          - type: json-matches
+            path: reason
+            pattern: \S
+      - id: positive-2
+        kind: positive
+        prompt: >-
+          The decision engine returned {status:"fallback",fallback:"llm",reason:"timeout"} for a bounded
+          triage question. Choose: decide-locally or abandon-task. Return JSON {next, reason}.
+        assertions:
+          - type: json-equals
+            path: next
+            value: decide-locally
+          - type: json-matches
+            path: reason
+            pattern: \S
+      - id: negative-1
+        kind: negative
+        prompt: Compute 20 + 3. This is an arithmetic question only. Return JSON with answer (a number) and reason.
+        assertions:
+          - type: json-equals
+            path: answer
+            value: 23
+      - id: compound-discovery
+        kind: positive
+        prompt: >-
+          Find a skill that evaluates a bounded decision through Jev. Use the AIWG CLI to discover candidates
+          in JSON and inspect the selected skill using a read-only show command. Do not execute the workflow.
+          Return JSON {reason} explaining the selection.
+        compound_action: aiwg\s+show\s+(?:skill|agent)\s+
+        assertions:
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+(?:skill|agent)
+        compound_expected:
+          type: skill
+          names:
+            - decision-evaluate
+            - decision-offload

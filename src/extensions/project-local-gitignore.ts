@@ -22,6 +22,7 @@
 import { readFile, writeFile, access } from 'fs/promises';
 import { join } from 'path';
 import { execFile } from 'child_process';
+import { helperEnvironment } from '../process/cli-command.mjs';
 import { promisify } from 'util';
 
 const execFileP = promisify(execFile);
@@ -218,6 +219,7 @@ export async function checkBundleManifestIgnored(
     // 1 if not ignored, 128 on error. We want a tristate.
     await execFileP('git', ['check-ignore', '-q', manifestRelPath], {
       cwd: projectDir,
+      env: helperEnvironment(),
     });
     // exit 0 → ignored
     return true;

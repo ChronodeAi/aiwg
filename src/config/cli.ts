@@ -1,3 +1,4 @@
+import { printUsage } from './cli-help.js';
 /**
  * Config CLI — Subcommand router for `aiwg config`
  *
@@ -20,18 +21,28 @@
 
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { warnStaleParallelism } from './worker-guidance-warning.js';
+import { handleWorkerAdoptionArgs } from './worker-adoption-cli.js';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
 import { isInteractive } from '../cli/env.js';
+import { splitParams } from '../cli/agent-spawn.js';
 import { exitCodeForSpawnResult } from '../cli/child-process-result.js';
 import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
+
 /**
  * Main CLI entry point for `aiwg config <subcommand> [args]`
  */
 export async function main(args: string[]): Promise<void> {
+  if (args[0] === 'authorization') {
+    const { authorizationCli } = await import('./authorization-cli.js');
+    await authorizationCli(args.slice(1));
+    return;
+  }
+  if (await handleWorkerAdoptionArgs(args, process.cwd(), 'config')) return;
   // Extract --config-dir flag before routing
   let configDir: string | undefined;
   const filteredArgs: string[] = [];
@@ -120,6 +131,11 @@ async function handleGet(config: UserConfig, args: string[]): Promise<void> {
     return;
   }
 
+  if (key === 'rules' || key.startsWith('rules.')) {
+    const { loadRulePinConfigs } = await import('../rules/pins.mjs');
+    console.log(JSON.stringify(getDottedPath(loadRulePinConfigs(process.cwd(), undefined, config.getPath()).user as Record<string, unknown>, key)) ?? '(not set)');
+    return;
+  }
   const value = await config.get(key);
   if (value === undefined) {
     console.log(`(not set)`);
@@ -150,6 +166,11 @@ async function handleSet(config: UserConfig, args: string[]): Promise<void> {
     return;
   }
 
+  if (key === 'rules' || key.startsWith('rules.')) {
+    await setRuleConfigKey(process.cwd(), 'user', key, value, config.getPath());
+    console.log(`Set --user ${key} = ${value}`);
+    return;
+  }
   await config.set(key, value);
   console.log(`Set ${key} = ${value}`);
 }
@@ -225,6 +246,8 @@ const STRING_ARRAY_FIELDS = new Set([
 const INTEGER_FIELDS: Record<string, { min: number; max: number }> = {
   'decision.ask.passes': { min: 1, max: Number.MAX_SAFE_INTEGER },
   'decision.ask.escalation_passes': { min: 1, max: Number.MAX_SAFE_INTEGER },
+  'decision.ask.savings.reasoning_tokens': { min: 0, max: 1_000_000 },
+  'decision.ask.savings.output_tokens': { min: 0, max: 1_000_000 },
   'parallelism.max_parallel_subagents': { min: 1, max: 50 },
   'parallelism.max_parallel_ralph_loops': { min: 1, max: 20 },
   'parallelism.max_parallel_mc_missions': { min: 1, max: 20 },
@@ -271,7 +294,7 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
   }
 }
 
-async function projectConfigSet(key: string, raw: string, args: string[]): Promise<void> {
+async function projectConfigSet(key: string, raw: string, args: string[], quiet = false): Promise<void> {
   assertSafeConfigPath(key);
   if (key === 'defaults' || key.startsWith('defaults.')) {
     throw new AiwgError({
@@ -312,7 +335,7 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
-  if (key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
+  if (key === 'authorization' || key.startsWith('authorization.') || key === 'rules' || key.startsWith('rules.') || key === 'parallelism' || /^parallelism\.(worker_dispatch|worker_mode|groups|clis|admission|budgets|health|retry|activation)(\.|$)/.test(key)) {
     try { value = JSON.parse(raw); } catch { /* String leaves are validated by the whole-object writer. */ }
   }
   if (/^externalLinks\.[^.]+$/.test(key) || key === 'security.threatAssessment') {
@@ -377,7 +400,7 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
   const intRule = INTEGER_FIELDS[key];
   if (intRule) {
     const n = Number(raw);
-    if (!Number.isInteger(n) || n < intRule.min || n > intRule.max) {
+    if (!raw.trim() || !Number.isInteger(n) || n < intRule.min || n > intRule.max) {
       throw new AiwgError({
         code: 'ERR_INVALID_VALUE',
         message: `${key} must be an integer between ${intRule.min} and ${intRule.max}, got '${raw}'`,
@@ -387,10 +410,37 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
     }
     value = n;
   }
+  if (key === 'decision.ask.min_agreement' || key === 'decision.ask.agreement_confidence_floor') {
+    const n = Number(raw);
+    if (!raw.trim() || !Number.isFinite(n) || n < 0 || n > 1) {
+      throw new AiwgError({
+        code: 'ERR_INVALID_VALUE',
+        message: `${key} must be a probability from 0 to 1, got '${raw}'`,
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+    value = n;
+  }
+  if (['decision.ask.cost.llm_per_mtok', 'decision.ask.cost.jev_per_mtok', 'decision.ask.cost.jev_input_per_mtok', 'decision.ask.cost.jev_output_per_mtok'].includes(key)) {
+    const n = Number(raw);
+    if (!raw.trim() || !Number.isFinite(n) || n < 0 || n > 1_000_000) {
+      throw new AiwgError({ code: 'ERR_INVALID_VALUE', message: `${key} must be a non-negative number <= 1000000`, exitCode: EXIT_CODES.USAGE });
+    }
+    value = n;
+  }
 
   // Read-modify-write — preserve unrelated fields. emptyConfig() seeds the
   // base shape when no config file exists yet (e.g. brand-new project).
-  const cfg = (await readAiwgConfig(projectDir)) ?? emptyConfig();
+  const { existsSync, readFileSync } = await import('node:fs');
+  const file = projectControlPath(projectDir, 'aiwg.config');
+  const cfg = key === 'rules' || key.startsWith('rules.')
+    ? (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : emptyConfig())
+    : (await readAiwgConfig(projectDir)) ?? emptyConfig();
+  const before = structuredClone(getDottedPath(cfg as unknown as Record<string, unknown>, key));
+  if (key.startsWith('authorization.hitl')) {
+    const { ensureAuthorization } = await import('../policy/hitl-config.js');
+    ensureAuthorization(cfg);
+  }
   setDottedPath(cfg as unknown as Record<string, unknown>, key, value);
   const externalLinkErrors = validateExternalLinks(cfg.externalLinks);
   if (externalLinkErrors.length > 0) {
@@ -412,7 +462,8 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
     });
   }
   await writeAiwgConfig(projectDir, cfg);
-  console.log(`Set --project ${key} = ${raw}`);
+  if (!quiet) console.log(`Set --project ${key} = ${raw}`);
+  if (!quiet) warnStaleParallelism(cfg, projectDir, key, before);
 }
 
 /** Read a dotted path from a nested record. Returns undefined when any segment is missing. */
@@ -481,6 +532,15 @@ async function handleValidate(config: UserConfig, args: string[]): Promise<void>
     return;
   }
   const issues = await config.validate();
+  try {
+    const { loadRulePinConfigs, installedRuleCapabilities, validateRulePinCapabilities } = await import('../rules/pins.mjs');
+    const configs = loadRulePinConfigs(process.cwd(), undefined, config.getPath());
+    for (const message of validateRulePinCapabilities(configs.user.rules, installedRuleCapabilities(configs), configs.project.rules?.pin_groups)) {
+      issues.push({ file: 'aiwg.config', severity: 'error', message });
+    }
+  } catch (error) {
+    issues.push({ file: 'aiwg.config', severity: 'error', message: error instanceof Error ? error.message : String(error) });
+  }
 
   console.log(`Config directory: ${config.getPath()}\n`);
 
@@ -651,6 +711,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
 
   const primary = cfg.providers[0];
   const defaults = getProviderParallelismDefaults(primary);
+  const before = structuredClone(getDottedPath(cfg as unknown as Record<string, unknown>, key));
 
   if (key === 'parallelism') {
     cfg.parallelism = {
@@ -661,6 +722,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
     };
     await writeAiwgConfig(projectDir, cfg);
     console.log(`Reset --project parallelism to provider default (${primary ?? 'unknown'})`);
+    warnStaleParallelism(cfg, projectDir, key, before);
     return;
   }
 
@@ -674,6 +736,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
       if (current) delete current[last];
       await writeAiwgConfig(projectDir, cfg);
       console.log(`Reset --project ${key}`);
+      warnStaleParallelism(cfg, projectDir, key, before);
       return;
     }
 
@@ -683,6 +746,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
       (cfg.parallelism as Record<string, unknown>)[field] = defaults[field];
       await writeAiwgConfig(projectDir, cfg);
       console.log(`Reset --project ${key} to provider default (${defaults[field]})`);
+      warnStaleParallelism(cfg, projectDir, key, before);
       return;
     }
   }
@@ -731,14 +795,16 @@ async function handleEdit(config: UserConfig, args: string[] = []): Promise<void
   // Ensure the config file exists before opening
   await config.ensureDir();
 
-  const { execSync } = await import('child_process');
+  const { execFileSync } = await import('child_process');
   try {
+    const [executable, ...editorArgs] = splitParams(editor);
+    if (!executable) throw new Error('Editor command is empty');
     // sync-spawn: interactive editor-launch — launches $EDITOR/$VISUAL on the
     // config file; the user interacts with it directly (see tools/testing/
     // sync-spawn-allowlist.json). Reached only when isInteractive() is true
     // (#3062) — the no-terminal path above refuses before spawning anything.
     // Not a candidate for a bounded timeout.
-    execSync(`${editor} "${configPath}"`, { stdio: 'inherit' });
+    execFileSync(executable, [...editorArgs, configPath], { stdio: 'inherit', shell: false });
   } catch (err) {
     throw new AiwgError({
       code: 'ERR_EDITOR_FAILED',
@@ -910,48 +976,25 @@ async function handleGitignore(args: string[]): Promise<void> {
   }
 }
 
-function printUsage(): void {
-  console.log(`Usage: aiwg config <subcommand> [options]
 
-Subcommands:
-  get <key>                       Read a user config value
-  get --project <key>             Read a project config value or merged defaults.workerSelection
-    [--origins]                  Include model policy sources, pointers and input digests
-  set <key> <value>               Write a user config value
-  set --project <key> <value>     Write a project config value (validates enums)
-  list                Show all user config
-  show --project      Show resolved project config and artifact root
-  validate            Validate user config files
-  validate --project  Validate resolved project config taxonomy/index semantics
-    [--provider gitea|github|local] [--available-label NAME ...]
-  reset [<key>]       Reset key or all config to defaults
-  path                Print config directory path
-  edit                Open config in $EDITOR/$VISUAL (requires a terminal)
-  edit --print-path   Print the config file path instead of opening an editor
-  gitignore           Show/check/fix .gitignore AIWG entries
-
-Global flags:
-  --config-dir <path> Override config directory
-
-Examples:
-  aiwg config get defaults.provider
-  aiwg config set defaults.verbosity quiet
-  aiwg config set updates.channel next
-  aiwg config list
-  aiwg config show --project
-  aiwg config show --project --json
-  aiwg config get --project delivery.mode
-  aiwg config set --project delivery.mode pr-required
-  aiwg config set --project delivery.merge_style squash
-  aiwg config get --project parallelism
-  aiwg config get --project defaults.workerSelection --origins
-  aiwg config set --project parallelism.max_parallel_subagents 6
-  aiwg config reset --project parallelism
-  aiwg config validate
-  aiwg config path
-  aiwg config reset defaults.provider
-  aiwg config --config-dir /custom/path list
-  aiwg config gitignore
-  aiwg config gitignore --fix
-  aiwg config gitignore --check`);
+/** Same configuration owner and validation used by the rules command wrappers. */
+export async function setRuleConfigKey(cwd: string, source: 'project' | 'user', key: string, raw: string, userConfigDir?: string): Promise<void> {
+  assertSafeConfigPath(key);
+  if (source === 'project') {
+    await projectConfigSet(key, raw, ['--project', '--target', cwd], true);
+    return;
+  }
+  const { loadRulePinConfigs, rulePinConfigPath, installedRuleCapabilities, validateRulePinCapabilities } = await import('../rules/pins.mjs');
+  const { mkdir, writeFile, rename } = await import('node:fs/promises');
+  const configs = loadRulePinConfigs(cwd, undefined, userConfigDir);
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { value = raw; }
+  setDottedPath(configs.user as Record<string, unknown>, key, value);
+  const errors = validateRulePinCapabilities(configs.user.rules, installedRuleCapabilities(configs), configs.project.rules?.pin_groups);
+  if (errors.length) throw new Error(errors.join('\n'));
+  const file = rulePinConfigPath(cwd, 'user', userConfigDir);
+  await mkdir(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(configs.user, null, 2) + '\n');
+  await rename(temp, file);
 }

@@ -111,7 +111,7 @@ describe('Muse S1 offline profile and direct execution', () => {
     expect(adapter.qualification.status).toBe('unqualified');
     const profile = adapter.invocationProfiles!['direct-shell'];
     expect(profile.supportedVersions).toBe(adapter.supportedVersions);
-    expect(profile.controls.trust.mapping).toBe('[]');
+    expect(profile.controls.trust.mapping).toBe('["--trust-workspace"]');
     expect(profile.controls.approval.mapping).toBe('["--approval-mode","never","--approval-judge","off"]');
     expect(profile.health).toMatchObject({ coverage: 'degraded', sessionLogLocator: null, progressEvidence: [],
       qualification: { authorizedLive: false } });
@@ -125,7 +125,7 @@ describe('Muse S1 offline profile and direct execution', () => {
     const invocation = f.plan.invocation!;
     expect(invocation.selected.effort.value).toBe('medium');
     expect(invocation.argv).toEqual([process.execPath, FAKE, 'exec', '--json', '--provider', 'meta', '--model', 'muse-spark-1.3',
-      '--reasoning-effort', 'medium', '--workspace', f.cwd, '--approval-mode', 'never', '--approval-judge', 'off',
+      '--reasoning-effort', 'medium', '--workspace', f.cwd, '--trust-workspace', '--approval-mode', 'never', '--approval-judge', 'off',
       '--max-model-steps', String(invocation.health!.maxSteps), '--output-schema', path.join(f.root, 'claims schema.json'), '--prompt-file', f.request.brief]);
     expect(invocation.shellCommand).toContain('< /dev/null');
     expect(invocation.shellCommand).not.toContain(f.payload);
@@ -225,6 +225,11 @@ describe('Muse S1 offline profile and direct execution', () => {
     const tools = new Map<string, any>();
     await registerWorkerInvokeToolset({ registerTool(name: string, _config: unknown, handler: any) { tools.set(name, handler); } }, {
       projectRoot: f.root, workerWorktreesRoot: f.cwd, loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      // Synthetic bridge fixture: the run must launch the fake CLI without
+      // spawning a real context deploy (dedicated ensure coverage lives in
+      // the worker-context suites); the test below asserts nothing is
+      // written to the project.
+      ensureWorkerContext: false,
       now: () => new Date(f.snapshot.catalog.discovery!.instances!.muse.models[0].worker!.observedAt),
       launchShellWorker: async (invocation: any) => {
         const result = await execute(f, 'success'); await writeFile(invocation.finalPath, result.stdout);

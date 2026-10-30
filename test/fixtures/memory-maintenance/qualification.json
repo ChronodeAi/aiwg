@@ -1,0 +1,40 @@
+{
+  "note": "Local release defaults for synthetic fixtures only; not empirical model thresholds.",
+  "thresholds": {
+    "minimumRecall": 1,
+    "maximumStaleHits": 0,
+    "minimumActivation": 1,
+    "minimumAdherence": 1,
+    "minimumCompletion": 1,
+    "minimumSourceSurvival": 1,
+    "minimumMigrationRecall": 1,
+    "maximumContextTokens": 4000,
+    "maximumSimulatedLatencyMs": 1000
+  },
+  "latency": { "taskMs": 2, "queryMs": 3, "perResultMs": 1, "perContextTokenMs": 0.01 },
+  "localProviders": [
+    { "id": "qualification-codex", "extends": "codex" }
+  ],
+  "facts": [
+    { "id": "old-port", "topic": "tungsten", "key": "port", "value": "4100", "stale": true },
+    { "id": "current-port", "topic": "tungsten", "key": "port", "value": "4200", "stale": false },
+    { "id": "retry", "topic": "amber", "key": "backoff", "value": "bounded-exponential", "stale": false },
+    { "id": "recovery", "topic": "violet", "key": "recovery", "value": "annual-offline-drill", "stale": false, "pinned": true },
+    { "id": "unknown-use", "topic": "cobalt", "key": "retention", "value": "keep-original-source", "stale": false },
+    { "id": "decoy", "topic": "unrelated", "key": "color", "value": "green", "stale": false }
+  ],
+  "rules": [
+    { "id": "release-rule", "topic": "tungsten", "action": "review-before-release" },
+    { "id": "retry-rule", "topic": "amber", "action": "bound-retries" },
+    { "id": "recovery-rule", "topic": "violet", "action": "retain-rare-obligation" },
+    { "id": "retention-rule", "topic": "cobalt", "action": "retain-unknown-use" }
+  ],
+  "distractors": [
+    { "id": "zz-tungsten-background", "topic": "tungsten" },
+    { "id": "zz-amber-background", "topic": "amber" },
+    { "id": "zz-violet-background", "topic": "violet" },
+    { "id": "zz-cobalt-background", "topic": "cobalt" }
+  ],
+  "toolSchema": "lookup_memory(query: string): source facts and applicable obligations",
+  "discoveryAnchor": "Use the project artifact index for task-specific facts and obligations."
+}

@@ -1,6 +1,7 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { access, readFile, rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -12,7 +13,7 @@ const REPO_ROOT = resolve(__dirname, '../..');
 const roots: string[] = [];
 const roles = ['reasoning', 'coding', 'efficiency'] as const;
 
-function deploy(provider: string, target: string, home: string, dryRun = false): string {
+function deploy(provider: string, target: string, home: string, dryRun = false, source?: string): string {
   return execFileSync(process.execPath, [
     join(REPO_ROOT, 'tools/agents/deploy-agents.mjs'),
     '--provider', provider,
@@ -21,10 +22,12 @@ function deploy(provider: string, target: string, home: string, dryRun = false):
     '--target', target,
     '--skip-commands-migration',
     '--verbose',
+    ...(source ? ['--source', source] : []),
     ...(dryRun ? ['--dry-run'] : []),
   ], { timeout: 60_000,
     cwd: REPO_ROOT,
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home, HERMES_HOME: join(home, '.hermes'),
+      XDG_DATA_HOME: join(home, 'data'), XDG_CONFIG_HOME: join(home, 'config') },
     encoding: 'utf8',
   });
 }
@@ -43,7 +46,7 @@ describe('model worker provider matrix', () => {
     {
       provider: 'codex',
       path: (root: string, role: string) => join(root, `.codex/agents/aiwg-model-${role}-worker.toml`),
-      models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+      models: ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna'],
     },
     {
       provider: 'copilot',
@@ -53,7 +56,8 @@ describe('model worker provider matrix', () => {
     {
       provider: 'cursor',
       path: (root: string, role: string) => join(root, `.cursor/agents/aiwg-model-${role}-worker.md`),
-      models: ['claude-4.6-opus-high-thinking', 'claude-4.6-sonnet', 'auto'],
+      // Efficiency uses the standard catalog pin; Cursor's `auto` is never emitted (#2649).
+      models: ['claude-4.6-opus-high-thinking', 'claude-4.6-sonnet', 'claude-4.6-sonnet'],
     },
     {
       provider: 'factory',
@@ -81,6 +85,7 @@ describe('model worker provider matrix', () => {
       const file = path(target, roles[index]);
       const content = await readFile(file, 'utf8');
       expect(content).toContain(models[index]);
+      expect(content).not.toMatch(/^model: auto$/m);
       expect(content).toContain('aiwg discover');
       expect(content).toContain('aiwg show');
       expect(dryRun).toContain(file.replace(target, join(root, 'dry-run')));
@@ -114,37 +119,66 @@ describe('model worker provider matrix', () => {
     }
   });
 
-  it('declares inherited/global or unsupported degradation without false exact pins', async () => {
+  it.each(['openclaw', 'warp', 'windsurf', 'hermes'])('%s declares inherited/global or unsupported degradation without false exact pins', async provider => {
     const root = mkdtempSync(join(tmpdir(), 'aiwg-degraded-workers-'));
     roots.push(root);
     const home = join(root, 'home');
 
-    const openclawTarget = join(root, 'openclaw');
-    deploy('openclaw', openclawTarget, home);
-    for (const role of roles) {
-      const content = await readFile(
-        join(home, `.openclaw/agents/aiwg-model-${role}-worker.md`),
-        'utf8',
-      );
-      expect(content).not.toMatch(/^model:/m);
-      expect(content).toContain('exactly pinned, semantically hinted, or inherited');
+    if (provider === 'openclaw') {
+      const openclawTarget = join(root, 'openclaw');
+      deploy('openclaw', openclawTarget, home);
+      for (const role of roles) {
+        const content = await readFile(
+          join(home, `.openclaw/agents/aiwg-model-${role}-worker.md`),
+          'utf8',
+        );
+        expect(content).not.toMatch(/^model:/m);
+        expect(content).toContain('exactly pinned, semantically hinted, or inherited');
+      }
     }
 
-    const warpTarget = join(root, 'warp');
-    deploy('warp', warpTarget, home);
-    const warp = await readFile(join(warpTarget, 'WARP.md'), 'utf8');
-    for (const role of roles) expect(warp).toContain(`# AIWG ${role[0].toUpperCase()}${role.slice(1)} Model Worker`);
+    if (provider === 'warp') {
+      const warpTarget = join(root, 'warp');
+      deploy('warp', warpTarget, home);
+      const warp = await readFile(join(warpTarget, 'WARP.md'), 'utf8');
+      const warpIndex = assertStartupRuleDelivery(warpTarget, 'warp', warp);
+      for (const role of roles) {
+        const definition = `.warp/agents/aiwg-model-${role}-worker.md`;
+        expect(warpIndex).toContain(definition);
+        const content = await readFile(join(warpTarget, definition), 'utf8');
+        expect(content).toContain(`# AIWG ${role[0].toUpperCase()}${role.slice(1)} Model Worker`);
+        expect(content).toContain('exactly pinned, semantically hinted, or inherited');
+      }
+      expect(warp).not.toContain('<!-- AIWG:bound-rules:start -->');
 
-    const windsurfTarget = join(root, 'windsurf');
-    deploy('windsurf', windsurfTarget, home);
-    const windsurf = await readFile(join(windsurfTarget, 'AGENTS.md'), 'utf8');
-    for (const role of roles) expect(windsurf).toContain(`aiwg-model-${role}-worker`);
+    }
 
-    const hermesTarget = join(root, 'hermes');
-    deploy('hermes', hermesTarget, home);
-    for (const role of roles) {
-      await expect(access(join(hermesTarget, `.hermes/agents/aiwg-model-${role}-worker.md`)))
-        .rejects.toThrow();
+    if (provider === 'windsurf') {
+      const windsurfTarget = join(root, 'windsurf');
+      deploy('windsurf', windsurfTarget, home);
+      const windsurf = await readFile(join(windsurfTarget, 'AGENTS.md'), 'utf8');
+      const index = assertStartupRuleDelivery(windsurfTarget, 'windsurf', windsurf);
+      for (const role of roles) {
+        expect(index).toContain(`aiwg-model-${role}-worker`);
+        const content = await readFile(join(windsurfTarget, `.windsurf/agents/aiwg-model-${role}-worker.md`), 'utf8');
+        expect(content).toContain('exactly pinned, semantically hinted, or inherited');
+        expect(content).not.toMatch(/^model:/m);
+      }
+    }
+
+    if (provider === 'hermes') {
+      const hermesTarget = join(root, 'hermes');
+      deploy('hermes', hermesTarget, home);
+      const hermes = await readFile(join(hermesTarget, 'AGENTS.md'), 'utf8');
+      const hermesIndex = assertStartupRuleDelivery(hermesTarget, 'hermes', hermes);
+      for (const role of roles) {
+        const definition = `.hermes/agents/aiwg-model-${role}-worker.md`;
+        expect(hermesIndex).toContain(definition);
+        const content = await readFile(join(hermesTarget, definition), 'utf8');
+        expect(content).toContain('exactly pinned, semantically hinted, or inherited');
+      }
+      expect(hermes.length).toBeLessThanOrEqual(19000);
+      expect(hermes).not.toContain('<!-- AIWG:bound-rules:start -->');
     }
   });
 });

@@ -1,5 +1,13 @@
 ---
 enforcement: high
+activation: bound
+summary: "Respond to fleet chat only when addressed, replying to an active thread, or handling an owned command; otherwise stay silent."
+bound_to:
+  agents: [fleet-quiet-bot, fleet-business-bot]
+triggers:
+  - "when should a chat bot stay silent"
+  - "group messages mention only bots"
+  - "yield when another bot is addressed"
 ---
 
 # Quiet Mode

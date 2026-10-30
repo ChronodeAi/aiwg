@@ -6,6 +6,8 @@ stable_id: aiwg.guide.openrouter-fleet-costs
 
 # OpenRouter fleet cost observation
 
+Credential sources, exposure and migration status: [Supplying sensitive values](../cli/sensitive-values.md).
+
 `aiwg cost-report --fleet` reports month-to-date spend for a fleet whose bots use separate OpenRouter keys. AIWG is an observer: it reads usage and correlates it with local activity. OpenRouter remains the source of truth and the enforcement point for limits and caps.
 
 ## Configure the fleet
@@ -27,10 +29,11 @@ fleet:
 
 Never put a key, token, authorization header, or other credential in this file. The command rejects credential-like fields and values.
 
-For each `key_ref`, use one of these credential locations:
+For each `key_ref`, use one of these credential locations. Without an explicit store reference, the named environment variable takes precedence over the existing private file:
 
-- `~/.config/aiwg/keys/<key_ref>`, owned by the current user with mode `0600`; the `keys` directory must use mode `0700`, and symlinks are rejected. This is the preferred interactive-workstation path.
+- `~/.config/aiwg/keys/<key_ref>`, a regular file owned by the current user with mode `0600`; the `keys` directory must use mode `0700`. Symlinks and multiple hard links are rejected through the shared [private-file checks](../cli/sensitive-values.md#standard-input-methods).
 - `AIWG_OPENROUTER_KEY_<KEY_REF>`, uppercased with punctuation converted to underscores. For example, `openrouter-eride-quickbooksbot` maps to `AIWG_OPENROUTER_KEY_OPENROUTER_ERIDE_QUICKBOOKSBOT`. Environment injection is intended for a CI or container secret store; do not export long-lived keys in an interactive shell.
+- An optional `key_store: openrouter-production` entry alongside that bot's `key_ref` selects a named OS store entry instead. Save the value with `aiwg auth secret set openrouter-production --value-stdin` first. A selected but missing or unreadable entry fails for that bot; it never falls back to another bot's key, the environment, or a file. No automatic terminal prompt occurs.
 
 ## Run the report
 
@@ -39,6 +42,7 @@ aiwg cost-report --fleet
 aiwg cost-report --fleet --json
 aiwg cost-report --fleet --config ./fleet.yaml
 aiwg cost-report --key openrouter-eride-quickbooksbot --monthly-cap 10
+aiwg cost-report --key openrouter-eride-quickbooksbot --key-store openrouter-production
 ```
 
 The table contains `bot | machine | spend MTD | cap | % used | top-3 expensive sessions`. The configured cap is displayed for comparison; AIWG does not enforce it.

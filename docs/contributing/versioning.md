@@ -279,8 +279,8 @@ npm view @aiwg/cli version
 ```
 
 The GitHub trusted-publishing workflow publishes `aiwg`, `@aiwg/cockpit`, and
-`@aiwg/cli` at the same CalVer. It verifies each requested dist-tag and each
-package's provenance attestation before completing.
+`@aiwg/cli` at the same CalVer. After uploading release assets it checks each
+stable dist-tag and provenance attestation; visibility delays are advisory.
 
 For stable releases, OIDC sets `latest` during publication. The workflow does
 not create, advance, or maintain an npm `next` dist-tag. `next` is retired from
@@ -367,10 +367,10 @@ In addition to the four steps above, the following CI workflows act as **release
 
 ### A2A Conformance Gate Details
 
-The `A2A Conformance` workflow provisions a reference agentic-sandbox instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. The separate `npm run uat:serve-live` lane exercises AIWG's own versioned client; set `AIWG_A2A_LIVE_DISPATCH=1 AIWG_A2A_LIVE_REQUIRE_BOTH=1` for a release qualification that requires live 0.3 and 1.0 interfaces. Mock and fixture results are recorded separately and do not substitute for this live lane. Failure blocks the release.
+The `A2A Conformance` workflow provisions a reference agentic-sandbox instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. The separate `npm run uat:serve-live` lane exercises AIWG's own versioned client; set `AIWG_A2A_LIVE_DISPATCH=1 AIWG_A2A_LIVE_REQUIRE_BOTH=1` for a release qualification that requires live 0.3 and 1.0 interfaces. Mock and fixture results are recorded separately and do not substitute for this live lane. This optional conformance qualification does not gate stable publication.
 
-- **What to do on green**: proceed with tagging.
-- **What to do on red**: open the run, download the `conformance-reports-*` artifact (`report.md` + `report.junit.xml`), and diagnose. Common categories of failure are listed in the harness's own `report.md`. Do **not** force a stable tag past a red conformance run without explicit issue documentation and a follow-up tracking issue — that's how interop regressions ship.
+- **What to do on green**: retain the qualification evidence.
+- **What to do on red**: retain the `conformance-reports-*` artifact and track the interoperability defect for follow-up.
 - **Workflow inputs**: the manual-dispatch form accepts `sandbox_ref` and `conformance_ref` for pinned-ref retries (e.g., to verify a fix against a specific sandbox commit before the release engineer is back online).
 
 ## npm publication channel
@@ -590,41 +590,69 @@ is intentional; don't try to "unify" them.
 | `@aiwg/cli`     | **scoped**, under the `@aiwg` org                  | `npm install -g @aiwg/cli`     | Lightweight CLI/API runtime without the corpus; its version is exactly lockstep with `aiwg`. |
 | `@aiwg/cockpit` | **scoped**, under the `@aiwg` org                  | `npm install -g @aiwg/cockpit` | Opt-in Cockpit package.                                                                      |
 
-### Publication surfaces
+### Direct stable publication
 
-- **npmjs.org (public) — GitHub Actions only.** `.github/workflows/npm-publish.yml`
-  publishes all three packages via **OIDC trusted publishing + provenance** on tag push.
-  No npm token is involved (OIDC). GitHub Actions is the authority for npmjs.org
-  supply-chain distribution and verification.
-- **Gitea npm registry (mirror) — Gitea Actions only.** `.gitea/workflows/npm-publish.yml`
-  publishes all three packages to Gitea's bundled registry for local package management.
-  Uses the `NPM_TOKEN` secret — a **Gitea API token (`gta_…`)** with `package:write`
-  (despite the name, it is NOT an npmjs.org token).
-- **Releases:** Gitea release = `.gitea/workflows/gitea-release.yml`; GitHub release
-  = `.github/workflows/npm-publish.yml` (the mirror workflow can also create it).
+Before cutting a stable tag, the release operator must confirm successful main CI
+for the exact commit to be tagged. The workflow verifies ancestry but does not
+independently prove CI status. A signed stable tag on main starts the GitHub
+publication workflow. The workflow
+verifies the tag and main ancestry, builds and tests the release, packs and
+smoke-installs all three packages, then publishes those exact tarballs to npmjs
+using OIDC and provenance. An observed registry identity mismatch fails the
+release, and recovery from an existing-version conflict requires an exact
+identity match. Registry visibility, provenance and dist-tag checks are
+advisory after the release assets are uploaded. The workflow retains the exact
+smoke-tested packages before publishing and a partial receipt, signs the release assets and SBOM, and runs
+the post-publication Socket audit. The release candidate and cross-provider
+comparison workflows remain optional diagnostics and are not publication gates.
+The historical RC promotion policy and helpers do not authorize this direct path.
 
-The GitHub publish job creates or updates a normal GitHub release immediately
-after the tag-identity and signed-tag gates, before build/test/publish. It uses
-`docs/releases/v<version>-announcement.md`, falling back to the version's
-CHANGELOG section and then minimal notes. Only stable versions are marked latest.
-Tests, dependency-signature verification, and package-content audits remain
-blocking gates before all three npm publishes. The job then signs the locally
-packed tarball used for publication, generates and signs a CycloneDX SBOM of the
-built tree, and uploads the tarball, signatures, release manifest, `SHA256SUMS`, and `install.sh`.
-None of that asset work depends on npm registry visibility.
+### Publication surfaces and release infrastructure validation
 
-npm visibility/provenance and stable dist-tag verification run **last and are
-advisory**: short, bounded checks emit warnings and job-summary recovery commands
-if npm is still validating a package or its metadata is incorrect. These checks
-do not fail the job or prevent the subsequent Socket audit. Actual publish
-failures still fail the job; already-published versions count as success on reruns.
+GitHub's [npm publication workflow](../../.github/workflows/npm-publish.yml)
+publishes the public npmjs.org packages. Gitea's
+[npm publication workflow](../../.gitea/workflows/npm-publish.yml) mirrors the
+already published packages into Gitea's bundled registry. A green mirror run
+does not prove public publication succeeded.
 
-For a partial publish or advisory verification failure, re-check the packages'
-`dist.attestations`, `latest` version, and absence of the retired `next` alias,
-then rerun the GitHub job on the same tag:
+The slow provider deployment and CLI infrastructure suites belong to
+`test:release-slow`, declared in [the lane inventory](../../config/test-lanes.mjs)
+and selected by [its Vitest config](../../config/vitest.release-slow.config.js).
+They run before releases instead of on every merge. Fast provider deployment
+smokes remain in the default test lane. Run the release lane locally with:
 
 ```bash
-gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <tag> -f tag_to_publish=<tag>
+npm run build:cli
+npm run test:release-slow
+```
+
+[cut-tag.sh](../../tools/release/cut-tag.sh) runs that build and requires the lane
+to pass before accessing signing keys or creating either an RC or stable tag.
+The GitHub publication workflow independently requires the same lane in
+`Require slow release infrastructure tests`, before packing or publishing.
+Both use the existing hang reporter with a 30-minute deadline; failure stops
+the release. The manual-only Gitea
+[Release infrastructure tests workflow](../../.gitea/workflows/release-slow.yml)
+provides `workflow_dispatch` retries without running on main pushes.
+
+The optional [RC workflow](../../.github/workflows/release-candidate.yml) and
+[quarterly comparison workflow](../../.github/workflows/release-comparison.yml)
+also require these suites through
+[release-candidate.mjs](../../tools/release/release-candidate.mjs). The
+`routine-release-v1` profile keeps its 24 gates: its existing
+`test:release:routine-deployment` script runs `test:release-slow` followed by the
+fast `use-self-verification` contract. The `quarterly-full-v1` profile keeps all
+43 existing gates: its `test:deployment` gate runs the existing deployment lane,
+then `test:release-slow`, and succeeds only after both pass. The exact lane
+inventory and failed-gate diagnostics remain in `validation.json`.
+
+The optional Gitea mirror is a manual tag-bound dispatch after npmjs publication.
+It verifies all three public package identities before mirroring the same bytes.
+For GitHub recovery, dispatch the same signed tag:
+
+```bash
+gh workflow run npm-publish.yml --repo jmagly/aiwg --ref <stable-tag> \
+  -f tag_to_publish=<stable-tag>
 ```
 
 Gitea's bundled npm registry stores AIWG packages but does not proxy packages

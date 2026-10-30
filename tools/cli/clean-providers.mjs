@@ -32,10 +32,11 @@
  * @implements #3055
  */
 
-import { readFile, rm, writeFile } from 'fs/promises';
+import { readFile, rm } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { importImpl } from '../_resolve-impl.mjs';
+const { assertConfigDestination, writeConfigAtomic } = await importImpl(import.meta.url, 'mcp/config-file.mjs');
 
 // The registry lives in TypeScript sources, so it is only importable after a
 // build. Cleaning has to work on a tree with no build output, so fall back to
@@ -221,7 +222,8 @@ function managedServerNames(registryServers, providerId) {
  * - No AIWG-managed entries found anywhere: left untouched, byte-for-byte.
  * - File left with no remaining top-level content after removal: deleted.
  */
-async function cleanMergeTarget(absPath, { serversKey, managedNames, instructionsKey }) {
+async function cleanMergeTarget(absPath, { serversKey, managedNames, instructionsKey }, projectRoot) {
+  await assertConfigDestination(absPath, projectRoot);
   let raw;
   try {
     raw = await readFile(absPath, 'utf-8');
@@ -273,11 +275,12 @@ async function cleanMergeTarget(absPath, { serversKey, managedNames, instruction
   }
 
   if (Object.keys(data).length === 0) {
+    await assertConfigDestination(absPath, projectRoot);
     await rm(absPath, { force: true });
     return { status: 'deleted', removedServers, removedInstructions, skipped };
   }
 
-  await writeFile(absPath, `${JSON.stringify(data, null, 2)}\n`, 'utf-8');
+  await writeConfigAtomic(absPath, `${JSON.stringify(data, null, 2)}\n`, { projectRoot });
   return { status: 'updated', removedServers, removedInstructions, skipped };
 }
 
@@ -293,6 +296,11 @@ async function removePath(absPath) {
 export async function cleanProviders(projectRoot = process.cwd()) {
   const removed = [];
   const notes = [];
+
+  // Check merge destinations before removing any provider subpaths beneath them.
+  for (const target of resolveMergeTargets()) {
+    await assertConfigDestination(path.join(projectRoot, target.relPath), projectRoot);
+  }
 
   for (const target of WHOLE_REMOVE_TARGETS) {
     await removePath(path.join(projectRoot, target));
@@ -319,7 +327,7 @@ export async function cleanProviders(projectRoot = process.cwd()) {
       serversKey: target.serversKey,
       managedNames,
       instructionsKey: target.instructionsKey,
-    });
+    }, projectRoot);
 
     if (result.status === 'deleted') {
       removed.push(relPath);

@@ -18,10 +18,14 @@ uses closed stdin and a prompt file, binds `--workspace`,
 and a host-bound `--output-schema` file. Approval judge is explicitly off
 for the frozen unattended approval posture; it cannot introduce extra model
 approval decisions. A read-only request adds both `--disable-write` (non-shell
-writes only) and `--disable-shell`. Workspace trust defaults off via
-`controls.trust.mapping: "[]"`. Only a trusted host profile requiring workspace
-instructions may bind `["--trust-workspace"]`; requalification binds that
-control change. Neither the brief nor a CLI default supplies that authority.
+writes only) and `--disable-shell`. Workspace trust is bound on via
+`controls.trust.mapping: "[\"--trust-workspace\"]"` because Tier 0 workspaces
+are conductor-prepared worker trees the conductor owns (#3685: untrusted Muse
+loads `project_sources=0` with user skills only; trusted loads
+`project_sources=1` with project skills and hooks). Only the host profile may
+change that mapping; requalification binds the change. Neither the brief nor
+a CLI default supplies that authority. The operator native-argv gate refuses a
+Muse worker argv without exactly one `--trust-workspace`.
 Trust loads workspace instructions; it never emits `--disable-sandbox` or
 `--yolo`. The existing shared policy requires a qualified external sandbox
 boundary for Muse, denies contributor models and denied efforts, and rejects

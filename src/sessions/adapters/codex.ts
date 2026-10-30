@@ -1,6 +1,7 @@
 import { opendir } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -11,6 +12,7 @@ import {
   type ProviderRecord,
   type SelectedSource,
   type SessionSourceAdapter,
+  type SessionEvent,
   type SourceDescriptor,
   type SourceProbe,
 } from '../contracts.js';
@@ -22,15 +24,15 @@ import {
 export const CODEX_ADAPTER_VERSION = '1.0.0';
 export const CODEX_SOURCE_SCHEMA_VERSION = '1.0.0';
 
-const AppServerEnvelopeSchema = z.object({
+const AppServerEnvelopeSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   productVersion: z.string().optional(),
   method: z.string().min(1),
   result: z.unknown().optional(),
   params: z.unknown().optional(),
-}).passthrough();
+});
 
-const ThreadSchema = z.object({
+const ThreadSchema = z.looseObject({
   id: z.string().min(1),
   sessionId: z.string().min(1).optional(),
   parentThreadId: z.string().nullable().optional(),
@@ -39,8 +41,8 @@ const ThreadSchema = z.object({
   preview: z.string().optional(),
   modelProvider: z.string().optional(),
   cliVersion: z.string().optional(),
-  createdAt: z.number().int().optional(),
-  updatedAt: z.number().int().optional(),
+  createdAt: integer().optional(),
+  updatedAt: integer().optional(),
   cwd: z.string().optional(),
   path: z.string().nullable().optional(),
   ephemeral: z.boolean().optional(),
@@ -48,14 +50,14 @@ const ThreadSchema = z.object({
   source: z.unknown().optional(),
   gitInfo: z.unknown().optional(),
   turns: z.array(z.unknown()).optional(),
-}).passthrough();
+});
 
-const RolloutEnvelopeSchema = z.object({
+const RolloutEnvelopeSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   timestamp: z.string().optional(),
   type: z.string().min(1),
-  payload: z.unknown(),
-}).passthrough();
+  payload: z.unknown().optional(),
+});
 
 type Thread = z.infer<typeof ThreadSchema>;
 
@@ -259,16 +261,7 @@ function normalizeRolloutRecord(
       firstMetadata = true;
       state.metadataId = declaredId;
       state.nativeSessionId = declaredId;
-      const spawn = asObject(asObject(asObject(payload.source).subagent).thread_spawn);
-      const lineage = Object.fromEntries(Object.entries({
-        forkedFromId: stringValue(payload.forked_from_id),
-        parentThreadId: stringValue(spawn.parent_thread_id),
-        depth: nonnegativeInteger(spawn.depth ?? payload.depth),
-        agentPath: stringValue(payload.agent_path ?? spawn.agent_path),
-        agentNickname: stringValue(payload.agent_nickname ?? spawn.agent_nickname),
-        subagentHistoryStartOrdinal: nonnegativeInteger(payload.subagent_history_start_ordinal),
-        threadSource: stringValue(payload.thread_source),
-      }).filter(([, value]) => value !== undefined));
+      const lineage = rolloutLineage(payload);
       if (Object.keys(lineage).length > 0) state.lineage = lineage;
     } else if (declaredId !== state.metadataId) {
       state.replayParentId ??= declaredId;
@@ -300,6 +293,32 @@ function normalizeRolloutRecord(
     record.extensions!.replayed = true;
   }
   return record;
+}
+
+/** Apply the rollout identity rule to legacy catalog rows, including split parent replay. */
+export function recoverCodexRolloutIdentity(events: readonly SessionEvent[]): {
+  nativeSessionId: string;
+  lineage: Record<string, unknown>;
+} | undefined {
+  const metadata = [...events].sort((a, b) => a.sequence - b.sequence || a.eventId.localeCompare(b.eventId))
+    .find(event => asObject(event.extensions['native.codex']).rolloutType === 'session_meta');
+  if (!metadata?.nativeId) return undefined; // App Server sources can contain multiple independent threads.
+  const native = asObject(metadata.extensions['native.codex']);
+  return { nativeSessionId: metadata.nativeId,
+    lineage: { ...rolloutLineage(asObject(native.unknownFields)), ...asObject(native.lineage) } };
+}
+
+function rolloutLineage(payload: Record<string, unknown>): Record<string, unknown> {
+  const spawn = asObject(asObject(asObject(payload.source).subagent).thread_spawn);
+  return Object.fromEntries(Object.entries({
+    forkedFromId: stringValue(payload.forked_from_id),
+    parentThreadId: stringValue(spawn.parent_thread_id),
+    depth: nonnegativeInteger(spawn.depth ?? payload.depth),
+    agentPath: stringValue(payload.agent_path ?? spawn.agent_path),
+    agentNickname: stringValue(payload.agent_nickname ?? spawn.agent_nickname),
+    subagentHistoryStartOrdinal: nonnegativeInteger(payload.subagent_history_start_ordinal),
+    threadSource: stringValue(payload.thread_source),
+  }).filter(([, value]) => value !== undefined));
 }
 
 function nonnegativeInteger(value: unknown): number | undefined {

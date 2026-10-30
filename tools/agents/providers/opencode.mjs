@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * OpenCode Provider
  *
@@ -15,7 +16,6 @@
  *   - Permission system with bash command whitelist
  *   - Temperature and steps per category
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -23,7 +23,9 @@ const staticModelCatalog = _require('../../../agentic/code/providers/model-catal
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
+import { importImpl } from '../../_resolve-impl.mjs';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -50,15 +52,13 @@ import {
   filterCommandsAgainstSkills,
   deploySoulCompanions
 } from './base.mjs';
+const { assertConfigDestination, writeConfigAtomic } = await importImpl(import.meta.url, 'mcp/config-file.mjs');
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'opencode';
 export const aliases = [];
-
 export const paths = {
   agents: '.opencode/agent/',   // Discovered via {agent,agents}/**/*.md glob (#773)
   commands: '.opencode/command/',
@@ -205,7 +205,8 @@ export function getAgentConfig(category, name) {
 /**
  * Transform AIWG agent to OpenCode agent format
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('opencode', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { modelsConfig = {} } = opts;
 
   // Parse existing frontmatter
@@ -375,6 +376,7 @@ export function deploySkills(skillDirs, targetDir, opts) {
  * Deploy rules to .opencode/rule/
  */
 export function deployRules(ruleFiles, targetDir, opts) {
+  if (opts.ruleDelivery) return [];
   const destDir = path.join(targetDir, paths.rules);
   ensureDir(destDir, opts.dryRun);
   cleanupOldRuleFiles(destDir, opts);
@@ -394,9 +396,9 @@ export function deployRules(ruleFiles, targetDir, opts) {
  * Non-destructive: a malformed existing opencode.json is left untouched (warn,
  * skip) rather than overwritten.
  *
- * @returns {boolean} true if the config was changed (or would be, in dry-run)
+ * @returns {Promise<boolean>} true if the config was changed (or would be, in dry-run)
  */
-export function mergeOpenCodeInstructions(targetDir, opts = {}) {
+export async function mergeOpenCodeInstructions(targetDir, opts = {}) {
   const RULE_GLOB = `${paths.rules}*.md`; // .opencode/rule/*.md — opencode supports globs in instructions (verified in sst/opencode session/instruction.ts)
   // opencode auto-loads AGENTS.md/CLAUDE.md/CONTEXT.md but NOT AIWG.md, and the
   // generated AGENTS.md is a thin link-index that points to AIWG.md. The
@@ -407,6 +409,7 @@ export function mergeOpenCodeInstructions(targetDir, opts = {}) {
   const AIWG = 'AIWG.md';
   const wanted = [RULE_GLOB, AGENTS, AIWG];
   const configPath = path.join(targetDir, 'opencode.json');
+  await assertConfigDestination(configPath, targetDir);
 
   let config = {};
   if (fs.existsSync(configPath)) {
@@ -433,7 +436,7 @@ export function mergeOpenCodeInstructions(targetDir, opts = {}) {
 
   // Preserve operator-authored entries; append only what's missing, deduped.
   config.instructions = [...existing, ...missing];
-  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  await writeConfigAtomic(configPath, `${JSON.stringify(config, null, 2)}\n`, { projectRoot: targetDir });
   if (opts.verbose) {
     console.log(`Wired ${missing.length} entr${missing.length === 1 ? 'y' : 'ies'} into opencode.json instructions[]: ${missing.join(', ')}`);
   }
@@ -503,7 +506,7 @@ export async function postDeploy(targetDir, opts) {
   initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
 
   if (opts.createAgentsMd) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
 
   // PUW-035 (#1136): emit SDLC primary roles as TUI modes.
@@ -527,6 +530,10 @@ export function getFileExtension(type) {
 // ============================================================================
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,
@@ -637,7 +644,7 @@ export async function deploy(opts) {
     // #1548: rules on disk are inert unless referenced from opencode.json
     // instructions[]. Wire them so opencode actually loads them.
     try {
-      mergeOpenCodeInstructions(target, opts);
+      await mergeOpenCodeInstructions(target, opts);
     } catch (err) {
       console.warn(`Warning: could not wire opencode.json instructions[]: ${err && err.message ? err.message : err}`);
     }

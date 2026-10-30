@@ -3,6 +3,9 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as discovery from '../../../../src/models/model-discovery.js';
+import * as inventory from '../../../../src/providers/provider-inventory.js';
+import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
 import { modelsHandler } from '../../../../src/cli/handlers/models.js';
 
 const roots: string[] = [];
@@ -32,6 +35,7 @@ Check.
 }
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   const { rm } = await import('node:fs/promises');
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
@@ -42,6 +46,76 @@ async function run(root: string, args: string[]) {
 }
 
 describe('models CLI handler', () => {
+
+  it.each(['success', 'partial', 'failure'] as const)(
+    'T-OG-02/12 refresh preserves preference bytes after %s discovery', async outcome => {
+      const { root, agent, skill } = await fixture();
+      const home = path.join(root, 'home');
+      vi.stubEnv('HOME', home);
+      vi.stubEnv('AIWG_CONFIG', path.join(home, '.config/aiwg'));
+      const f = workerResolutionFixture();
+      const userFile = path.join(home, '.config/aiwg/models.json');
+      const projectFile = path.join(root, 'models.json');
+      const groupsFile = path.join(root, '.aiwg/aiwg.config');
+      const staticFile = path.join(root, 'agentic/code/providers/model-catalog.v1.json');
+      const cacheFile = path.join(home, '.cache/aiwg/model-catalog.v1.json');
+      for (const file of [userFile, groupsFile, staticFile]) {
+        await mkdir(path.dirname(file), { recursive: true });
+      }
+      for (const [file, tier, pin] of [
+        [userFile, 'economy', 'user-exact-pin'], [projectFile, 'premium', 'project-exact-pin'],
+      ]) {
+        await writeFile(file, JSON.stringify({ defaults: { provider: 'codex', tier,
+          workerSelection: f.projectPolicy }, agentOverrides: {
+          'aiwg-model-coding-worker': { 'model-override': pin },
+        } }, null, '\t') + '\n\n');
+      }
+      await writeFile(groupsFile, JSON.stringify(f.snapshot.config, null, 4) + '\n');
+      const staticCatalog = { version: '1.0.0', providers: {
+        codex: { roles: { coding: { id: 'static-pin' } } },
+      } };
+      await writeFile(staticFile, JSON.stringify(staticCatalog));
+      const files = [userFile, projectFile, groupsFile, agent, skill, staticFile];
+      const before = await Promise.all(files.map(file => readFile(file)));
+      vi.spyOn(inventory, 'collectProviderInventory').mockResolvedValue({
+        generatedAt: f.request.now, projectDir: root, activeProvider: 'codex', activeSource: 'env',
+        providers: ['codex', 'pi'].map(id => ({ id, displayName: id, available: true,
+          active: id === 'codex', configured: true, deployed: true, detected: true, evidence: [], reasons: [],
+        })),
+      });
+      const fakeSource = (provider: string) => vi.fn(async () => {
+        if (outcome === 'failure' || (outcome === 'partial' && provider === 'pi')) {
+          throw new Error('synthetic catalog unavailable');
+        }
+        return { provider, source: 'native' as const, observedAt: f.request.now,
+          accountScope: 'synthetic', models: [{ id: `new-${provider}-model` }] };
+      });
+      const nativeDiscoverers = { codex: fakeSource('codex'), pi: fakeSource('pi') };
+      const fetchImpl = vi.fn(async () => {
+        if (outcome === 'failure') throw new Error('synthetic remote unavailable');
+        return new Response(JSON.stringify(staticCatalog));
+      });
+      const resolveCatalog = discovery.resolveDynamicModelCatalog;
+      const refresh = vi.spyOn(discovery, 'resolveDynamicModelCatalog').mockImplementation(options =>
+        resolveCatalog({ ...options, homeDir: home, nativeDiscoverers, fetchImpl,
+          now: () => new Date(f.request.now) }));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      expect((await run(root, ['refresh', '--url', 'https://catalog.invalid/models', '--json'])).exitCode).toBe(0);
+      expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ allowNetwork: true, forceRefresh: true }));
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      for (const source of Object.values(nativeDiscoverers)) expect(source).toHaveBeenCalledOnce();
+      const output = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+      expect(output.discovery.source).toBe(outcome === 'failure' ? 'static' : 'remote');
+      expect(output.discovery.providers.codex).toMatchObject(outcome === 'failure'
+        ? { models: [], error: 'synthetic catalog unavailable' }
+        : { models: [{ id: 'new-codex-model' }] });
+      expect(output.discovery.providers.pi).toMatchObject(outcome === 'success'
+        ? { models: [{ id: 'new-pi-model' }] } : { models: [], error: 'synthetic catalog unavailable' });
+      expect(JSON.parse(await readFile(cacheFile, 'utf8'))).toEqual(output);
+      for (let i = 0; i < files.length; i++) expect(await readFile(files[i]), files[i]).toEqual(before[i]);
+    },
+  );
+
   it('lists and resolves exact skill policy without mutation', async () => {
     const { root, skill } = await fixture();
     const before = await readFile(skill, 'utf8');

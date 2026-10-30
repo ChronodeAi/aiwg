@@ -14,18 +14,22 @@ import { spawnSync, spawn as nodeSpawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { chmod, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { workerConfigDigest } from '../../../src/config/aiwg-config.js';
+import { WORKER_OPERATOR_APPROVAL } from '../../../src/models/provider-policy.js';
 import { resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../src/serve/worker-invocation.js';
 import { assertValidWorkerPayload } from '../../../src/mission-protocol/index.js';
 import { buildShellStopControl, waitForUnitTermination } from '../../../src/mcp/tools/worker-shell-control.mjs';
 import { loadRecoveryModuleGraph } from '../../helpers/recovery-module-graph.mjs';
+import { workerSigningFixture } from '../../helpers/worker-qualification-signing.js';
 import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
 import { systemdClientFixture } from '../../fixtures/systemd-client.js';
+import { registerSystemdLaunchPreparationTests } from './worker-invoke-launch-preparation.js';
+import { detectWorkerIsolation } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 import { workerInputSchema, workerOutputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
 import { parseToolsets, registerOptInToolsets, KNOWN_TOOLSETS } from '../../../src/mcp/tools/subsystems.mjs';
 
@@ -34,6 +38,11 @@ import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecut
 // equivalence tests only; never a production import.
 // @ts-expect-error — .mjs untyped
 import * as workerInvokeBaseline from '../../fixtures/ralph-recovery-baseline/worker-invoke.mjs';
+// The frozen side revalidates a brief's pins with its own frozen resolver, so
+// a baseline-side brief must be resolved by that resolver. Its catalogDigest
+// predates GH #364 (the branch drops load-time discovery.fetchedAt).
+import { resolveWorkerInvocation as resolveWorkerInvocationBaseline }
+  from '../../fixtures/ralph-recovery-baseline/src/serve/worker-invocation.ts';
 
 /** These lifecycle fixtures start at canary execution. Complete the required
  * relevant preliminary probe explicitly before entering that phase. */
@@ -90,7 +99,10 @@ const HEALTHY_GATE_LIVE = Object.freeze({
  * that never started (#3026). A test that passes its own `gateInputs`, for
  * example to prove a failing signal still refuses, overrides the default. */
 function registerWorkerInvokeToolset(server: any, options: Record<string, unknown> = {}) {
-  return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ...options });
+  // #3685 round 2: the bridge ensures the worker bootstrap by default in
+  // production; tests targeting other behavior opt out here and opt back
+  // in per-test with an explicit `ensureWorkerContext` seam value.
+  return registerProductionToolset(server, { gateInputs: { live: HEALTHY_GATE_LIVE }, ensureWorkerContext: false, ...options });
 }
 
 async function registerRecoveryCapabilities(driver: object, capabilities: { canVerifyAttempt?: boolean }) {
@@ -102,6 +114,8 @@ const roots: string[] = [];
 // Some sandbox hosts refuse native child stdio pipes (EPERM). Framing unit
 // tests still run there; the supervised-process check needs actual pipes.
 const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8', timeout: 10000 }).stdout === 'ok';
+// Real systemd-unit isolation is only available with a reachable user manager (#3691).
+const hostHasUserSystemd = process.platform === 'linux' && detectWorkerIsolation().mode === 'systemd-unit';
 // #2915 review 6 (finding 3): `run()` now actually debits the shared
 // in-process allowance ledger (previously it only reserved, never
 // charged), so distinct test cases that resolve to the SAME task-chain
@@ -112,7 +126,7 @@ const supportsCapturedWorkerStdio = spawnSync(process.execPath, ['-e', 'process.
 afterEach(async () => { vi.unstubAllEnvs(); resetInProcessAllowanceLedger(); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }); });
 
 async function tempRoot() {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-worker-invoke-'));
+  const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-worker-invoke-'));
   roots.push(root);
   return root;
 }
@@ -136,7 +150,7 @@ describe('worker MCP stdout byte budgets', () => {
   it('rejects a split unterminated frame before concatenating the overflow bytes', async () => {
     const { child, transport, emit } = await transportFixture();
     emit(Buffer.alloc(MAX_MCP_FRAME_BYTES, 120));
-    expect(transport._buffer.length).toBe(MAX_MCP_FRAME_BYTES);
+    expect(transport._bufferBytes).toBe(MAX_MCP_FRAME_BYTES);
     const concat = vi.spyOn(Buffer, 'concat');
     try {
       emit(Buffer.from('x'));
@@ -151,6 +165,35 @@ describe('worker MCP stdout byte budgets', () => {
     child.emit('close');
     expect(transport.onerror).toHaveBeenCalledTimes(1);
     expect(transport.onclose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['complete', 'overflow'])('bounds copying for a frame split across many pipe reads (%s)', async ending => {
+    const { transport, emit } = await transportFixture();
+    const frame = Buffer.alloc(MAX_MCP_FRAME_BYTES, 32);
+    Buffer.from('{"jsonrpc":"2.0","method":"notifications/test"}').copy(frame);
+    const concat = vi.spyOn(Buffer, 'concat');
+    const scan = vi.spyOn(Buffer.prototype, 'indexOf');
+    try {
+      for (let offset = 0; offset < frame.length; offset += 16 * 1024) {
+        emit(frame.subarray(offset, offset + 16 * 1024));
+      }
+      expect(concat.mock.calls.length).toBe(0);
+      // Searching old fragments again would turn small pipe reads quadratic.
+      expect(scan.mock.contexts.every((buffer: Buffer) => buffer.length <= 16 * 1024)).toBe(true);
+      if (ending === 'complete') {
+        emit(Buffer.from('\n'));
+        expect(concat).toHaveBeenCalledTimes(1);
+        expect(transport.onmessage).toHaveBeenCalledWith({ jsonrpc: '2.0', method: 'notifications/test' });
+        expect(transport.onerror).not.toHaveBeenCalled();
+      } else {
+        emit(Buffer.from('x'));
+        expect(concat.mock.calls.length).toBe(0);
+        expect(transport._failure.code).toBe('OG_WORKER_MCP_FRAME_TOO_LARGE');
+        expect(transport.onmessage).not.toHaveBeenCalled();
+      }
+      expect(transport._buffer).toBeUndefined();
+      expect(transport._bufferBytes).toBe(0);
+    } finally { concat.mockRestore(); scan.mockRestore(); }
   });
 
   it('rejects an oversized newline-terminated frame in one chunk before parsing it', async () => {
@@ -594,6 +637,173 @@ describe('atomic admission under concurrency (#2892 M1)', () => {
 // cancelled, never completed.
 // ---------------------------------------------------------------------------
 describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
+  it('T-OG-20/T-OG-23 isolates cancellation on a shared MCP server while pending status stays read-only', async () => {
+    const root = await tempRoot();
+    const f = buildFixture(root, 'mcp');
+    const requests = await Promise.all(['a', 'b'].map(async id => {
+      const workdir = path.join(root, id); await mkdir(workdir);
+      const request = { operation: 'run', request_id: `shared-${id}`, role: 'coding' as const,
+        task: 'implementation', group: 'workers', brief: path.join(root, `${id}.json`),
+        workdir, final_output: path.join(workdir, 'final.json'), transport: 'mcp' as const };
+      await buildStructuredBrief(f, request);
+      return request;
+    }));
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { child, transport } = await transportFixture({ start: false });
+    const messages: any[] = [];
+    const outstanding = new Map<string, any>();
+    let entered!: () => void;
+    const bothPending = new Promise<void>(resolve => { entered = resolve; });
+    const respond = (id: number, result: any) => child.stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`));
+    // One in-process server and SDK connection multiplex both outstanding calls.
+    child.stdin.write.mockImplementation((bytes: string) => {
+      const message = JSON.parse(bytes); messages.push(message);
+      if (message.method === 'initialize') queueMicrotask(() => respond(message.id, {
+        protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' },
+      }));
+      if (message.method === 'tools/call') {
+        outstanding.set(message.params.arguments.workspace, message);
+        if (outstanding.size === 2) entered();
+      }
+      return true;
+    });
+    child.exitCode = 0; child.signalCode = null;
+    child.stdin.end = () => child.emit('close');
+    const client = new Client({ name: 'shared-fixture', version: '1' }, { capabilities: {} });
+    await client.connect(transport);
+    let now = Date.parse(f.now);
+    const registry = createInvocationRegistry({ maxActive: 2, now: () => now });
+    const tools = new Map<string, any>();
+    const callWorker = vi.fn(async (binding: any, _server: any, options: any) => {
+      options.registerControl({ stop: async () => {
+        const request = outstanding.get(binding.arguments.workspace);
+        await client.notification({ method: 'notifications/cancelled', params: { requestId: request.id, reason: 'operator-cancel' } });
+        return { delivered: true, termination: 'uncertain' };
+      } });
+      const response = await client.callTool({ name: binding.tool, arguments: binding.arguments }, undefined, { timeout: 5000 });
+      return { outcome: 'responded', response };
+    });
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: root, scopedBreaker: null,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), callMcpWorker: callWorker,
+      now: () => new Date(now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const runs = requests.map(request => call(request));
+    const claims = { content: [{ type: 'text', text: JSON.stringify({ version: 1, status: 'completed',
+      summary: 'synthetic', claims: [], artifacts: [], checks: [], limitations: [] }) }] };
+    try {
+      await Promise.race([bothPending, Promise.all(runs).then(() => { throw new Error('Both calls must remain pending'); })]);
+      const entries = requests.map(request => registry.values().find((entry: any) => entry.requestId === request.request_id));
+      const wire = requests.map(request => outstanding.get(request.workdir));
+      expect(wire[0].id).not.toBe(wire[1].id);
+      const status = async (entry: any) => JSON.parse((await call({ operation: 'status', invocation_id: entry.invocationId })).content[0].text);
+      const trace = [await Promise.all(entries.map(async (entry: any) => (await status(entry)).status))];
+      const before = JSON.stringify(registry.values());
+      const wireBefore = JSON.stringify(messages);
+      const files = async () => Promise.all(requests.map(async request => Promise.all((await readdir(request.workdir)).sort().map(async name => {
+        const filename = path.join(request.workdir, name);
+        return { name, bytes: await readFile(filename, 'utf8'), mtime: (await stat(filename)).mtimeMs };
+      }))));
+      const filesBefore = await files();
+      for (let tick = 0; tick < 8; tick++) {
+        now += 15_000;
+        for (const entry of entries) {
+          const observed = await status(entry);
+          expect(observed).toMatchObject({ status: 'running', termination: 'running', health: null, diagnostics: [], terminalAt: null });
+          expect(Buffer.byteLength(JSON.stringify(observed))).toBeLessThan(2048);
+        }
+      }
+      expect(JSON.stringify(registry.values())).toBe(before);
+      expect(JSON.stringify(messages)).toBe(wireBefore);
+      expect(await files()).toEqual(filesBefore);
+      expect(registry.canStart()).toBe(false);
+      const cancelled = JSON.parse((await call({ operation: 'cancel', invocation_id: entries[0].invocationId })).content[0].text);
+      expect(cancelled).toMatchObject({ cancelRequested: true, cancelDelivered: true, termination: 'running' });
+      expect(messages.filter(message => message.method === 'notifications/cancelled')).toEqual([
+        { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: wire[0].id, reason: 'operator-cancel' } },
+      ]);
+      expect(await status(entries[1])).toMatchObject({ status: 'running', cancelRequested: false, cancelDelivered: false });
+      trace.push(['cancel-delivered', (await status(entries[1])).status]);
+      respond(wire[1].id, claims);
+      expect(JSON.parse((await runs[1]).content[0].text).status).toBe('completed');
+      trace.push(['cancel-pending', (await status(entries[1])).status]);
+      respond(wire[0].id, claims);
+      expect(JSON.parse((await runs[0]).content[0].text).status).toBe('cancelled');
+      trace.push(await Promise.all(entries.map(async (entry: any) => (await status(entry)).status)));
+      expect(trace).toEqual([['running', 'running'], ['cancel-delivered', 'running'], ['cancel-pending', 'completed'], ['cancelled', 'completed']]);
+      for (const request of requests) expect((await call(request)).isError).toBe(true);
+      expect(callWorker).toHaveBeenCalledTimes(2);
+      expect(messages.filter(message => message.method === 'tools/call')).toHaveLength(2);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      for (const request of outstanding.values()) respond(request.id, claims);
+      await Promise.allSettled(runs);
+      await client.close();
+    }
+  });
+
+  it.each(['drop', 'late'] as const)('traces pending MCP %s after request-only cancel without replay or status mutation', async scenario => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.json');
+    const final = path.join(work, 'final.json');
+    const f = buildFixture(root, 'mcp');
+    const request = { operation: 'run', request_id: `chaos-${scenario}`, role: 'coding' as const,
+      task: 'implementation', group: 'workers', brief, workdir: work, final_output: final, transport: 'mcp' as const };
+    await buildStructuredBrief(f, request);
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = new Map<string, any>();
+    let release!: (value: any) => void;
+    let entered!: () => void;
+    const pending = new Promise<any>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const stop = vi.fn(async () => ({ delivered: true, termination: 'uncertain' }));
+    const callWorker = vi.fn(async (_binding: any, _server: any, options: any) => {
+      options.registerControl({ stop });
+      entered();
+      return pending;
+    });
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, registry, workerWorktreesRoot: work, scopedBreaker: null,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      callMcpWorker: callWorker, now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const run = call(request);
+    const trace: string[] = [];
+    try {
+      await Promise.race([started, run.then(() => { throw new Error('Worker did not reach pending call'); })]);
+      const [entry] = registry.values();
+      const status = async () => JSON.parse((await call({ operation: 'status', invocation_id: entry.invocationId })).content[0].text);
+      const before = JSON.stringify(registry.values());
+      trace.push((await status()).status);
+      expect(JSON.stringify(registry.values())).toBe(before);
+      expect(registry.canStart()).toBe(false);
+      const cancelled = JSON.parse((await call({ operation: 'cancel', invocation_id: entry.invocationId })).content[0].text);
+      trace.push(cancelled.cancelDelivered ? 'cancel-delivered' : 'cancel-missing');
+      expect(cancelled.termination).not.toBe('confirmed');
+      expect(registry.canStart()).toBe(false);
+      expect(stop).toHaveBeenCalledOnce();
+      const partial = path.join(work, 'partial.txt'); await writeFile(partial, 'synthetic partial\n');
+      release(scenario === 'drop' ? { outcome: 'disconnected', termination: 'uncertain' }
+        : { outcome: 'responded', response: { content: [{ type: 'text', text: JSON.stringify({ version: 1,
+          status: 'completed', summary: 'synthetic', claims: [], artifacts: [], checks: [], limitations: [] }) }] } });
+      const terminal = JSON.parse((await run).content[0].text);
+      trace.push(terminal.status);
+      expect(trace).toEqual(['running', 'cancel-delivered', scenario === 'drop' ? 'uncertain' : 'cancelled']);
+      expect(await readFile(partial, 'utf8')).toBe('synthetic partial\n');
+      const replay = await call(request);
+      expect(replay.isError).toBe(true);
+      expect(replay.content[0].text).toMatch(/capacity is reserved|request_id was already used/);
+      expect(callWorker).toHaveBeenCalledOnce();
+      if (scenario === 'drop') expect(registry.canStart()).toBe(false);
+    } finally {
+      release({ outcome: 'disconnected', termination: 'uncertain' });
+      await run;
+    }
+  });
+
   it('an uncertain shell run stays LIVE — a second run is refused, not admitted, until disposed', async () => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work);
@@ -827,6 +1037,9 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
   // (`mcpBinding.requestId` was never even populated — always `null`).
   it.skipIf(!supportsCapturedWorkerStdio || process.platform !== 'linux')('cancel sends notifications/cancelled with the ACTUAL in-flight request id, never null (#2892 F2)', async () => {
     const root = await tempRoot();
+    // Pin degraded isolation. Under a real user systemd the unit SIGKILL proves
+    // termination (#3691), which would make this request-id test depend on the host.
+    vi.stubEnv('PATH', await tempRoot());
     const work = path.join(root, 'work'); await mkdir(work, { recursive: true });
     const briefPath = path.join(root, 'brief.md');
     const finalOutput = path.join(work, 'final.json');
@@ -834,6 +1047,16 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     const configPath = path.join(root, 'fixture-config.json');
     await writeFile(configPath, JSON.stringify({ recordPath, scenario: 'stall' }));
     const f = buildFixture(root, 'mcp');
+    // This case intentionally leaves the fixture request pending after the
+    // cancellation notification: delivery alone is not stop proof. Bound the
+    // request so the test can await the complete run lifecycle instead of
+    // leaking it into later tests until the fixture's default 30s deadline.
+    const buildInvocation = f.drivers.codex.buildInvocation;
+    f.drivers.codex.buildInvocation = async input => {
+      const built = await buildInvocation(input);
+      built.mcp.timeoutSeconds = 2;
+      return built;
+    };
     f.drivers.codex.mcpRegistry = {
       get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
         args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
@@ -878,6 +1101,12 @@ describe('cancellation and uncertain-run capacity (#2892 M2)', () => {
     // The ACTUAL in-flight tools/call request id, not a caller-opaque value.
     expect(cancelEvent.requestId).toBe(callEvent.requestId);
     expect(cancelEvent.requestId).not.toBeNull();
+    const completed = JSON.parse((await runPromise).content[0].text);
+    expect(completed).toMatchObject({
+      requestId: 'f2-reqid', status: 'uncertain', termination: 'uncertain',
+      cancelRequested: true, cancelDelivered: true,
+      diagnostics: ['worker timeout; cancellation delivered'],
+    });
   });
 
   it('cancel delivers a real stop signal, and a later completion is recorded cancelled, never completed', async () => {
@@ -1338,9 +1567,9 @@ function buildFixture(root: string, transport: 'shell' | 'mcp') {
 async function buildStructuredBrief(f: ReturnType<typeof buildFixture>, request: {
   role: 'efficiency' | 'coding' | 'reasoning'; task: string; group: string;
   brief: string; workdir: string; final_output: string; transport: 'mcp';
-}) {
+}, resolve: (...args: any[]) => Promise<any> = resolveWorkerInvocation) {
   await writeFile(request.brief, 'placeholder-before-structured-brief');
-  const probe = await resolveWorkerInvocation(f.snapshot, request as any, f.drivers, new Date(f.now).toISOString());
+  const probe = await resolve(f.snapshot, request as any, f.drivers, new Date(f.now).toISOString());
   if (probe.invocation?.readiness !== 'launchable') {
     throw new Error(`buildStructuredBrief probe did not launch: ${JSON.stringify(probe.diagnostics)}`);
   }
@@ -1381,6 +1610,57 @@ async function buildStructuredBrief(f: ReturnType<typeof buildFixture>, request:
 // user manager (CI runs as root with none) or a real provider installation.
 // ---------------------------------------------------------------------------
 describe('run/status/cancel lifecycle (shell transport, injected launch)', () => {
+  it.each(['native-sandbox', 'systemd-unit'] as const)('honors pinned %s isolation before MCP shell dispatch', async launchMode => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const brief = path.join(root, 'brief.md'); await writeFile(brief, 'Synthetic task.');
+    const finalOutput = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    f.snapshot.config.parallelism!.groups!.workers.execution = {
+      launchMode, sandbox: 'workspace-write', approval: 'never', network: 'deny', transport: 'shell',
+    };
+    f.adapter.provider = 'codex';
+    f.adapter.qualification.evidenceRef = WORKER_OPERATOR_APPROVAL;
+    f.profile.envAllowlist = [];
+    f.drivers.codex.buildInvocation = async (input: any) => ({
+      argv: ['/synthetic/codex', '--no-daemon', 'exec', '--ignore-user-config',
+        '-m', input.selected.model, '-s', input.permissions.sandbox,
+        '-c', `model_reasoning_effort=${JSON.stringify(input.selected.effort.value)}`,
+        '-c', 'approval_policy="never"', '-C', input.cwd, '-o', input.finalPath, '--json', '-'],
+      stdin: 'closed', envNames: [],
+    });
+    const launchShellWorker = vi.fn(async invocation => {
+      expect(invocation.isolation).toBe('systemd-unit');
+      const claims = { version: 1, status: 'completed', summary: 'Synthetic result.', claims: [], artifacts: [], checks: [], limitations: [] };
+      await writeFile(invocation.finalPath, JSON.stringify({ type: 'result', result: claims }));
+      return { launched: true, mode: 'systemd-unit', unit: 'synthetic.service' };
+    });
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    const tools = await captureTool(undefined, {
+      projectRoot: root, workerWorktreesRoot: work, registry,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker, now: () => new Date(f.now),
+      waitForUnitTermination: async () => ({ termination: 'confirmed', exitCode: 0 }),
+    });
+    const result = await tools.get('worker-invoke').handler({
+      operation: 'run', request_id: 'pinned-isolation', role: 'coding', task: 'implementation', group: 'workers',
+      brief, workdir: work, final_output: finalOutput, transport: 'shell',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(body.termination).toBe('confirmed');
+    expect(registry.canStart()).toBe(true);
+    if (launchMode === 'native-sandbox') {
+      expect(body.status).toBe('blocked');
+      expect(body.diagnostics).toEqual([{ code: 'OG_POLICY_RELAXATION', pointer: '/worker/isolation',
+        message: 'MCP worker-invoke run does not support pinned native-sandbox isolation' }]);
+      expect(launchShellWorker).not.toHaveBeenCalled();
+      expect(existsSync(finalOutput)).toBe(false);
+    } else {
+      expect(launchShellWorker).toHaveBeenCalledOnce();
+      expect(body.status, JSON.stringify(body)).toBe('completed');
+    }
+  });
+
   it('resolves, launches, parses the fixture CLI final, and reports completed', async () => {
     const root = await tempRoot();
     const work = path.join(root, 'work'); await mkdir(work);
@@ -1665,8 +1945,12 @@ describe('mcp transport against the real fake stdio worker (T-OG-17)', () => {
     }
   });
 
+  // Measured <2 s/iteration with eight CPU burners; 6 × 2 s × 3 headroom.
   it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('retains capacity and control after each unconfirmed degraded overflow', async () => {
     const root = await tempRoot();
+    // Pin degraded isolation: with no systemd-run on PATH the launcher cannot
+    // place the worker in a unit, so termination cannot be proven (#3691).
+    vi.stubEnv('PATH', await tempRoot());
     const script = path.join(root, 'hostile-worker.mjs');
     const pidPath = path.join(root, 'worker.pid');
     await writeFile(script, `import { writeFileSync } from 'node:fs';
@@ -1703,6 +1987,88 @@ setInterval(() => {}, 1000);
         pid ??= Number(await readFile(pidPath, 'utf8').catch(() => '0'));
         if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ } }
       }
+    }
+  }, 6 * 2000 * 3);
+
+  // #3691: the same degraded-overflow shape with a payload exactly one byte
+  // over the frame cap. At cap+1 the worker has fully flushed and idles, so
+  // unlike the 12 MiB worker it cannot die via EPIPE — the stop authority
+  // itself must stop it. The six-iteration test above keeps the 12 MiB payload unchanged.
+  it.skipIf(process.platform !== 'linux' || !supportsCapturedWorkerStdio)('stops a worker writing exactly one byte over the frame cap', async () => {
+    const root = await tempRoot();
+    // Degraded isolation, as in the 12 MiB test above; the systemd-unit case follows.
+    vi.stubEnv('PATH', await tempRoot());
+    const script = path.join(root, 'hostile-worker.mjs');
+    const pidPath = path.join(root, 'worker.pid');
+    await writeFile(script, `import { writeFileSync } from 'node:fs';
+writeFileSync(process.argv[2], String(process.pid));
+process.on('SIGTERM', () => {});
+process.stdout.write(Buffer.alloc(${MAX_MCP_FRAME_BYTES + 1}, 120));
+setInterval(() => {}, 1000);
+`);
+    const f = mcpFixture(root, path.join(root, 'unused-config.json'));
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath, args: [script, pidPath] }),
+    };
+    resetInProcessAllowanceLedger();
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    let pid: number | undefined;
+    try {
+      const result = await invoke(root, '', {}, { registry, loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }) });
+      pid = Number(await readFile(pidPath, 'utf8'));
+      const body = JSON.parse(result.content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('uncertain');
+      expect(body.termination).toBe('uncertain');
+      expect(body.diagnostics.join('; ')).toContain('OG_WORKER_MCP_FRAME_TOO_LARGE');
+      expect(body.diagnostics.join('; ')).not.toContain('OG_WORKER_MCP_STOP_FAILED');
+      const [entry] = registry.values();
+      expect(entry.terminalAt).toBeNull();
+      expect(entry.control?.stop).toBeTypeOf('function');
+      expect(registry.canStart()).toBe(false);
+      // SIGKILL delivery precedes process exit and reaping.
+      await vi.waitFor(() => {
+        expect(() => process.kill(pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+      }, { timeout: 2000, interval: 25 });
+      await rm(path.join(root, 'work', 'final.json'), { force: true });
+    } finally {
+      pid ??= Number(await readFile(pidPath, 'utf8').catch(() => '0'));
+      if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ } }
+    }
+  }, 30000);
+
+  // #3691: under systemd-unit isolation the overflow stop SIGKILLs the unit's
+  // whole cgroup, so an inactive unit proves termination and frees capacity.
+  // A plain `systemctl stop` used to wait out the stop timeout of this
+  // SIGTERM-ignoring worker and report the overflow as unstopped.
+  it.skipIf(!supportsCapturedWorkerStdio || !hostHasUserSystemd)('confirms the stop of a cap+1 overflow worker under systemd-unit isolation', async () => {
+    const root = await tempRoot();
+    const script = path.join(root, 'hostile-worker.mjs');
+    const pidPath = path.join(root, 'worker.pid');
+    await writeFile(script, `import { writeFileSync } from 'node:fs';
+writeFileSync(process.argv[2], String(process.pid));
+process.on('SIGTERM', () => {});
+process.stdout.write(Buffer.alloc(${MAX_MCP_FRAME_BYTES + 1}, 120));
+setInterval(() => {}, 1000);
+`);
+    const f = mcpFixture(root, path.join(root, 'unused-config.json'));
+    f.drivers.codex.mcpRegistry = {
+      get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath, args: [script, pidPath] }),
+    };
+    resetInProcessAllowanceLedger();
+    const registry = createInvocationRegistry({ maxActive: 1 });
+    let pid: number | undefined;
+    try {
+      const result = await invoke(root, '', {}, { registry, loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }) });
+      pid = Number(await readFile(pidPath, 'utf8'));
+      const body = JSON.parse(result.content[0].text);
+      expect(body.status, JSON.stringify(body)).toBe('failed');
+      expect(body.termination).toBe('confirmed');
+      expect(body.diagnostics).toEqual(['OG_WORKER_MCP_FRAME_TOO_LARGE']);
+      expect(registry.canStart()).toBe(true);
+      expect(() => process.kill(pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+    } finally {
+      pid ??= Number(await readFile(pidPath, 'utf8').catch(() => '0'));
+      if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already reaped */ } }
     }
   }, 30000);
 
@@ -2839,87 +3205,8 @@ setInterval(() => {}, 20);`);
     }
   });
 
-  it('supplies a memory ceiling and private framed stdin to the production systemd launcher', async () => {
-    const client = systemdClientFixture();
-    roots.push(client.root);
-    vi.stubEnv('PATH', client.root);
-    let stdinPath = '';
-    let h: Awaited<ReturnType<typeof harness>>;
-    const spawn = vi.fn((command: string, args: string[], _options: any) => {
-      if (command === client.binary) {
-        expect(args).toContain('MemoryMax=2G');
-        const property = args.find(arg => arg.startsWith('StandardInputFile='))!;
-        stdinPath = property.slice('StandardInputFile='.length);
-        const frame = JSON.parse(readFileSync(stdinPath, 'utf8'));
-        expect(frame).toEqual({ message: 'private worker brief', model_override: 'synthetic/a%b', cwd: h.work });
-        expect(args.join(' ')).not.toContain('private worker brief');
-        expect(readFileSync(stdinPath).length).toBeGreaterThan(0);
-        return { status: 0, stdout: '', stderr: '' };
-      }
-      return { status: 0, stdout: args.includes('show-environment') ? '' : '123\n', stderr: '' };
-    });
-    h = await harness({ gateInputs: { live: HEALTHY_GATE_LIVE, isolation: { mode: 'systemd-unit' }, spawn },
-      waitForUnitTermination: async () => ({ termination: 'confirmed', exitCode: 0 }) });
-    await installJsonWorker(h);
-    const result = await h.run();
-    expect(result.termination).toBe('confirmed');
-    expect(spawn.mock.calls.filter(c => c[0] === client.binary)).toHaveLength(1);
-    // Launcher exceptions become outcomes; a swallowed assertion must fail here.
-    expect(spawn.mock.results[spawn.mock.calls.findIndex(c => c[0] === client.binary)])
-      .toEqual({ type: 'return', value: { status: 0, stdout: '', stderr: '' } });
-    expect(spawn).toHaveBeenCalledWith(client.binary, expect.arrayContaining(['MemoryMax=2G']),
-      expect.objectContaining({ env: expect.objectContaining({ PATH: client.root }) }));
-    expect(spawn).toHaveBeenCalledWith(client.systemctl, ['--user', 'show-environment'],
-      expect.objectContaining({ env: expect.objectContaining({ PATH: client.root }) }));
-    expect(stdinPath).not.toBe('');
-    await expect(stat(stdinPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(h.registry.canStart()).toBe(true);
-  });
-
-  it.each(['nonzero', 'timeout', 'throws'])('retains framed stdin and output after an attempted systemd launch %s until stopped', async failure => {
-    const client = systemdClientFixture();
-    roots.push(client.root);
-    vi.stubEnv('PATH', client.root);
-    let stdinPath = '';
-    let unit = '';
-    let confirmed = false;
-    let h: Awaited<ReturnType<typeof harness>>;
-    const spawn = vi.fn((binary: string, args: string[]) => {
-      if (binary !== client.binary) return { status: 0, stdout: '', stderr: '' };
-      stdinPath = args.find(arg => arg.startsWith('StandardInputFile='))!.slice('StandardInputFile='.length);
-      unit = args.find(arg => arg.startsWith('--unit='))!.slice('--unit='.length);
-      if (failure === 'throws') throw new Error('client failed after unit acceptance');
-      return { status: 1, error: failure === 'timeout' ? new Error('ETIMEDOUT') : undefined, stderr: 'client failed' };
-    });
-    const stop = vi.fn(async (name: string) => {
-      expect(name).toBe(unit);
-      expect(h.registry.canStart()).toBe(false);
-      expect(existsSync(stdinPath)).toBe(true);
-      expect(existsSync(h.input.final_output)).toBe(true);
-      return { ok: true };
-    });
-    const kill = vi.fn(async () => ({ ok: true }));
-    h = await harness({ gateInputs: { live: HEALTHY_GATE_LIVE, isolation: { mode: 'systemd-unit' }, spawn },
-      waitForUnitTermination: async () => confirmed ? { termination: 'confirmed', exitCode: 1 }
-        : { termination: 'uncertain', exitCode: null }, stopWorkerUnit: stop, killWorkerUnit: kill });
-    await installJsonWorker(h);
-    const result = await h.run();
-    expect(result.status).toBe('blocked');
-    expect(result.termination).toBe('uncertain');
-    expect(h.registry.get(result.invocationId).terminalAt).toBeNull();
-    expect(h.registry.get(result.invocationId).control).not.toBeNull();
-    expect(spawn.mock.calls.filter(c => c[0] === client.binary)).toHaveLength(1);
-    expect(unit).not.toBe('');
-    expect(stdinPath).not.toBe('');
-    expect(stop).toHaveBeenCalledOnce();
-    await expect(stop.mock.results[0].value).resolves.toEqual({ ok: true });
-    expect(kill).toHaveBeenCalledWith(unit, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: expect.any(Number) }));
-    expect(h.registry.canStart()).toBe(false);
-    expect(existsSync(stdinPath)).toBe(true);
-    expect(existsSync(h.input.final_output)).toBe(true);
-    confirmed = true;
-    await waitFor(() => h.registry.canStart() && !existsSync(stdinPath) && !existsSync(h.input.final_output));
-    expect(h.registry.get(result.invocationId)).toMatchObject({ status: 'failed', termination: 'confirmed', control: null });
+  registerSystemdLaunchPreparationTests({
+    harness, installJsonWorker, roots, waitFor, healthyGateLive: HEALTHY_GATE_LIVE,
   });
 
   it.each(['throws', 'ENOENT'])('releases every pre-launch resource on degraded spawn %s', async failure => {
@@ -4226,6 +4513,11 @@ describe('review 9 bounded recovery regressions', () => {
 // interleavings on one server instance) are NOT covered here; see the
 // final report.
 // ---------------------------------------------------------------------------
+/** Each side of an equivalence pair resolves its brief with its own resolver. */
+function briefResolverFor(registerFn: unknown) {
+  return registerFn === workerInvokeBaseline.registerWorkerInvokeToolset ? resolveWorkerInvocationBaseline : resolveWorkerInvocation;
+}
+
 describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current branch with dispatch disabled', () => {
   async function runOnce(registerFn: any, callMcpWorker: any, { throwOnLoad = false }: { throwOnLoad?: boolean } = {}) {
     const root = await tempRoot();
@@ -4239,7 +4531,7 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current
       // entry) is what the resolver PROBE below needs to succeed; swap in
       // the "not registered" double only AFTER the brief is built.
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       f.drivers.codex.mcpRegistry = { get: async () => null };
     } else {
       await writeFile(briefPath, 'placeholder');
@@ -4284,11 +4576,16 @@ describe('baseline equivalence (#2915 round 8, D6): frozen 8c812250d6 vs current
       registerWorkerRecoveryCapabilities(f.drivers.codex, { canVerifyAttempt: false });
       f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: 'unused-never-spawned' }) };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       const calls: any[] = [];
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+        // The frozen baseline has no context-ensure concept; the branch
+        // side skips its real deploy too, so both start equivalent (the
+        // ensure path has its own dedicated coverage). Unknown keys are
+        // ignored by the baseline fixture.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }), now: () => new Date(f.now),
         callMcpWorker: async (...args: any[]) => { calls.push(args); return callMcpWorker(...args); },
       });
@@ -4406,6 +4703,11 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const ledgerSpies = spyOnLedger();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Equivalence needs identical starting states: the frozen baseline
+        // has no context-ensure concept, so the branch side skips its real
+        // deploy too (dedicated ensure coverage lives elsewhere). Unknown
+        // keys are ignored by the baseline fixture.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
         ...buildOptions(calls),
@@ -4433,12 +4735,15 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const f = buildFixture(root, 'mcp');
       applyGating(f, gating);
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       const registry = createInvocationRegistry({ maxActive: 4 });
       const tools = new Map<string, any>();
       const ledgerSpies = spyOnLedger();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Same equivalence rationale as runShellPair above: the frozen
+        // baseline cannot ensure, so neither side does here.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
         ...buildOptions(calls),
@@ -4567,6 +4872,10 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
             const tools = new Map<string, any>();
             await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
               projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+              // Equivalence: the frozen baseline has no context-ensure, so
+              // neither side deploys here (dedicated ensure coverage lives
+              // elsewhere). Unknown keys are ignored by the baseline fixture.
+              ensureWorkerContext: false,
               loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
               now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
               launchShellWorker: async (invocation: any, options: any) => {
@@ -4611,6 +4920,8 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
           let launchCalled = false;
           await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
             projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+            // Equivalence: no real context deploy (see runWithFinalWrite).
+            ensureWorkerContext: false,
             loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
             now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
             // The launch itself does not resolve until `releaseLaunch` is
@@ -4690,12 +5001,14 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
             },
           };
           await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-            brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+            brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
           failFromCall = calls + 1;
           const registry = createInvocationRegistry({ maxActive: 4 });
           const tools = new Map<string, any>();
           await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
             projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+            // Equivalence: no real context deploy (see runWithFinalWrite).
+            ensureWorkerContext: false,
             loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
             now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
           });
@@ -4745,6 +5058,8 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       try {
         await registerFn({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
           projectRoot: root, allowDegraded: true, workerWorktreesRoot: work,
+          // Equivalence: no real context deploy (see runWithFinalWrite).
+          ensureWorkerContext: false,
           loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
           now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
         });
@@ -4851,11 +5166,13 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       f.drivers.codex.mcpRegistry = { get: async () => ({ name: 'fixture-server', type: 'stdio' as const, command: process.execPath,
         args: [path.resolve('test/fixtures/ralph-recovery-baseline/oversized-whitespace-worker.mjs')] }) };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' });
+        brief: briefPath, workdir: work, final_output: finalOutput, transport: 'mcp' }, briefResolverFor(registerFn));
       const registry = createInvocationRegistry({ maxActive: 4 });
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Equivalence: no real context deploy (see runWithFinalWrite).
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE }, scopedBreaker: throwingBreaker(),
       });
@@ -4902,13 +5219,15 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
           args: [path.resolve('test/fixtures/ralph-worker-mcp.mjs')], env: { AIWG_FAKE_WORKER_CONFIG: configPath } }),
       };
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefA, workdir: workA, final_output: path.join(workA, 'final.json'), transport: 'mcp' });
+        brief: briefA, workdir: workA, final_output: path.join(workA, 'final.json'), transport: 'mcp' }, briefResolverFor(registerFn));
       await buildStructuredBrief(f, { role: 'coding', task: 'implementation', group: 'workers',
-        brief: briefB, workdir: workB, final_output: path.join(workB, 'final.json'), transport: 'mcp' });
+        brief: briefB, workdir: workB, final_output: path.join(workB, 'final.json'), transport: 'mcp' }, briefResolverFor(registerFn));
       const registry = createInvocationRegistry({ maxActive: 4 });
       const tools = new Map<string, any>();
       await registerFn({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: root,
+        // Equivalence: no real context deploy (see runWithFinalWrite).
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
       });
@@ -5025,6 +5344,10 @@ describe('disabled dispatch equals main through the full #2915 round 8 (D6) scen
       const tools = new Map<string, any>();
       await registerProductionToolset({ registerTool(name: string, cfg: any, handler: any) { tools.set(name, { config: cfg, handler }); } }, {
         projectRoot: root, registry, allowDegraded: true, workerWorktreesRoot: work,
+        // Interleavings measure dispatch behavior; a real context deploy
+        // would pollute timing and spawn a real binary (dedicated ensure
+        // coverage lives elsewhere). Explicit seams still win via ...options.
+        ensureWorkerContext: false,
         loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
         now: () => new Date(f.now), gateInputs: { live: HEALTHY_GATE_LIVE },
         ...options,
@@ -5297,8 +5620,10 @@ describe('review 11 populated default driver equivalence', () => {
           verifiedAt: new Date().toISOString(), evidenceRef: 'fixture:synthetic-host-only' };
         installation.evidence = { ...profile.installationQualification,
           cases: Object.fromEntries(Object.keys(owner.workerNegativeFixtureSuite.cases).map(name => [name, 'passed'])) };
+        const signing = await workerSigningFixture(configDir, cwd);
+        f.snapshot.config.effects = JSON.parse(await readFile(path.join(cwd, '.aiwg/aiwg.config'), 'utf8')).effects;
         await writeFile(path.join(configDir, 'worker-installations.json'), JSON.stringify({ version: 1,
-          registrations: [{ cli: 'codex', binding, adapter, installation }] }), { mode: 0o600 });
+          registrations: [signing.sign({ cli: 'codex', binding, adapter, installation })] }), { mode: 0o600 });
         const config = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/config/aiwg-config.js') : current.config;
         const { ConfigLoader } = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/models/config-loader.js') : current.configLoader;
         const inventory = baseline ? await import('../../fixtures/ralph-recovery-baseline/src/providers/provider-inventory.js') : current.inventory;
@@ -5721,5 +6046,141 @@ describe('registered recovery reset and cancellation guards (#2915 final review)
       expect(launch).not.toHaveBeenCalled();
       expect(breaker.snapshot().reservationsOutstanding).toBe(0);
     } finally { breaker.destroy(); fetchSpy.mockRestore(); }
+  });
+});
+
+describe('worker recovery scope status (#3049)', () => {
+  it('exposes the same live bounded owner snapshot for all and individual invocation status', async () => {
+    const root = await tempRoot();
+    let clock = 1_000_000;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => clock, jitterMs: () => 0 });
+    try {
+      for (let n = 0; n < 3; n++) {
+        const { token } = breaker.admit({ invocationId: `status-outage-${n}`, scopeKeys: ['provider:fixture'] });
+        breaker.settle(token, { kind: 'failed', reasonCode: 'NETWORK', evidenceSource: 'launcher',
+          inferenceProvider: 'fixture', confirmedStop: true });
+      }
+      const registry = createInvocationRegistry();
+      const entry = registry.create({ requestId: 'status-recovery', invocationId: 'status-owner', recoveryBreaker: breaker });
+      const tools = await captureTool(null, { projectRoot: root, registry, now: () => new Date(clock) });
+      const handler = tools.get('worker-invoke').handler;
+      const status = async (id?: string) => JSON.parse((await handler({ operation: 'status',
+        ...(id ? { invocation_id: id } : {}) })).content[0].text);
+      const before = breaker.recoveryStatus();
+      const all = await status();
+      const individual = await status(entry.invocationId);
+      expect(all.recovery).toEqual(individual.recovery);
+      expect(all.recovery).toMatchObject({ source: 'live', scopes: [{ scopeKey: 'provider:fixture', state: 'open',
+        reasons: ['NETWORK'], nextEligibleAtMs: 1_120_000, nextEligibleAt: new Date(1_120_000).toISOString(), canaryInFlight: false }] });
+      expect(breaker.recoveryStatus()).toEqual(before);
+      clock = 1_120_000;
+      const probe = breaker.admit({ invocationId: 'status-probe', scopeKeys: ['provider:fixture'], purpose: 'probe' });
+      breaker.settle(probe.token, { kind: 'succeeded', relevant: true, evidenceSource: 'launcher', confirmedStop: true });
+      const canary = breaker.admit({ invocationId: 'status-canary', scopeKeys: ['provider:fixture'] });
+      expect((await status()).recovery.scopes[0]).toMatchObject({ state: 'canary', canaryInFlight: true });
+      breaker.settle(canary.token, { kind: 'succeeded', confirmedStop: true });
+      const closed = await status();
+      expect(closed.recovery.scopes[0]).toMatchObject({ state: 'closed', nextEligibleAtMs: null, canaryInFlight: false });
+      expect(closed.recovery.transitions.map((event: any) => event.to)).toEqual(['open', 'half-open', 'canary-ready', 'canary', 'closed']);
+      expect(JSON.stringify(closed.recovery)).not.toMatch(/operatorReason|summary|action|diagnostics/);
+    } finally { breaker.destroy(); }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Worker AIWG bootstrap ensure before dispatch (#3685 round 2): the worker
+// CLI's bootstrap must be present in the worker workdir before any spawn.
+// A failed ensure refuses as `blocked` with the typed diagnostic (never a
+// launch); a successful ensure receives the resolved invocation and config
+// and lets dispatch proceed. Synthetic fixtures throughout: the ensure
+// seam is stubbed except where the default path runs against a workdir
+// pre-seeded with the real registry's expected bootstrap files (no spawn,
+// no HOME writes — presence means the deploy never runs).
+// ---------------------------------------------------------------------------
+describe('worker AIWG bootstrap ensure before dispatch (#3685 round 2)', () => {
+  async function shellRun(options: Record<string, unknown>, requestId: string) {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello worker');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const tools = new Map<string, any>();
+    let launches = 0;
+    await registerWorkerInvokeToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work,
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async () => { launches += 1; return { launched: true, mode: 'degraded', child: closingChild(0) }; },
+      now: () => new Date(f.now),
+      ...options,
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: requestId, role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    return { root, work, launches, body: JSON.parse(result.content[0].text) };
+  }
+
+  it('refuses with the typed diagnostic naming the remedy when the ensure fails, without launching', async () => {
+    const { launches, body } = await shellRun({
+      ensureWorkerContext: async () => {
+        throw Object.assign(new Error('synthetic bootstrap missing'), {
+          code: 'OG_WORKER_CONTEXT_UNAVAILABLE', remedy: 'synthetic remedy: run aiwg use',
+        });
+      },
+    }, 'ctx-refuse-1');
+    expect(launches).toBe(0);
+    expect(body.status).toBe('blocked');
+    expect(body.diagnostics).toHaveLength(1);
+    expect(body.diagnostics[0]).toMatchObject({
+      code: 'OG_WORKER_CONTEXT_UNAVAILABLE', remedy: 'synthetic remedy: run aiwg use',
+    });
+  });
+
+  it('passes the resolved invocation and config to the ensure and proceeds on success', async () => {
+    const seen: any[] = [];
+    const { launches, body } = await shellRun({
+      ensureWorkerContext: async (args: any) => { seen.push(args); return { ensured: true }; },
+    }, 'ctx-pass-1');
+    expect(seen).toHaveLength(1);
+    expect(seen[0].invocation.selected.cli).toBe('codex');
+    expect(seen[0].invocation.cwd).toContain('work');
+    expect(seen[0].config).toBeDefined();
+    expect(launches).toBe(1);
+    expect(body.status).not.toBe('blocked');
+  });
+
+  it('the default ensure is a no-op (no spawn) when the workdir already carries the bootstrap', async () => {
+    const root = await tempRoot();
+    const work = path.join(root, 'work'); await mkdir(work);
+    // Seed exactly what the real registry expects for codex: non-empty
+    // kernel dirs plus AGENTS.md rule sections.
+    await mkdir(path.join(work, '.agents', 'skills'), { recursive: true });
+    await writeFile(path.join(work, '.agents', 'skills', 'kernel.md'), 'kernel\n');
+    await mkdir(path.join(work, '.codex', 'rules'), { recursive: true });
+    await writeFile(path.join(work, '.codex', 'rules', 'kernel.md'), 'kernel\n');
+    await writeFile(path.join(work, 'AGENTS.md'), '<!-- AIWG:rule-startup:start -->\nx\n<!-- AIWG:rule-startup:end -->\n');
+    const briefPath = path.join(root, 'brief.md'); await writeFile(briefPath, 'hello worker');
+    const finalPath = path.join(work, 'final.json');
+    const f = buildFixture(root, 'shell');
+    const tools = new Map<string, any>();
+    let launches = 0;
+    // Bypass the local test wrapper (which forces ensureWorkerContext:
+    // false) so the production default runs — with gate inputs fixed to
+    // synthetic healthy signals so the host does not matter.
+    await registerProductionToolset({ registerTool(name: string, config: any, handler: any) { tools.set(name, { config, handler }); } }, {
+      projectRoot: root, workerWorktreesRoot: work, gateInputs: { live: HEALTHY_GATE_LIVE },
+      loadWorkerInputs: async () => ({ snapshot: f.snapshot, drivers: f.drivers }),
+      launchShellWorker: async () => { launches += 1; return { launched: true, mode: 'degraded', child: closingChild(0) }; },
+      now: () => new Date(f.now),
+    });
+    const call = tools.get('worker-invoke').handler;
+    const result = await call({
+      operation: 'run', request_id: 'ctx-default-1', role: 'coding', task: 'implementation', group: 'workers',
+      brief: briefPath, workdir: work, final_output: finalPath, transport: 'shell',
+    });
+    const body = JSON.parse(result.content[0].text);
+    expect(launches).toBe(1);
+    expect(JSON.stringify(body.diagnostics ?? [])).not.toContain('OG_WORKER_CONTEXT_UNAVAILABLE');
   });
 });

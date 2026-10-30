@@ -72,7 +72,7 @@ The paper presents nine core best practices for engineering production-grade age
 
 ### BP-6: Responsible AI Agents (Model Consortium)
 
-**Principle**: Use a multi-model consortium where several LLMs independently generate outputs, then a dedicated reasoning agent synthesizes them into a final, trustworthy result.
+**Principle**: Use a multi-model consortium where several LLMs independently generate outputs, then a dedicated reasoning agent synthesizes them into a candidate result. Agreement does not prove correctness or independent errors, even across vendors; consequential claims need executable checks or human acceptance. See [evaluator calibration](../decision/evaluator-calibration.md) for REF-2922, REF-2923 and REF-2919/2921 and their limits.
 
 **Paper Finding**: This design achieves:
 - Higher accuracy through cross-model agreement

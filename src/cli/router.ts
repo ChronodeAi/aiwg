@@ -188,6 +188,18 @@ export async function run(
   // Build context for handler and hooks
   const ctx = await buildContext(commandArgs, args, options);
 
+  // Read-only memory views (audit, cost, recommend, plan, verify, --preview) cannot invoke mutation-capable hooks or append command telemetry.
+  // Keep dispatch through the existing memory handler and strict parser.
+  if (commandId === 'memory' && (['audit', 'cost', 'recommend', 'plan', 'verify'].includes(commandArgs[0]) || commandArgs.includes('--preview'))) {
+    const result = await handler.execute(ctx);
+    if (result.message) {
+      if (result.exitCode !== 0) ui.error(result.message);
+      else ui.info(result.message);
+    }
+    if (result.exitCode !== 0) process.exit(result.exitCode);
+    return;
+  }
+
   // Build hook context
   const hookCtx: HookContext = {
     event: 'pre-command',
@@ -364,7 +376,13 @@ async function buildContext(
   rawArgs: string[],
   options: { cwd?: string; signal?: AbortSignal }
 ): Promise<HandlerContext> {
-  const frameworkRoot = await getFrameworkRoot({ createIfMissing: !args.includes('--dry-run') });
+  const readOnlyRuleInventory = rawArgs[0] === 'rules' && ['inventory', 'list'].includes(args[0]);
+  const readOnlyOffloadReport = (['doctor', '-doctor', '--doctor'].includes(rawArgs[0] ?? '') && args.includes('--decision-offload'))
+    || (rawArgs[0] === 'steward' && args[0] === 'decision-offload');
+  const readOnlyMemoryAudit = rawArgs[0] === 'memory' && (['audit', 'cost', 'recommend', 'plan', 'verify'].includes(args[0]) || args.includes('--preview') || args.includes('--help') || args.includes('-h'));
+  const frameworkRoot = await getFrameworkRoot({
+    createIfMissing: !args.includes('--dry-run') && !readOnlyRuleInventory && !readOnlyOffloadReport && !readOnlyMemoryAudit,
+  });
   const ctx: HandlerContext = {
     args,
     rawArgs,

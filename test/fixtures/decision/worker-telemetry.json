@@ -1,0 +1,10 @@
+{
+  "taskId": "task-1",
+  "invocationId": "inv-2929-worker",
+  "transport": "shell",
+  "termination": "confirmed",
+  "identityConfidence": "backend-attested",
+  "requested": { "model": "requested-v1" },
+  "observed": { "model": "served-v2" },
+  "usage": { "quality": "reported", "inputTokens": 12, "outputTokens": 3, "costUsd": 0.01 }
+}

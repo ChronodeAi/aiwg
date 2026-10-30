@@ -1,0 +1,1106 @@
+{
+  "issue": "roctinam/aiwg#2945",
+  "lane": "utils",
+  "status": "Authored migration complete; full validation is not green. Out-of-scope fixtures and remaining corpus activation coverage require conductor follow-up.",
+  "activation_counts": {
+    "kernel": 0,
+    "summary": 4,
+    "bound": 5,
+    "paths": 7,
+    "on-demand": 0
+  },
+  "critical_review": {
+    "rule_level_critical_count": 0,
+    "kernel_fallbacks": [],
+    "note": "agent-deployment and skill-placement contain CRITICAL subsection/emphasis text, but both have HIGH enforcement; path scopes and binding probes cover their governed work."
+  },
+  "rules": [
+    {
+      "name": "addon-boundaries",
+      "source": "agentic/code/addons/aiwg-dev/rules/addon-boundaries.md",
+      "enforcement": "medium",
+      "activation": "paths",
+      "summary": "Keep distributable AIWG artifacts in agentic/code, project output in the artifact store, and CI hook templates outside repository workflow directories.",
+      "bound_to": {
+        "skills": [
+          "devkit-create-addon",
+          "devkit-create-extension",
+          "devkit-create-framework",
+          "devkit-create-agent",
+          "devkit-create-command",
+          "devkit-create-skill",
+          "scaffold-addon",
+          "scaffold-extension",
+          "scaffold-framework",
+          "new-bundle",
+          "add-agent",
+          "add-skill",
+          "add-command",
+          "add-behavior",
+          "add-template",
+          "validate-addon",
+          "validate-component",
+          "devkit-validate",
+          "dev-doctor"
+        ],
+        "agents": [
+          "aiwg-developer"
+        ]
+      },
+      "paths": [
+        "agentic/code/**",
+        ".aiwg/**",
+        ".claude/**",
+        ".github/agents/**",
+        ".github/prompts/**",
+        ".github/instructions/**",
+        ".cursor/**",
+        ".warp/**",
+        ".codex/**",
+        ".factory/**",
+        ".opencode/**",
+        ".windsurf/**",
+        ".openclaw/**",
+        ".gitea/workflows/**",
+        ".github/workflows/**"
+      ]
+    },
+    {
+      "name": "aiwg-ci-safety",
+      "source": "agentic/code/addons/aiwg-dev/rules/aiwg-ci-safety.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "summary": "Obtain explicit human authorization before changing AIWG CI; keep deployable CI templates in framework source and verify changes locally.",
+      "bound_to": {
+        "skills": [
+          "devkit-create-framework",
+          "devkit-create-addon",
+          "validate-component",
+          "dev-doctor"
+        ],
+        "agents": [
+          "aiwg-developer",
+          "devops-engineer",
+          "build-engineer"
+        ]
+      },
+      "paths": [
+        ".gitea/workflows/**",
+        ".github/workflows/**",
+        "agentic/code/frameworks/*/ci/**"
+      ]
+    },
+    {
+      "name": "aiwg-dir-reference-contract",
+      "source": "agentic/code/addons/aiwg-dev/rules/aiwg-dir-reference-contract.md",
+      "enforcement": "medium",
+      "activation": "paths",
+      "summary": "Use manifest-derived normalized project paths and AIWG_ROOT references in distributable artifacts; declare new memory paths in memory.creates.",
+      "bound_to": {
+        "skills": [
+          "devkit-create-addon",
+          "devkit-create-extension",
+          "devkit-create-framework",
+          "devkit-create-agent",
+          "devkit-create-command",
+          "devkit-create-skill",
+          "scaffold-addon",
+          "scaffold-extension",
+          "scaffold-framework",
+          "new-bundle",
+          "add-agent",
+          "add-skill",
+          "add-command",
+          "add-behavior",
+          "add-template",
+          "validate-addon",
+          "validate-component",
+          "devkit-validate",
+          "dev-doctor",
+          "link-check"
+        ],
+        "agents": [
+          "aiwg-developer"
+        ]
+      },
+      "paths": [
+        "agentic/code/**"
+      ]
+    },
+    {
+      "name": "component-completeness",
+      "source": "agentic/code/addons/aiwg-dev/rules/component-completeness.md",
+      "enforcement": "medium",
+      "activation": "paths",
+      "summary": "Complete every required file, metadata field, and registration for an AIWG component before declaring it done.",
+      "bound_to": {
+        "skills": [
+          "devkit-create-addon",
+          "devkit-create-extension",
+          "devkit-create-framework",
+          "devkit-create-agent",
+          "devkit-create-command",
+          "devkit-create-skill",
+          "scaffold-addon",
+          "scaffold-extension",
+          "scaffold-framework",
+          "new-bundle",
+          "add-agent",
+          "add-skill",
+          "add-command",
+          "add-behavior",
+          "add-template",
+          "validate-addon",
+          "validate-component",
+          "devkit-validate",
+          "dev-doctor"
+        ],
+        "agents": [
+          "aiwg-developer"
+        ]
+      },
+      "paths": [
+        "agentic/code/**",
+        "src/extensions/**",
+        "src/cli/handlers/**"
+      ]
+    },
+    {
+      "name": "no-circular-skill-calls",
+      "source": "agentic/code/addons/aiwg-dev/rules/no-circular-skill-calls.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "summary": "Keep skill-runner commands self-contained; audit their SKILL.md before enabling executedViaSkillRunner and remove recursive CLI callbacks.",
+      "bound_to": {
+        "skills": [
+          "devkit-create-command",
+          "devkit-create-skill",
+          "add-command",
+          "add-skill",
+          "validate-addon",
+          "validate-component",
+          "devkit-validate",
+          "dev-doctor"
+        ],
+        "agents": [
+          "aiwg-developer"
+        ]
+      },
+      "paths": [
+        "agentic/code/**/skills/**",
+        "src/extensions/**",
+        "src/cli/handlers/**"
+      ]
+    },
+    {
+      "name": "skill-placement",
+      "source": "agentic/code/addons/aiwg-dev/rules/skill-placement.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "summary": "Author AIWG skills, agents, commands, rules, and templates in addon or framework source; regenerate provider copies from that source.",
+      "bound_to": {
+        "skills": [
+          "devkit-create-addon",
+          "devkit-create-extension",
+          "devkit-create-framework",
+          "devkit-create-agent",
+          "devkit-create-command",
+          "devkit-create-skill",
+          "scaffold-addon",
+          "scaffold-extension",
+          "scaffold-framework",
+          "new-bundle",
+          "add-agent",
+          "add-skill",
+          "add-command",
+          "add-behavior",
+          "add-template",
+          "validate-addon",
+          "validate-component",
+          "devkit-validate",
+          "dev-doctor"
+        ],
+        "agents": [
+          "aiwg-developer"
+        ]
+      },
+      "paths": [
+        "agentic/code/**",
+        ".claude/**",
+        ".github/agents/**",
+        ".github/prompts/**",
+        ".github/instructions/**",
+        ".cursor/**",
+        ".warp/**",
+        ".codex/**",
+        ".factory/**",
+        ".opencode/**",
+        ".windsurf/**",
+        ".openclaw/**",
+        ".gitea/workflows/**",
+        ".github/workflows/**"
+      ]
+    },
+    {
+      "name": "activity-log",
+      "source": "agentic/code/addons/aiwg-utils/rules/activity-log.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "summary": "Append one activity entry after each successful artifact mutation or deployment; preserve history and continue if logging fails.",
+      "bound_to": {
+        "skills": [
+          "activity-log",
+          "use",
+          "aiwg-refresh",
+          "aiwg-regenerate",
+          "workspace-prune-working",
+          "promote",
+          "artifact-metadata"
+        ],
+        "agents": [
+          "context-librarian"
+        ]
+      }
+    },
+    {
+      "name": "agent-deployment",
+      "source": "agentic/code/addons/aiwg-utils/rules/agent-deployment.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "summary": "Pin model variants in agent definitions and follow provider deployment formats, tool requirements, and agent isolation conventions.",
+      "bound_to": {
+        "skills": [
+          "use",
+          "aiwg-refresh",
+          "aiwg-regenerate",
+          "add-agent",
+          "devkit-create-agent",
+          "deploy-gen"
+        ],
+        "agents": [
+          "aiwg-steward",
+          "aiwg-developer"
+        ]
+      },
+      "paths": [
+        ".claude/agents/**",
+        ".factory/droids/**",
+        ".codex/agents/**",
+        ".opencode/agent/**",
+        "agentic/**",
+        "AGENTS.md",
+        "tools/agents/providers/**"
+      ]
+    },
+    {
+      "name": "context-bloat",
+      "source": "agentic/code/addons/aiwg-utils/rules/context-bloat.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Pass task-critical facts and file paths to subagents; omit irrelevant history, full documents, and background that cannot affect the result.",
+      "bound_to": {
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "chunk",
+          "fanout",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "mission-control",
+          "orchestrate-project",
+          "parallel-dispatch",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "rlm-batch",
+          "rlm-mode",
+          "rlm-prep",
+          "rlm-query",
+          "rlm-search",
+          "rlm-status"
+        ],
+        "agents": [
+          "aiwg-orchestrator",
+          "executive-orchestrator",
+          "recovery-orchestrator",
+          "rlm-agent",
+          "ralph-loop",
+          "ralph-verifier",
+          "consortium-coordinator"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      }
+    },
+    {
+      "name": "context-budget",
+      "source": "agentic/code/addons/aiwg-utils/rules/context-budget.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Check AIWG_CONTEXT_WINDOW and provider caps before dispatch; use the smallest applicable cap and batch work within the available context budget.",
+      "bound_to": {
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "chunk",
+          "fanout",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "mission-control",
+          "orchestrate-project",
+          "parallel-dispatch",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "rlm-batch",
+          "rlm-mode",
+          "rlm-prep",
+          "rlm-query",
+          "rlm-search",
+          "rlm-status"
+        ],
+        "agents": [
+          "aiwg-orchestrator",
+          "executive-orchestrator",
+          "recovery-orchestrator",
+          "rlm-agent",
+          "ralph-loop",
+          "ralph-verifier",
+          "consortium-coordinator"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      }
+    },
+    {
+      "name": "diagram-generation",
+      "source": "agentic/code/addons/aiwg-utils/rules/diagram-generation.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Include required diagrams with major documentation artifacts; retain editable source, label boundaries and relationships, and split overly complex diagrams.",
+      "bound_to": {
+        "skills": [
+          "doc-sync"
+        ],
+        "agents": [
+          "architecture-designer",
+          "requirements-analyst",
+          "test-architect",
+          "security-architect",
+          "deployment-manager",
+          "technical-writer"
+        ]
+      }
+    },
+    {
+      "name": "implicit-dependencies",
+      "source": "agentic/code/addons/aiwg-utils/rules/implicit-dependencies.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Give each subagent explicit tasks, file paths, prior findings, constraints, and output requirements; never assume it can see parent or sibling context.",
+      "bound_to": {
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "chunk",
+          "fanout",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "mission-control",
+          "orchestrate-project",
+          "parallel-dispatch",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "rlm-batch",
+          "rlm-mode",
+          "rlm-prep",
+          "rlm-query",
+          "rlm-search",
+          "rlm-status"
+        ],
+        "agents": [
+          "aiwg-orchestrator",
+          "executive-orchestrator",
+          "recovery-orchestrator",
+          "rlm-agent",
+          "ralph-loop",
+          "ralph-verifier",
+          "consortium-coordinator"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      }
+    },
+    {
+      "name": "no-time-estimates",
+      "source": "agentic/code/addons/aiwg-utils/rules/no-time-estimates.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "summary": "Estimate work using scope units, agent roles, parallelism, passes, and measurable gates; avoid wall-clock estimates unless the user accepts their variance.",
+      "bound_to": {
+        "skills": [
+          "aiwg-mission",
+          "mission-control",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "agent-loop",
+          "agent-loop-ext",
+          "parallel-dispatch",
+          "rlm-batch",
+          "rlm-query",
+          "artifact-orchestration",
+          "orchestrate-project",
+          "sdlc-accelerate"
+        ],
+        "agents": [
+          "executive-orchestrator",
+          "recovery-orchestrator",
+          "ralph-loop",
+          "consortium-coordinator",
+          "project-manager"
+        ]
+      }
+    },
+    {
+      "name": "parallel-then-synthesize",
+      "source": "agentic/code/addons/aiwg-utils/rules/parallel-then-synthesize.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Verify task independence before parallel dispatch; use one focused agent when a unified assessment would require reconciling competing conclusions.",
+      "bound_to": {
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "chunk",
+          "fanout",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "mission-control",
+          "orchestrate-project",
+          "parallel-dispatch",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "rlm-batch",
+          "rlm-mode",
+          "rlm-prep",
+          "rlm-query",
+          "rlm-search",
+          "rlm-status"
+        ],
+        "agents": [
+          "aiwg-orchestrator",
+          "executive-orchestrator",
+          "recovery-orchestrator",
+          "rlm-agent",
+          "ralph-loop",
+          "ralph-verifier",
+          "consortium-coordinator"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      }
+    },
+    {
+      "name": "post-commit-index-refresh",
+      "source": "agentic/code/addons/aiwg-utils/rules/post-commit-index-refresh.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "summary": "After a successful commit, detect configured indexes and refresh only affected graphs incrementally; honor skip conditions and report failures without blocking.",
+      "bound_to": {
+        "skills": [
+          "commit-and-push",
+          "aiwg-pr",
+          "aiwg-delivery-pr",
+          "steward-prep-delivery"
+        ],
+        "agents": [
+          "aiwg-developer"
+        ]
+      }
+    },
+    {
+      "name": "soul-enforcement",
+      "source": "agentic/code/addons/aiwg-utils/rules/soul-enforcement.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "summary": "Read and apply the selected SOUL identity before generating content; preserve factual accuracy, follow per-agent overrides, and honor stricter completion standards.",
+      "bound_to": {
+        "skills": [
+          "soul-apply",
+          "soul-enable",
+          "soul-create",
+          "soul-blend",
+          "soul-enhance",
+          "soul-validate",
+          "soul-to-voice",
+          "voice-to-soul"
+        ]
+      }
+    }
+  ],
+  "gates": {
+    "U1": {
+      "status": "not certified",
+      "emitted_claude_rule_bytes": 169076,
+      "emitted_behavior_bytes": 0,
+      "note": "Supplemental strict-CI SDLC deployment exits 1 on untagged actionable-feedback outside this lane; emitted 169076 bytes are partial deployment evidence. Full startup/provider regression gates remain conductor work."
+    },
+    "U2": {
+      "lane_tagged": 16,
+      "activation_lint": "pass",
+      "other_corpus_migration_warnings": 121
+    },
+    "U3": {
+      "passed": true,
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "rule_artifact_pairs": 463,
+      "distinct_artifacts": 132,
+      "provider_pair_checks": 2778,
+      "note": "Canonical indexed skill, agent, and YAML flow targets deploy with one bound-rules block; bound bodies remain outside startup listings."
+    },
+    "U4": {
+      "passed": true,
+      "actual_cli_json_artifacts": 132,
+      "actual_cli_json_binding_pairs": 463
+    },
+    "U5": {
+      "status": "not run; conductor on titan",
+      "lane_rules": [
+        "aiwg-ci-safety",
+        "no-circular-skill-calls",
+        "skill-placement",
+        "agent-deployment",
+        "no-time-estimates"
+      ],
+      "lane_probes": 15,
+      "coverage": "Four HIGH enforcement rules plus the MEDIUM enforcement rule carrying legacy HIGH severity.",
+      "retained_baseline_probes": 60,
+      "total_file_probes": 75,
+      "schema": "test/uat/rule-binding/probes.schema.json; pass",
+      "harness_load_and_plan": "pass; 75 planned lane calls at n=5; zero model calls",
+      "note": "The unchanged baseline corpus is retained in the lane file to satisfy the schema minItems=21 and harness REQUIRED_RULES contract. probes.yaml is unchanged."
+    },
+    "U6": {
+      "passed": true,
+      "rules": 16,
+      "note": "Framework index force-built in an isolated HOME before discovery; all 16 natural-language needs rank their rule in the top three."
+    },
+    "U7": {
+      "status": "not run; negative probes prepared for conductor"
+    },
+    "U8": {
+      "status": "not run; model dispatch prohibited"
+    },
+    "U9": {
+      "six_provider_rule_fixtures": "pass",
+      "codex_agents_md": "below 32768 bytes asserted",
+      "broader_kernel_deployment_suite": "44 passed, 11 failed; see validation.kernel_deployment"
+    }
+  },
+  "real_deploys": [
+    {
+      "addon": "aiwg-dev",
+      "provider": "claude",
+      "exit_code": 0,
+      "root": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-dev-I5kXiR",
+      "project": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-dev-I5kXiR/project",
+      "home": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-dev-I5kXiR/home",
+      "aiwg_config": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-dev-I5kXiR/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-utils",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "git_initialization": "Empty repository metadata written directly; no git commands",
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-utils/bin/aiwg.mjs",
+        "use",
+        "aiwg-dev",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-wave5-utils-evidence/deploy-aiwg-dev.log",
+      "temporary_project_cleaned": true
+    },
+    {
+      "addon": "aiwg-utils",
+      "provider": "claude",
+      "exit_code": 0,
+      "root": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-utils-iWYESa",
+      "project": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-utils-iWYESa/project",
+      "home": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-utils-iWYESa/home",
+      "aiwg_config": "/var/tmp/aiwg-wave5-utils/aiwg-wave5-utils-aiwg-utils-iWYESa/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-utils",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "git_initialization": "Empty repository metadata written directly; no git commands",
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-utils/bin/aiwg.mjs",
+        "use",
+        "aiwg-utils",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-wave5-utils-evidence/deploy-aiwg-utils.log",
+      "temporary_project_cleaned": true
+    }
+  ],
+  "validation": {
+    "typecheck": "pass",
+    "build_cli": "pass",
+    "package_plugins": "pass",
+    "generated_plugin_copies_changed": 6,
+    "new_test": {
+      "passed": 10,
+      "failed": 0,
+      "files": 1,
+      "failures": [],
+      "report": "/tmp/aiwg-wave5-utils-evidence/wave5-tests.json"
+    },
+    "neighbors": {
+      "passed": 285,
+      "failed": 5,
+      "files": 14,
+      "failures": [
+        {
+          "file": "test/unit/providers/rule-activation-deployment.test.ts",
+          "name": "activation-selected provider deployment (#2939) preserves the untagged SDLC/Claude tier-fallback snapshot, including restored demotions"
+        },
+        {
+          "file": "test/unit/providers/rule-tier-deployment.test.ts",
+          "name": "rule tier deployment (#1673) deploy enumerators on real source listOnDemandRuleFiles surfaces the medium/low tier and nothing always-on"
+        },
+        {
+          "file": "test/unit/providers/rule-tier-deployment.test.ts",
+          "name": "rule tier deployment (#1673) deploy enumerators on real source listOnDemandRuleFiles stays complete when called from bundled addon or extension sources (#1784)"
+        },
+        {
+          "file": "test/unit/providers/rule-tier-deployment.test.ts",
+          "name": "on-demand index propagation (#1675) end-to-end RULES-ONDEMAND.md emission keeps the complete index after an aiwg-use-all-style addon pass (#1784)"
+        },
+        {
+          "file": "test/unit/providers/rule-tier-deployment.test.ts",
+          "name": "on-demand index propagation (#1675) aggregated provider bridge sections openhuman AGENTS.md substitutes the {{ON_DEMAND_RULES}} token (#1785)"
+        }
+      ],
+      "report": "/tmp/aiwg-wave5-utils-evidence/neighbors.json"
+    },
+    "orchestration_conformance": {
+      "passed": 932,
+      "failed": 0,
+      "files": 36,
+      "failures": [],
+      "report": "/tmp/aiwg-wave5-utils-evidence/orchestration.json"
+    },
+    "kernel_deployment": {
+      "passed": 44,
+      "failed": 11,
+      "files": 1,
+      "failures": [
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance keeps the full Codex kernel catalog useful and below its startup listing cap"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance claude deploys every canonical kernel skill and no standard skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance codex deploys every canonical kernel skill and no standard skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance cursor deploys every canonical kernel skill and no standard skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance warp deploys every canonical kernel skill and no standard skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance hermes deploys every canonical kernel skill and no standard skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance repeat deploy prunes stale managed skills while preserving operator-owned skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance claude repairs a full-copy deployment while preserving operator-owned skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance codex repairs a full-copy deployment while preserving operator-owned skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance cursor repairs a full-copy deployment while preserving operator-owned skills"
+        },
+        {
+          "file": "test/integration/kernel-deployment-conformance.test.ts",
+          "name": "kernel deployment conformance warp repairs a full-copy deployment while preserving operator-owned skills"
+        }
+      ],
+      "report": "/tmp/aiwg-wave5-utils-evidence/kernel-deploy.json"
+    },
+    "fixture_findings": [
+      {
+        "file": "test/unit/providers/rule-tier-deployment.test.ts",
+        "failures": 4,
+        "reason": "Hard-coded MEDIUM-tier expectations require activity-log, context-budget, and diagram-generation to stay on-demand after explicit summary/bound migration."
+      },
+      {
+        "file": "test/unit/providers/rule-activation-deployment.test.ts",
+        "failures": 1,
+        "reason": "Frozen untagged snapshot strips top-level paths but leaves its sequence, then compares the migrated agent-deployment header byte-for-byte (expected 4881 B, received 4892 B). All six provider activation/deduplication fixtures pass."
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "failures": 11,
+        "reason": "Kernel catalog assertions expect 26 skills while current bound-flow delivery also projects 27 flows; managed-pruning/standard-tier repair assertions also fail. Runtime/provider code and these tests are outside this lane and unchanged."
+      }
+    ],
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-dep-sources.log"
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-eval-imports.log"
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-package-license-boundary.log"
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-agent-sizes.log"
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-test-registration.log"
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-test-process-timeouts.log"
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-orchestration-packs.log"
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-schemas.log"
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-ops-templates.log"
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-mission-inventory.log"
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-mission-contract.log"
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-vault-migration.log"
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-session-fixtures.log"
+      },
+      {
+        "script": "lint:plugin-copies",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-plugin-copies.log"
+      },
+      {
+        "script": "lint:rule-triggers",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-rule-triggers.log"
+      },
+      {
+        "script": "lint:rule-activation",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-wave5-utils-evidence/lint-rule-activation.log"
+      }
+    ],
+    "omitted_ci_lints": [
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Requires npm registry network access, prohibited by task."
+      },
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Invokes git ls-files, prohibited by task."
+      },
+      {
+        "script": "lint:affected-packages",
+        "reason": "Conditional CI feed is not supplied; network/git operations are prohibited."
+      }
+    ],
+    "command_constraints": "One Vitest at a time in this lane, nice -n 19, config/vitest.config.js, maxWorkers=4; orchestration lane uses Vitest API with the same base config and only include/exclude overridden.",
+    "corrected_attempt": "First new-test attempt exhausted /tmp during the isolated discovery index build; rerun with TMPDIR=/var/tmp/aiwg-wave5-utils passes. No assertion was removed.",
+    "scope": "Only the 16 assigned canonical rule files, their six regenerated aiwg-dev plugin copies, and lane-owned new test/UAT files are retained. No git operations, installs, tracker writes, network tools, or model calls were performed."
+  },
+  "evidence": {
+    "temporary_logs": "/tmp/aiwg-wave5-utils-evidence",
+    "measurement": "wave5-utils-measurement-after.json",
+    "decisions": "wave5-utils-decisions.json",
+    "probes": "wave5-utils-probes.yaml"
+  }
+}

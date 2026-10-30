@@ -1,5 +1,15 @@
 ---
 enforcement: high
+activation: "bound"
+summary: "Load validation context, detect and classify generation failures, apply archetype-specific mitigations and severity responses, and log issues without overstating evidence."
+bound_to:
+  agents: ["architecture-designer", "code-reviewer", "executive-orchestrator", "quality-assessor", "recovery-orchestrator", "requirements-analyst", "security-auditor", "software-implementer", "technical-writer", "test-engineer"]
+  skills: ["agent-loop", "aiwg-mission", "artifact-orchestration", "execute-feedback", "flow-architecture-evolution", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-cross-team-sync", "flow-delivery-track", "flow-deploy-to-production", "flow-discovery-track", "flow-elaboration-to-construction", "flow-gate-check", "flow-guided-implementation", "flow-handoff-checklist", "flow-hypercare-monitoring", "flow-inception-to-elaboration", "flow-incident-response", "flow-iteration-dual-track", "flow-knowledge-transfer", "flow-performance-optimization", "flow-release", "flow-requirements-evolution", "flow-retrospective-cycle", "flow-risk-management-cycle", "flow-security-review-cycle", "flow-team-onboarding", "flow-test-strategy-execution", "gate-evaluation", "orchestrate-project", "ralph"]
+  flows: ["flow-agentloop-lfd-controls", "flow-architecture-evolution", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-cross-team-sync", "flow-delivery-track", "flow-deploy-to-production", "flow-discovery-track", "flow-elaboration-to-construction", "flow-gate-check", "flow-guided-implementation", "flow-handoff-checklist", "flow-hypercare-monitoring", "flow-inception-to-elaboration", "flow-incident-response", "flow-iteration-dual-track", "flow-knowledge-transfer", "flow-performance-optimization", "flow-release", "flow-requirements-evolution", "flow-retrospective-cycle", "flow-risk-management-cycle", "flow-security-review-cycle", "flow-team-onboarding", "flow-test-strategy-execution"]
+triggers:
+  - "classify and mitigate agent failure archetypes"
+  - "detect hallucination context and instruction failures"
+  - "apply severity response to generation failure"
 ---
 
 # Failure Archetype Mitigation Rules

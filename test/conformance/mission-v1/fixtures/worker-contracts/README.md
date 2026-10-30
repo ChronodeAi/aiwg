@@ -7,7 +7,7 @@ Tier 0 packs). The latest source includes optional Revision 3 health definitions
 historical five-feature dispatch records and six-feature records both have shape
 vectors. S1 health-to-lease and Mission reconciliation mapping is frozen as
 pure codec vectors by #2916 (B-OG-54); managed scheduler/MC enforcement is
-not implemented here.
+not implemented here. #2925 additively amends parallelism and worker-selection fragments for groupTemplates/template, group effort/data ceilings and constrained baseRole aliases; manifest digests are refreshed and strict exact-match assertions remain unchanged. Direct/shared coverage is partial; managed protocol role vocabulary and MCP transport are unchanged.
 
 The fragment files are verbatim JSON contracts from configuration spec §4/§5.1.
 They have **no new published schema IDs**. After #2878, #2879 and #2880, the
@@ -52,6 +52,31 @@ extension round trips; other consumers advertise no worker support in
 `consumer-inventory.json` until their own conformance and boundary work passes.
 
 ## Disposition and consumer ownership
+
+### #3656 conductor input guard amendment
+
+The existing data-policy objects add `localOnlyPaths` (literal project-relative
+files/subtrees). Worker-selection and parallelism fragments and manifest digests
+are amended together; strict production-owner equality is preserved. Deployment
+blocks explicit conductor references; arbitrary shell programs remain outside
+this guard's containment boundary. No schema family or runtime qualification is added.
+
+### #2925 template and constrained alias amendment
+
+The parallelism fragment combines #2925 group templates, group effort/data
+ceilings and #2926 admission `starvationSeconds`. The worker-selection fragment
+adds constrained `baseRole` aliases. All fragment SHA-256 digests are recomputed;
+production-owner equality and strict validation remain enforced. Reserved alias
+keys and template ancestry beyond 64 levels are rejected by the shared loaders.
+
+### #2926 diagnostic threshold amendment
+
+The parallelism fragment and manifest digest add optional admission
+`starvationSeconds` (1–86400, default 120). This configures bounded group/run
+service diagnostics only; priority/FIFO/aging, budgets, deadlines and fencing
+remain authoritative. The existing schema owner and strict exact-match checks
+are preserved. No new schema family or live qualification is introduced.
+
 
 ### #2913 S1 health resolution amendment
 
@@ -767,7 +792,15 @@ Subsequent installation qualification also compares the captured raw version
 text with the recorded banner: added leading zeros cannot reuse a normalized
 version pin, including `2026.010.1` versus `2026.10.1`.
 Artifacts are bounded private launcher files with argv placeholders, never
-preview writes. Workspace-relative artifacts remain deferred to S2+ (#2905).
+preview writes. #2905 now permits one workspace-relative artifact under an installed adapter's
+fixed prefix, with an optional resolved invocation ID and required workspace
+prefix/path fields. The frozen invocation fragment and its manifest digest are
+amended together with the Mission compatibility baseline; exact equality and
+strict compilation remain required. Runtime checks
+bind the path to that ID, bound UTF-8 bytes, reject symlink components, create
+exclusively, preserve collisions and clean up on failure, completion or stop.
+Warp delivery is wired, while authenticated envelope capture and smoke remain
+deferred and the profile remains unqualified.
 Antigravity frames are computed by the installed driver and delivered only
 on stdin, must be nonempty, and shell framing binds the trusted host store bytes
 and conductor policy explicitly under `env -i`, without cwd config resolution.
@@ -803,3 +836,23 @@ fragment, so their existing amended digests remain valid.
 above. `node tools/mission-protocol/inventory.mjs --write` remains blocked by
 `spawnSync rg EPERM`; no generated inventory was hand-edited. No vendor/model
 calls or commits were made. Runtime qualification remains deferred.
+
+#2643 disposition: the existing worker-selection tier enum accepts canonical `flagship`
+and compatibility alias `max-quality`; neither grants user election. Fragment and
+manifest digest amended together; default worker bindings remain unchanged.
+
+## #3167 delegation and acceptance amendment
+
+The existing Mission definitions gain optional brief uncertainty, regression,
+oracle and design-review fields, and verifier-owned findings/review rounds.
+New shared components nest inside existing brief/verification definitions,
+preserving schema ownership at Flow/MCP handoffs. The compatibility baseline
+is amended under the existing mission-v1 schema identity.
+The frozen fragment and its manifest digest are amended together; exact-match
+checks remain required. Array types in accepted verification branches are now
+explicit so every worker definition compiles with strict types and keywords.
+`delegation-vectors.json` adds synthetic positive/negative contract cases;
+legacy vectors remain unchanged. Result assembly uses the existing required
+review policy and shared observed-lineage diagnostics, binds final review to
+the conductor's current head, and derives rounds-to-clean. These fixtures do
+not qualify live providers or introduce a managed evidence framework.

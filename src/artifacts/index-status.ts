@@ -24,8 +24,7 @@ import {
   BUILTIN_GRAPH_CONFIGS,
   getGraphIndexDir,
   getProjectIndexRoot,
-  loadGlobalGraphConfigs,
-  loadUserGraphConfigs,
+  loadWorkspaceGraphs,
   type GraphConfigWarning,
   type GraphType,
   type ArtifactIndex,
@@ -35,6 +34,8 @@ import {
   getFortemiCoreSyncStatus,
   type FortemiCoreSyncStatus,
 } from './fortemi-core-sync.js';
+
+import { indexAdapterRegistry, indexFreshnessSnapshot, selectIndexAdapters, type IndexFreshness } from './index-adapters.js';
 
 export interface GraphStatus {
   /** Resolved active backend after graph/project/default precedence. */
@@ -66,6 +67,8 @@ export interface GraphStatus {
 
 export interface IndexStatusReport {
   graphs: GraphStatus[];
+  /** Per-owner freshness; existing graph fields retain their meaning. */
+  indices: Array<IndexFreshness & { identity: string; backend: string; operation: string; roots: string[]; exclusions: readonly string[]; outputPaths: string[] }>;
   /** Index dirs found under `.aiwg/.index/` that match no registered graph. */
   orphanIndexDirs: string[];
   /** Non-silent graph-config load problems (#1624). */
@@ -109,12 +112,12 @@ function readBuiltMeta(indexDir: string): {
 export function collectIndexStatus(
   cwd: string,
   nowMs?: number,
+  only?: string,
 ): IndexStatusReport {
   // Populate the registry from module + operator config, collecting warnings
   // instead of letting malformed defs vanish (#1624).
   const warnings: GraphConfigWarning[] = [];
-  loadUserGraphConfigs(cwd, warnings);
-  loadGlobalGraphConfigs(warnings);
+  loadWorkspaceGraphs(cwd, warnings);
 
   const now = nowMs ?? Date.now();
   const graphs: GraphStatus[] = [];
@@ -171,6 +174,10 @@ export function collectIndexStatus(
 
   return {
     graphs,
+    indices: selectIndexAdapters(indexAdapterRegistry(cwd), only).map(adapter => ({
+      ...indexFreshnessSnapshot(adapter, cwd, now), identity: adapter.identity, backend: adapter.backend,
+      operation: adapter.operation, roots: adapter.roots(cwd), exclusions: adapter.exclusions, outputPaths: adapter.outputPaths,
+    })),
     orphanIndexDirs,
     warnings,
     fortemiCore: getFortemiCoreSyncStatus(cwd),
@@ -184,12 +191,21 @@ export function collectIndexStatus(
   };
 }
 
+/** Probe inputs through their owners; the legacy synchronous reader stays available. */
+export async function probeIndexStatus(cwd: string, only?: string, nowMs = Date.now()): Promise<IndexStatusReport> {
+  const report = collectIndexStatus(cwd, nowMs, only);
+  const adapters = new Map(indexAdapterRegistry(cwd).map(adapter => [adapter.name, adapter]));
+  report.indices = await Promise.all(report.indices.map(async index => ({ ...index,
+    ...await adapters.get(index.name)!.probe(cwd, nowMs) })));
+  return report;
+}
+
 /** Render `aiwg index status` (human table or JSON). */
 export async function showIndexStatus(
   cwd: string,
-  opts: { json?: boolean } = {},
+  opts: { json?: boolean; only?: string } = {},
 ): Promise<void> {
-  const report = collectIndexStatus(cwd);
+  const report = await probeIndexStatus(cwd, opts.only);
 
   if (opts.json) {
     console.log(JSON.stringify(report, null, 2));
@@ -282,6 +298,9 @@ export async function showIndexStatus(
   }
 
   console.log('');
+  for (const index of report.indices) {
+    console.log(`  ${index.name}: ${index.status} (target ${index.policy.targetStaleAfterMs}ms, pending ${index.pendingWork})${index.lastError ? `: ${index.lastError}` : ''}`);
+  }
   console.log(
     `${report.summary.total} graph(s): ${report.summary.built} built, ${missing} missing, ` +
       `${report.summary.orphans} orphan(s), ${report.summary.warnings} warning(s).`,

@@ -20,6 +20,8 @@
  */
 
 import fs from 'fs/promises';
+import { importImpl } from '../_resolve-impl.mjs';
+import { collectDecisionOffloadReport, formatDecisionOffloadReport } from './decision-offload-report.mjs';
 import { existsSync } from 'fs';
 import http from 'http';
 import os from 'os';
@@ -30,6 +32,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, '../..');
 const runtimeRoot = existsSync(path.join(packageRoot, 'src')) ? 'src' : 'dist/src';
+const { readNativeSandboxWarnings } = await importImpl(import.meta.url, 'config/native-sandbox-warnings.js');
 const [{ resolveProjectAiwgDir }, { auditProjectArtifactHealth }] = await Promise.all([
   import(pathToFileURL(path.join(packageRoot, runtimeRoot, 'config/project-artifacts-runtime.mjs')).href),
   import(pathToFileURL(path.join(packageRoot, runtimeRoot, 'config/project-artifacts-health.mjs')).href),
@@ -351,7 +354,12 @@ async function collectActiveOperations(projectRoot) {
 async function buildWorkspaceStatus(projectRoot) {
   const aiwgPath = resolveProjectAiwgDir(projectRoot);
   const artifactHealth = auditProjectArtifactHealth(projectRoot);
+  const { rulePinState } = await importImpl(import.meta.url, 'rules/pin-state.js');
+  const pins = rulePinState(projectRoot, packageRoot);
   const result = {
+    nativeSandboxWarnings: await readNativeSandboxWarnings(projectRoot).catch(() => []),
+    rule_pins: { rules: pins.rules, warnings: pins.warnings },
+    decisionOffload: await collectDecisionOffloadReport(projectRoot),
     workspace: {
       path: aiwgPath,
       exists: false,
@@ -539,6 +547,8 @@ async function buildVerificationProbe(projectRoot) {
 
   return {
     schema: 'aiwg.status.probe.v1',
+    nativeSandboxWarnings: workspace.nativeSandboxWarnings,
+    rule_pins: workspace.rule_pins,
     generated_at: new Date().toISOString(),
     project_root: path.resolve(projectRoot),
     engaged: ready && !artifactNeedsRepair,
@@ -718,6 +728,7 @@ async function workspaceStatus(args) {
         console.log('='.repeat(60));
         console.log('');
         console.log('No .aiwg/ workspace found in this project.');
+        for (const warning of result.nativeSandboxWarnings) console.log(`Warning: ${warning.message}`);
         console.log('');
         console.log('To create a workspace:');
         console.log('  aiwg use sdlc        # Install SDLC framework');
@@ -734,8 +745,15 @@ async function workspaceStatus(args) {
     }
 
     // Text output
+    for (const warning of result.nativeSandboxWarnings) console.log(`Warning: ${warning.message}`);
     console.log('\nAIWG - Workspace Status');
     console.log('='.repeat(60));
+    console.log('');
+
+    for (const rule of result.rule_pins.rules) console.log(`${rule.name}: pinned kernel (canonical ${rule.canonical_activation})`);
+    for (const warning of result.rule_pins.warnings) console.log(warning);
+
+    for (const line of formatDecisionOffloadReport(result.decisionOffload)) console.log(line);
     console.log('');
 
     // Workspace info

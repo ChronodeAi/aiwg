@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readAiwgConfig } from '../../../src/config/aiwg-config.js';
+import { readAiwgConfig, validateParallelismConfig } from '../../../src/config/aiwg-config.js';
 import { ConfigLoader } from '../../../src/models/config-loader.js';
 import { modelsHandler } from '../../../src/cli/handlers/models.js';
 
@@ -15,6 +15,40 @@ afterEach(async () => {
 });
 
 describe('worker dispatch getting-started example (#3172)', () => {
+  it('documents a separate external group and launching outside the conductor sandbox', async () => {
+    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch-runtime.md'), 'utf8');
+    const section = doc.split('## Running outside the conductor sandbox')[1].split('## Worker launch boundary')[0];
+    const config = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(section)![1]);
+    expect(validateParallelismConfig(config.parallelism)).toEqual([]);
+    expect(config.parallelism.groups['muse-external'].execution).toMatchObject({ sandbox: 'external', approval: 'never' });
+    expect(section).toContain('sandbox.excludedCommands');
+    expect(section).toContain('OG_SANDBOX_EXTERNAL');
+    expect(section).toContain('Never nest sandboxes');
+    const rule = await readFile(path.join(frameworkRoot, 'agentic/code/addons/aiwg-utils/rules/subagent-scoping.md'), 'utf8');
+    expect(rule).toContain('outside your own harness sandbox');
+    expect(rule).toContain('never nest sandboxes');
+  });
+  it('loads the reusable two-profile template/rubric examples and rejects their documented inherited conflict', async () => {
+    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch.md'), 'utf8');
+    const base = doc.split('## Configure a worker group')[1].split('## Supported CLI versions')[0];
+    const config = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(base)![1]);
+    const section = doc.split('## Reusable group templates and project rubrics')[1].split('## Qualify the installed CLIs')[0];
+    const [templates, conflict, rubric] = [...section.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
+    Object.assign(config.parallelism, templates);
+    root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-template-docs-'));
+    await mkdir(path.join(root, '.aiwg'));
+    const user = path.join(root, 'user'); await mkdir(user);
+    vi.stubEnv('AIWG_CONFIG', user); vi.stubEnv('AIWG_HOME', frameworkRoot);
+    await writeFile(path.join(root, '.aiwg/aiwg.config'), JSON.stringify(config));
+    await writeFile(path.join(root, 'models.json'), JSON.stringify({ defaults: { workerSelection: rubric } }));
+    const loader = new ConfigLoader(root);
+    expect(validateParallelismConfig(config.parallelism)).toEqual([]);
+    const loaded = await loader.load(config.parallelism);
+    expect(loaded.defaults.workerSelection!.roleGuidance!.maintenance.baseRole).toBe('coding');
+    expect(loaded.workerPolicyOrigins!['/parallelism/groups/maintenance/template']).toHaveLength(3);
+    await writeFile(path.join(user, 'models.json'), JSON.stringify(conflict));
+    await expect(loader.load(config.parallelism)).rejects.toThrow('OG_POLICY_RELAXATION');
+  });
   it('loads the documented files and reaches qualification for all three roles', async () => {
     const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/worker-dispatch.md'), 'utf8');
     const section = doc.split('## Configure a worker group')[1].split('## Supported CLI versions')[0];
@@ -47,5 +81,35 @@ describe('worker dispatch getting-started example (#3172)', () => {
       expect(plan.status).toBe('blocked');
       expect(plan.diagnostics).toEqual([expect.objectContaining({ code: 'OG_ADAPTER_UNQUALIFIED' })]);
     }
+  });
+});
+
+describe('managed operator guide configuration', () => {
+  it('loads the documented two groups with quota/budget policy and requires trusted activation', async () => {
+    const doc = await readFile(path.join(frameworkRoot, 'docs/getting-started/managed-worker-dispatch.md'), 'utf8');
+    const examples = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
+    expect(examples).toHaveLength(3);
+    const [config, models, authorization] = examples;
+    expect(authorization).toEqual({ project: '/absolute/path/to/project', revision: 3, fields: ['/parallelism/max_parallel_subagents', '/workerSelection/roleGuidance/coding'] });
+    root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-managed-docs-'));
+    await mkdir(path.join(root, '.aiwg'));
+    vi.stubEnv('AIWG_CONFIG', path.join(root, 'user-config'));
+    vi.stubEnv('AIWG_HOME', frameworkRoot);
+    await writeFile(path.join(root, '.aiwg/aiwg.config'), JSON.stringify(config));
+    await writeFile(path.join(root, 'models.json'), JSON.stringify(models));
+    expect(validateParallelismConfig(config.parallelism)).toEqual([]);
+    const loaded = (await readAiwgConfig(root))!;
+    const merged = await new ConfigLoader(root).load(loaded.parallelism);
+    expect(Object.keys(loaded.parallelism!.groups!)).toEqual(['coding', 'review']);
+    expect(merged.defaults.workerSelection!.guards!.deniedEfforts).toContain('ultra');
+    expect(loaded.parallelism!.budgets).toMatchObject({ enforcement: 'observed', unknownCost: 'reserve' });
+    expect(loaded.parallelism!.activation).toBeUndefined();
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const brief = path.join(root, 'brief.txt');
+    await writeFile(brief, 'Bounded synthetic implementation.');
+    const args = ['resolve', '--role', 'coding', '--task', 'implementation', '--group', 'coding',
+      '--brief', brief, '--workdir', root, '--final-output', path.join(root, 'result.json'), '--format', 'json'];
+    expect((await modelsHandler.execute({ args, rawArgs: ['models', ...args], cwd: root, frameworkRoot })).exitCode).toBe(2);
+    expect(JSON.parse(String(output.mock.calls.at(-1)![0])).invocation).toBeFalsy();
   });
 });

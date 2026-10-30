@@ -15,14 +15,14 @@
       "source": "05-configuration-spec.md ### 4.1 Existing",
       "owner": "vscode-extension/schemas/aiwg.config.v1.json",
       "target": "properties.parallelism",
-      "sha256": "554a18583b9711955070836de7f304843342d4c1bb89eb04592082422c809696"
+      "sha256": "593c6b644dbe742c982a00c10c9fd445a912b9851f2423bb53e4fc8e0338d92d"
     },
     {
       "file": "worker-selection.fragment.json",
       "source": "05-configuration-spec.md ### 4.2 Existing",
       "owner": "schemas/models/model-config-compatibility.v1.schema.json",
       "target": "properties.defaults.properties.workerSelection",
-      "sha256": "6051d9dd591619e4a7721fb688676b03ab5a20faafd791a0cd581e4c75ab6343"
+      "sha256": "48c547835c50d0974a174fabb8f66636740eb97149840020cb5e1b5c73356ba1"
     },
     {
       "file": "worker-adapter.fragment.json",
@@ -50,7 +50,7 @@
       "source": "05-configuration-spec.md ### 5.1 Executable",
       "owner": "schemas/mission-v1.schema.json",
       "target": "$defs",
-      "sha256": "29316d7dc5d8e2b88291c8b97e18a78c3a00b65812c6457bfad3661445d237f0"
+      "sha256": "f6069d6473bdc797af582a2ac7944ba48f4f8de1fba2c9a7418549b7e8e93a49"
     }
   ]
 }

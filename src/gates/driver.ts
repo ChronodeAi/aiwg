@@ -1,3 +1,4 @@
+import { assertGateReportDecision } from './report.js';
 import { lstatSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -185,10 +186,11 @@ export async function validateGateFile(
     } else {
       // Full report validation needs the trusted evaluation context
       // (`validateGateReport` re-derives the report byte-identically).
-      // `validate` checks the closed schema, the kind and the self-digest,
+      // `validate` checks component ceilings, the closed schema, kind and self-digest,
       // so rewritten evidence with a stale digest still fails here.
       const report = validateGateDocument(document);
       if (!isRecord(document) || document.kind !== 'GateReport') throw new Error('expected kind GateReport');
+      assertGateReportDecision(report as GateReport);
       const { digest, ...fields } = report as unknown as Record<string, unknown>;
       if (typeof digest !== 'string' || artifactDigest(fields) !== digest) {
         throw new Error('report digest does not match its content');
@@ -333,70 +335,11 @@ export function listGatePacks(
   return summaries;
 }
 
-/**
- * Packs referenced by one rule's `enforcedBy` frontmatter (#2830 stub; full
- * coverage is #2839). Scans bundled and project-local `rules/*.md` for an
- * `enforcedBy: [aiwg:<bundle>/<pack>#<gate>]` list naming the rule. Returns
- * the referenced pack ids (without gate fragments). Empty when no rule
- * declares `enforcedBy` — rules remain guidance until they name a check.
- */
+/** List the distinct packs named by validated rule coverage declarations. */
 export async function packsReferencedByRule(ruleId: string, options: GatesDriverOptions = {}): Promise<string[]> {
-  const { readdir, readFile: readRuleFile, stat } = await import('node:fs/promises');
-  const roots: string[] = [];
-  const root = rootDir(options);
-  for (const sub of ['frameworks', 'addons', 'extensions'] as const) {
-    roots.push(path.join(root, 'agentic/code', sub));
-  }
-  roots.push(path.join(baseDir(options), '.aiwg'));
-  const ruleFiles: string[] = [];
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > 5 || ruleFiles.length > 500) return;
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (ruleFiles.length > 500) return;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === 'node_modules' || entry.name.startsWith('.git')) continue;
-        await walk(full, depth + 1);
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        if (!full.replace(/\\/g, '/').includes('/rules/')) continue;
-        ruleFiles.push(full);
-      }
-    }
-  };
-  for (const dir of roots) await walk(dir, 0);
-  const referenced = new Set<string>();
-  for (const file of ruleFiles) {
-    let content: string;
-    try {
-      const st = await stat(file);
-      if (st.size > 65_536) continue;
-      content = await readRuleFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-    const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-    if (!match) continue;
-    const frontmatter = match[1];
-    if (!frontmatter.includes('enforcedBy')) continue;
-    const ruleName = path.basename(file, '.md');
-    const dirName = path.basename(path.dirname(file));
-    const names = new Set([ruleName, dirName === 'rules' ? null : `${dirName}/${ruleName}`, file]);
-    if (!names.has(ruleId) && ![...names].filter(Boolean).some(name => ruleId.endsWith(String(name)))) continue;
-    for (const line of frontmatter.split('\n')) {
-      const trimmed = line.trim().replace(/^-\s*/, '');
-      const id = trimmed.match(/(aiwg|framework|addon|extension|project):[^\s,'"\]]+/)?.[1]
-        ? trimmed.match(/((?:aiwg|framework|addon|extension|project):[^\s,'"\]]+)/)?.[1]
-        : null;
-      if (id) referenced.add(id.split('#')[0]);
-    }
-  }
-  return [...referenced].sort();
+  const { listRuleGateCoverage } = await import('../rules/gate-coverage.js');
+  return [...new Set(listRuleGateCoverage(options, ruleId).flatMap(rule =>
+    rule.enforcedBy.map(reference => reference.split('#')[0])))].sort();
 }
 
 /** Show one pack by full id, rest-path or short pack name. */

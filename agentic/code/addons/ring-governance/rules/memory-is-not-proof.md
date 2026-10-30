@@ -1,3 +1,12 @@
+---
+enforcement: high
+activation: bound
+summary: Treat memory and generated summaries as leads, never as proof of correctness, acceptance, promotion, or arming.
+bound_to:
+  agents: [governance-skeptic]
+  skills: [evolution-surface-review, governance-corpus-inventory, governance-escape-hatch-audit]
+---
+
 # Memory Is Not Proof
 
 **Enforcement Level**: HIGH

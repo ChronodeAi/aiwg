@@ -29,6 +29,7 @@
 
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { mergeClaudeAttribution, undoClaudeAttribution } from './claude-attribution.js';
 
 /**
  * Hook script → Claude Code hook event mapping.
@@ -79,6 +80,10 @@ export interface InstallOptions {
   frameworkRoot: string;
   /** Don't write files; describe what would happen */
   dryRun?: boolean;
+  /** Install hook scripts and registrations (default true). */
+  hooks?: boolean;
+  /** Fill unset attribution keys (default true). */
+  attribution?: boolean;
   /** Force overwrite even when settings.json has no AIWG marker (with backup) */
   force?: boolean;
   /** Verbose logging */
@@ -179,7 +184,7 @@ export async function installAiwgHooks(opts: InstallOptions): Promise<InstallRes
 
   let sourceFiles: string[];
   try {
-    sourceFiles = await fs.readdir(sourceHooksDir);
+    sourceFiles = opts.hooks === false ? [] : await fs.readdir(sourceHooksDir);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
@@ -194,11 +199,11 @@ export async function installAiwgHooks(opts: InstallOptions): Promise<InstallRes
 
   // 1. Copy hook scripts to .claude/hooks/
   const claudeHooksDir = path.join(opts.projectPath, '.claude', 'hooks');
-  if (!opts.dryRun) {
+  if (!opts.dryRun && opts.hooks !== false) {
     await fs.mkdir(claudeHooksDir, { recursive: true });
   }
 
-  for (const { file } of HOOK_SCRIPTS) {
+  for (const { file } of opts.hooks === false ? [] : HOOK_SCRIPTS) {
     if (!sourceFiles.includes(file)) {
       result.warnings.push(`hook script not found in addon source: ${file}`);
       continue;
@@ -243,80 +248,84 @@ export async function installAiwgHooks(opts: InstallOptions): Promise<InstallRes
         result.warnings.push(`Backed up operator-authored settings.json to ${backup}`);
       }
     } catch (err) {
-      result.warnings.push(`Backup failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`Backup failed; settings.json was not changed: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
     }
   }
 
-  // 4. Normalize (migrate legacy array shape → object shape) and merge
-  const [hooksObj, migrated] = normalizeHooks(settings.hooks);
-  if (migrated) {
-    result.migratedFromLegacy = true;
-    result.warnings.push(
-      'Migrated legacy array-shaped hooks field to object form (#107).',
-    );
-  }
-  settings.hooks = hooksObj;
+  if (opts.attribution !== false) mergeClaudeAttribution(settings, result.warnings);
 
-  for (const { file, events } of HOOK_SCRIPTS) {
-    if (!sourceFiles.includes(file)) continue;
-    // Claude Code parses hook commands as shell command strings. Keep the
-    // embedded script path POSIX-style on every host: native Windows
-    // backslashes are interpreted as escapes and collapse into a nonexistent
-    // path such as `.claudehooksaiwg-session.cjs` (#133).
-    const script = path.posix.join('.claude', 'hooks', file);
-    const hookId = file.replace(/\.(cjs|js)$/, '');
+  if (opts.hooks !== false) {
+    // 4. Normalize (migrate legacy array shape → object shape) and merge
+    const [hooksObj, migrated] = normalizeHooks(settings.hooks);
+    if (migrated) {
+      result.migratedFromLegacy = true;
+      result.warnings.push(
+        'Migrated legacy array-shaped hooks field to object form (#107).',
+      );
+    }
+    settings.hooks = hooksObj;
 
-    for (const [event, argument] of Object.entries(events)) {
-      const command = `node ${script}${argument ? ` ${argument}` : ''}`;
-      if (!hooksObj[event]) hooksObj[event] = [];
-      const groups = hooksObj[event];
+    for (const { file, events } of HOOK_SCRIPTS) {
+      if (!sourceFiles.includes(file)) continue;
+      // Claude Code parses hook commands as shell command strings. Keep the
+      // embedded script path POSIX-style on every host: native Windows
+      // backslashes are interpreted as escapes and collapse into a nonexistent
+      // path such as `.claudehooksaiwg-session.cjs` (#133).
+      const script = path.posix.join('.claude', 'hooks', file);
+      const hookId = file.replace(/\.(cjs|js)$/, '');
 
-      // Find any existing AIWG-managed entry for this hookId and refresh
-      // its `command` to the current script path/extension. Required for
-      // users upgrading from pre-`.cjs` installs where the registered
-      // command still references `aiwg-{session,trace,permissions}.js` —
-      // those files no longer exist on disk after refresh, causing
-      // `MODULE_NOT_FOUND` at `node:internal/modules/cjs/loader` on every
-      // hook invocation. (Fixes regression report on Claude Code 2.1.157.)
-      // Match by `_aiwg_id` first, then by the script path. An entry invoking an
-      // AIWG-owned hook script without the managed tag is AIWG residue from an
-      // earlier install; appending a managed entry beside it registers the hook
-      // twice and runs it twice per event. Adopt it instead. (#2543)
-      let updated = false;
-      for (const group of groups) {
-        if (!Array.isArray(group.hooks)) continue;
-        for (const h of group.hooks) {
-          const sameId = h._aiwg_id === hookId;
-          const sameScript = typeof h.command === 'string' && h.command.includes(script);
-          if (!sameId && !sameScript) continue;
-          const adopting = !sameId && sameScript;
-          if (h.command !== command || h.type !== 'command' || h._aiwg_managed !== true || h._aiwg_id !== hookId) {
-            h.type = 'command';
-            h.command = command;
-            h._aiwg_managed = true;
-            h._aiwg_id = hookId;
-            result.warnings.push(
-              adopting
-                ? `Adopted pre-existing untagged ${event} → ${hookId} entry instead of registering a duplicate`
-                : `Refreshed stale ${event} → ${hookId} command path`,
-            );
+      for (const [event, argument] of Object.entries(events)) {
+        const command = `node ${script}${argument ? ` ${argument}` : ''}`;
+        if (!hooksObj[event]) hooksObj[event] = [];
+        const groups = hooksObj[event];
+
+        // Find any existing AIWG-managed entry for this hookId and refresh
+        // its `command` to the current script path/extension. Required for
+        // users upgrading from pre-`.cjs` installs where the registered
+        // command still references `aiwg-{session,trace,permissions}.js` —
+        // those files no longer exist on disk after refresh, causing
+        // `MODULE_NOT_FOUND` at `node:internal/modules/cjs/loader` on every
+        // hook invocation. (Fixes regression report on Claude Code 2.1.157.)
+        // Match by `_aiwg_id` first, then by the script path. An entry invoking an
+        // AIWG-owned hook script without the managed tag is AIWG residue from an
+        // earlier install; appending a managed entry beside it registers the hook
+        // twice and runs it twice per event. Adopt it instead. (#2543)
+        let updated = false;
+        for (const group of groups) {
+          if (!Array.isArray(group.hooks)) continue;
+          for (const h of group.hooks) {
+            const sameId = h._aiwg_id === hookId;
+            const sameScript = typeof h.command === 'string' && h.command.includes(script);
+            if (!sameId && !sameScript) continue;
+            const adopting = !sameId && sameScript;
+            if (h.command !== command || h.type !== 'command' || h._aiwg_managed !== true || h._aiwg_id !== hookId) {
+              h.type = 'command';
+              h.command = command;
+              h._aiwg_managed = true;
+              h._aiwg_id = hookId;
+              result.warnings.push(
+                adopting
+                  ? `Adopted pre-existing untagged ${event} → ${hookId} entry instead of registering a duplicate`
+                  : `Refreshed stale ${event} → ${hookId} command path`,
+              );
+            }
+            updated = true;
           }
-          updated = true;
         }
-      }
-      if (updated) continue;
+        if (updated) continue;
 
-      groups.push({
-        hooks: [
-          {
-            type: 'command',
-            command,
-            _aiwg_managed: true,
-            _aiwg_id: hookId,
-          },
-        ],
-      });
-      result.registeredEvents.push(`${event} → ${hookId}`);
+        groups.push({
+          hooks: [
+            {
+              type: 'command',
+              command,
+              _aiwg_managed: true,
+              _aiwg_id: hookId,
+            },
+          ],
+        });
+        result.registeredEvents.push(`${event} → ${hookId}`);
+      }
     }
   }
 
@@ -349,9 +358,40 @@ export async function restoreSettingsBackup(projectPath: string): Promise<string
   const backups = entries
     .filter((e) => e.startsWith('settings.json.bak.'))
     .sort();
-  if (backups.length === 0) return null;
+  if (backups.length === 0) {
+    await removeClaudeAttribution(projectPath);
+    return null;
+  }
   const latest = backups[backups.length - 1];
   const src = path.join(claudeDir, latest);
-  await fs.copyFile(src, settingsPath);
+  const restored = JSON.parse(await fs.readFile(src, 'utf8'));
+  const currentRaw = await fs.readFile(settingsPath, 'utf8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  // Attribution rollback is ownership-based; keep later operator edits.
+  if (currentRaw !== null) {
+    let current;
+    try { current = JSON.parse(currentRaw); }
+    catch { /* A corrupt current file must still be recoverable from backup. */ }
+    if (current && typeof current === 'object' && !Array.isArray(current)) {
+      undoClaudeAttribution(current);
+      if ('attribution' in current) restored.attribution = current.attribution;
+      else delete restored.attribution;
+    }
+  }
+  if (restored.aiwg) delete restored.aiwg.attributionKeys;
+  await atomicWrite(settingsPath, JSON.stringify(restored, null, 2) + '\n');
   return src;
+}
+
+/** Remove only unchanged attribution defaults owned by AIWG. */
+export async function removeClaudeAttribution(projectPath: string, dryRun = false): Promise<void> {
+  const file = path.join(projectPath, '.claude', 'settings.json');
+  let settings;
+  try { settings = JSON.parse(await fs.readFile(file, 'utf8')); }
+  catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; throw err; }
+  if (undoClaudeAttribution(settings) && !dryRun) {
+    await atomicWrite(file, JSON.stringify(settings, null, 2) + '\n');
+  }
 }

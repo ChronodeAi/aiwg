@@ -5,6 +5,8 @@ import { parse } from 'yaml';
 
 const githubWorkflow = readFileSync(resolve('.github/workflows/npm-publish.yml'), 'utf8');
 const giteaWorkflow = readFileSync(resolve('.gitea/workflows/npm-publish.yml'), 'utf8');
+const rcWorkflow = readFileSync(resolve('.github/workflows/release-candidate.yml'), 'utf8');
+const rcValidator = readFileSync(resolve('tools/release/release-candidate.mjs'), 'utf8');
 const smoke = readFileSync(resolve('tools/ci/session-feature-install-smoke.mjs'), 'utf8');
 const packageScripts = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).scripts as Record<string, string>;
 
@@ -31,15 +33,15 @@ describe('session SQLite feature release gate', () => {
     expect(steps.indexOf(installs[0])).toBeLessThan(steps.indexOf(gates[0]));
   });
 
-  it('runs the packed-install smoke before every npm publication lane', () => {
-    expect(githubWorkflow.match(/npm run test:sessions:feature-install/g)).toHaveLength(1);
-    expect(giteaWorkflow.match(/npm run test:sessions:feature-install/g)).toHaveLength(1);
-
-    expect(githubWorkflow.indexOf('npm run test:sessions:feature-install'))
-      .toBeLessThan(githubWorkflow.indexOf('- name: Publish to npmjs.org'));
-
-    expect(giteaWorkflow.indexOf('npm run test:sessions:feature-install'))
-      .toBeLessThan(giteaWorkflow.indexOf('- name: Publish to Gitea npm registry'));
+  it('runs packed-install smoke in the direct stable workflow before publication', () => {
+    expect(githubWorkflow).toContain('npm run test:sessions:feature-install');
+    const stable = parse(githubWorkflow).jobs['publish-to-npmjs-org'].steps;
+    const validation = stable.findIndex((step: { name: string }) => step.name === 'Validate and build stable release');
+    const publication = stable.findIndex((step: { name: string }) => step.name === 'Publish smoke-tested stable tarballs to npmjs.org');
+    expect(validation).toBeLessThan(publication);
+    expect(stable[validation].run).toContain('npm run test:sessions:feature-install');
+    expect(stable[validation].if).toBe("${{ steps.recovery.outputs.recovered != 'true' }}");
+    expect(giteaWorkflow).toContain('direct-stable-publish.mjs --mirror');
   });
 
   it('exercises the documented feature installer and an empty session catalog', () => {

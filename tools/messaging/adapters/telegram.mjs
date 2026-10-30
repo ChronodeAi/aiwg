@@ -57,6 +57,7 @@ export class TelegramAdapter extends BaseAdapter {
 
     // Load from config or environment variables
     this.#botToken = config.botToken || config.token || process.env.AIWG_TELEGRAM_TOKEN;
+    this._setSensitiveValues(this.#botToken);
     this.#defaultChatId = config.defaultChatId || process.env.AIWG_TELEGRAM_CHAT_ID;
     this.#pollingEnabled = config.pollingEnabled ?? config.polling_enabled ?? false;
     this.#pollingTimeout = config.pollingTimeout ?? 30;
@@ -80,7 +81,8 @@ export class TelegramAdapter extends BaseAdapter {
       // Use first default room or first room as the fallback defaultChatId
       if (!this.#defaultChatId) {
         const defaultRoom = config.rooms.find(r => r.is_default || r.isDefault) || config.rooms[0];
-        this.#defaultChatId = defaultRoom.chat_id || defaultRoom.chatId;
+        this._setSensitiveValues(this.#botToken);
+    this.#defaultChatId = defaultRoom.chat_id || defaultRoom.chatId;
       }
     }
 
@@ -117,7 +119,7 @@ export class TelegramAdapter extends BaseAdapter {
         throw new Error(`Telegram API error: ${data.description}`);
       }
 
-      console.log(`[telegram] Connected as bot: ${data.result.username}`);
+      console.log(this._redactText(`[telegram] Connected as bot: ${data.result.username}`));
       this._setConnected();
 
       // Start polling if enabled
@@ -125,6 +127,7 @@ export class TelegramAdapter extends BaseAdapter {
         this.#startPolling();
       }
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       throw new Error(`Failed to initialize Telegram adapter: ${error.message}`);
     }
@@ -211,6 +214,7 @@ export class TelegramAdapter extends BaseAdapter {
         success: true,
       };
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       return {
         messageId: '',
@@ -261,6 +265,7 @@ export class TelegramAdapter extends BaseAdapter {
         throw new Error(response.description || 'Unknown Telegram API error');
       }
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       throw new Error(`Failed to update Telegram message: ${error.message}`);
     }
@@ -394,6 +399,7 @@ export class TelegramAdapter extends BaseAdapter {
       try {
         await this.#pollOnce();
       } catch (error) {
+        error = this._redactError(error);
         if (error.name === 'AbortError') {
           break;
         }
@@ -443,6 +449,7 @@ export class TelegramAdapter extends BaseAdapter {
         await this.#handleUpdate(update);
       }
     } catch (error) {
+      error = this._redactError(error);
       clearTimeout(timeoutId);
       if (error.name !== 'AbortError') {
         throw error;
@@ -467,6 +474,7 @@ export class TelegramAdapter extends BaseAdapter {
         await this.#handleCallbackQuery(update.callback_query);
       }
     } catch (error) {
+      error = this._redactError(error);
       console.error('[telegram] Error handling update:', error);
       this._recordError(error);
     }

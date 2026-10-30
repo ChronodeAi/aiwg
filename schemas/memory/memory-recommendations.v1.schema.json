@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/memory/memory-recommendations.v1.schema.json",
+  "title": "AIWG memory recommendations v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "at",
+    "workspace",
+    "scope",
+    "advisoryOnly",
+    "defaultPlacement",
+    "thresholds",
+    "coverage",
+    "candidates",
+    "notes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "aiwg.memory-recommendations.v1"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "advisoryOnly": {
+      "const": true
+    },
+    "defaultPlacement": {
+      "const": "indexed"
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimumAgeDays",
+        "reviewAgeDays",
+        "demoteMinimumTokens",
+        "taskPackCharacters"
+      ],
+      "properties": {
+        "minimumAgeDays": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reviewAgeDays": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "demoteMinimumTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "taskPackCharacters": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 65536
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "limitsHit",
+        "exclusions"
+      ],
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "limitsHit": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "target",
+          "related",
+          "status",
+          "advisoryRank",
+          "rationale",
+          "evidence",
+          "uncertainty",
+          "blockedReasons",
+          "protectedItemExceptions",
+          "expectedSavings",
+          "retrievalImpact",
+          "residentJustification",
+          "relatedTargets",
+          "sourceDigest"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "merge",
+              "recategorize",
+              "conflict",
+              "supersede",
+              "demote",
+              "promote",
+              "retire"
+            ]
+          },
+          "target": {
+            "$ref": "https://aiwg.io/schemas/memory/memory-record.v1.schema.json"
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "status": {
+            "enum": [
+              "advisory",
+              "blocked",
+              "rejected",
+              "conflict"
+            ]
+          },
+          "advisoryRank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source",
+                "detail"
+              ],
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "detail": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "minItems": 1
+          },
+          "uncertainty": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "blockedReasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "protectedItemExceptions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "expectedSavings": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "residentTokens",
+              "estimator",
+              "confidence",
+              "basis"
+            ],
+            "properties": {
+              "residentTokens": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "estimator": {
+                "type": "string",
+                "minLength": 1
+              },
+              "confidence": {
+                "enum": [
+                  "measured",
+                  "inferred",
+                  "unknown"
+                ]
+              },
+              "basis": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "retrievalImpact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "detail",
+              "requiresVerification",
+              "proposedPlacement",
+              "category",
+              "taskPack"
+            ],
+            "properties": {
+              "detail": {
+                "type": "string",
+                "minLength": 1
+              },
+              "requiresVerification": {
+                "const": true
+              },
+              "proposedPlacement": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "indexed",
+                      "task-context",
+                      "resident"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "category": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "taskPack": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "builder",
+                  "totalCharacters"
+                ],
+                "properties": {
+                  "builder": {
+                    "const": "buildWorkspaceContextPack"
+                  },
+                  "totalCharacters": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          },
+          "residentJustification": {
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [],
+                "properties": {
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "rationale": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "budgetTokens": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "reviewDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "boundedPackEvaluated": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "relatedTargets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "record",
+                "sourceDigest"
+              ],
+              "properties": {
+                "record": {
+                  "$ref": "https://aiwg.io/schemas/memory/memory-record.v1.schema.json"
+                },
+                "sourceDigest": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "sourceDigest": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

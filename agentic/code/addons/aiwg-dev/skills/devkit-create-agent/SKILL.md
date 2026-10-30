@@ -9,7 +9,7 @@ description: Create a new agent with AI-guided expertise definition following th
 
 Create a new agent with AI assistance to define expertise, workflow, and capabilities.
 
-**Follows**: [Agent Design Bible](~/.local/share/ai-writing-guide/docs/AGENT-DESIGN.md) - 10 Golden Rules for production-grade agents.
+**Follows**: [Agent Design Bible]($AIWG_ROOT/docs/frameworks/sdlc-complete/agent-design.md) - 10 Golden Rules for production-grade agents.
 
 **Research Foundation**: REF-001 (Bandara et al.), REF-002 (Roig 2025) failure archetype prevention.
 

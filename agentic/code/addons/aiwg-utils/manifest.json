@@ -77,6 +77,8 @@
     "aiwg-model-reasoning-worker",
     "aiwg-model-coding-worker",
     "aiwg-model-efficiency-worker",
+    "aiwg-model-explorer",
+    "aiwg-model-verifier",
     "session-analyst"
   ],
   "skills": [
@@ -139,6 +141,7 @@
     "customize-upstream-sync",
     "customize-contribute-back",
     "context-firewall",
+    "harness-memory-maintenance",
     "session-explore",
     "session-harvest"
   ],
@@ -172,6 +175,7 @@
     "auto-compact-continue"
   ],
   "templates": [
+    "subagent-brief",
     "devkit/addon-manifest",
     "devkit/framework-manifest",
     "devkit/extension-manifest"

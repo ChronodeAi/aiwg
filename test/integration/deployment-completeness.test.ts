@@ -1,3 +1,4 @@
+import { sdlcDeploymentRules, sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Deployment Completeness & Content Validation Tests
@@ -16,7 +17,7 @@ import { mkdtempSync } from '../helpers/temp-dir.js';
  * @see test/integration/provider-file-locations.test.ts — predecessor (structure-only)
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import { readFileSync, rmSync, existsSync } from 'fs';
 import path from 'path';
@@ -24,6 +25,9 @@ import os from 'os';
 import { execFileSync } from 'child_process';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
+const activationRules = sdlcDeploymentRules(REPO_ROOT);
+const uninstalledRules = sourceRules(REPO_ROOT, 'addons').filter(rule =>
+  !rule.structural && !activationRules.some(selected => selected.file === rule.file));
 const AGENTIC_ROOT = path.join(REPO_ROOT, 'agentic/code');
 let TEST_BASE: string;
 beforeAll(() => { TEST_BASE = mkdtempSync(path.join(os.tmpdir(), 'aiwg-deploy-completeness-')); });
@@ -388,13 +392,13 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       ({ projectDir, homeDir } = await createTestEnv(`struct-${providerName}`));
-    });
-    afterEach(async () => { await cleanupTestEnv(projectDir, homeDir); });
+      runDeploy(prov.name, projectDir, homeDir);
+    }, 135_000);
+    afterAll(async () => { await cleanupTestEnv(projectDir, homeDir); });
 
     it('creates all required directories', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       for (const dir of prov.requiredDirs) {
         const full = path.join(projectDir, dir);
         expect(await pathExists(full), `Missing: ${dir}`).toBe(true);
@@ -403,7 +407,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
 
     it('creates all required root files', async () => {
       if (prov.rootFiles.length === 0) return;
-      runDeploy(prov.name, projectDir, homeDir);
       for (const f of prov.rootFiles) {
         const full = path.join(projectDir, f);
         expect(await pathExists(full), `Missing root file: ${f}`).toBe(true);
@@ -411,7 +414,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     });
 
     it('deploys skills to the skills directory', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       if (!prov.skillDir) return;
 
       // Check both project-local and home paths for providers that use home dirs
@@ -438,7 +440,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     });
 
     it('mirrors operator skills to the provider command surface', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const commandExt = prov.commandFileExt ?? '.md';
       const commandsPath = path.join(projectDir, prov.commandDir);
       const expected = [
@@ -454,7 +455,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
 
     if (PROVIDER_EXPECTATIONS[providerName].crossAgentSkillsDir) {
       it('deploys cross-agent skills to .agents/skills/', async () => {
-        runDeploy(prov.name, projectDir, homeDir);
         const crossPath = path.join(projectDir, prov.crossAgentSkillsDir!);
         expect(await pathExists(crossPath), `Missing cross-agent skills: ${prov.crossAgentSkillsDir}`).toBe(true);
         const files = await listFilesRecursive(crossPath);
@@ -471,13 +471,13 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       ({ projectDir, homeDir } = await createTestEnv(`agents-${providerName}`));
-    });
-    afterEach(async () => { await cleanupTestEnv(projectDir, homeDir); });
+      runDeploy(prov.name, projectDir, homeDir);
+    }, 135_000);
+    afterAll(async () => { await cleanupTestEnv(projectDir, homeDir); });
 
     it('deploys agents to the agent directory', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const agentPath = prov.usesHomePaths
         ? path.join(homeDir, prov.agentDir.replace(/^~\//, ''))
         : path.join(projectDir, prov.agentDir);
@@ -492,7 +492,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     });
 
     it('every deployed agent has valid YAML frontmatter', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const agentPath = prov.usesHomePaths
         ? path.join(homeDir, prov.agentDir.replace(/^~\//, ''))
         : path.join(projectDir, prov.agentDir);
@@ -537,13 +536,13 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       ({ projectDir, homeDir } = await createTestEnv(`agg-${providerName}`));
-    });
-    afterEach(async () => { await cleanupTestEnv(projectDir, homeDir); });
+      runDeploy(prov.name, projectDir, homeDir);
+    }, 135_000);
+    afterAll(async () => { await cleanupTestEnv(projectDir, homeDir); });
 
     it('aggregated file exists and has substantial content', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const aggFile = path.join(projectDir, prov.aggregatedAgentFile!);
       expect(await pathExists(aggFile), `${prov.aggregatedAgentFile} should exist`).toBe(true);
 
@@ -553,7 +552,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     });
 
     it('aggregated file references AIWG framework', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const aggFile = path.join(projectDir, prov.aggregatedAgentFile!);
       const content = await fs.readFile(aggFile, 'utf-8');
       expect(content.toLowerCase()).toContain('aiwg');
@@ -568,13 +566,13 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       ({ projectDir, homeDir } = await createTestEnv(`skill-content-${providerName}`));
-    });
-    afterEach(async () => { await cleanupTestEnv(projectDir, homeDir); });
+      runDeploy(prov.name, projectDir, homeDir);
+    }, 135_000);
+    afterAll(async () => { await cleanupTestEnv(projectDir, homeDir); });
 
     it('each skill directory contains a SKILL.md', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const skillsPath = path.join(projectDir, prov.skillDir);
       const entries = await fs.readdir(skillsPath, { withFileTypes: true }).catch(() => []);
       const skillDirs = (entries as any[]).filter((e: any) => e.isDirectory());
@@ -590,7 +588,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     });
 
     it('SKILL.md files have frontmatter with description', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const skillsPath = path.join(projectDir, prov.skillDir);
       const entries = await fs.readdir(skillsPath, { withFileTypes: true }).catch(() => []);
       const skillDirs = (entries as any[]).filter((e: any) => e.isDirectory());
@@ -628,44 +625,58 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       ({ projectDir, homeDir } = await createTestEnv(`rules-${providerName}`));
-    });
-    afterEach(async () => { await cleanupTestEnv(projectDir, homeDir); });
+      runDeploy(prov.name, projectDir, homeDir);
+    }, 135_000);
+    afterAll(async () => { await cleanupTestEnv(projectDir, homeDir); });
 
     it('deploys RULES-INDEX.md', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const rulesDir = path.join(projectDir, prov.ruleDir);
       const indexPath = path.join(rulesDir, 'RULES-INDEX.md');
       expect(await pathExists(indexPath), `${providerName}: RULES-INDEX.md should exist`).toBe(true);
     });
 
     it('RULES-INDEX.md has expected structure', async () => {
-      runDeploy(prov.name, projectDir, homeDir);
       const indexPath = path.join(projectDir, prov.ruleDir, 'RULES-INDEX.md');
       const content = await fs.readFile(indexPath, 'utf-8');
 
-      expect(content).toContain('# AIWG');
-      // Should reference rules by name
-      expect(content.length).toBeGreaterThan(500);
+      // #3457 migrates Factory/OpenCode to the shared activation projector.
+      expect(content).toContain('# Rule kernel index');
+      const summaries = activationRules.filter(rule => rule.activation === 'summary');
+      // #3457/#3460: native and emulated paths remain in the canonical index.
+      expect(content).toContain(providerName === 'claude'
+        ? '## Path rules (native)' : '## Path rules (prompt emulation)');
+      for (const rule of activationRules.filter(rule => rule.activation === 'paths')) {
+        expect(content).toContain(`- ${rule.data.name || rule.name} |`);
+        expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+      }
+      for (const rule of summaries) {
+        expect(content).toContain(rule.data.summary);
+        expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+        expect(content).not.toContain(rule.body);
+      }
+      expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
+        .toEqual(activationRules.filter(rule => ['kernel', 'summary'].includes(rule.activation))
+          .map(rule => rule.data.name || rule.name).sort());
     });
 
     it('deploys individual rule files alongside RULES-INDEX.md (PUW-016 #1117)', async () => {
-      // Per PUW-016: individual rule files now ship alongside the
-      // consolidated RULES-INDEX.md so the index's @-references resolve.
-      // The original test expected only RULES-INDEX.md; the assertion is
-      // flipped to require both surfaces.
-      runDeploy(prov.name, projectDir, homeDir);
+      // ADR: the index accompanies only activation-selected startup bodies.
       const rulesDir = path.join(projectDir, prov.ruleDir);
-      const files = await fs.readdir(rulesDir).catch(() => []);
+      const files = await fs.readdir(rulesDir);
       const mdFiles = files.filter(f => f.endsWith('.md'));
-
-      const expectedRules = ['no-attribution.md', 'anti-laziness.md', 'token-security.md',
-        'executable-feedback.md', 'versioning.md', 'failure-mitigation.md'];
-
+      // #3457: all three providers now honor the installed activation set.
+      const expectedRules = activationRules.map(rule => ({ ...rule,
+        fileDelivered: rule.structural || rule.activation === 'kernel'
+          || (providerName === 'claude' && rule.activation === 'paths'),
+      }));
       for (const rule of expectedRules) {
-        expect(mdFiles, `${providerName}: ${rule} should be deployed alongside RULES-INDEX.md`).toContain(rule);
+        const assertion = expect(mdFiles, `${providerName}: ${rule.name} (${rule.activation})`);
+        if (rule.fileDelivered) assertion.toContain(`${rule.name}.md`);
+        else assertion.not.toContain(`${rule.name}.md`);
       }
+      for (const rule of uninstalledRules) expect(mdFiles).not.toContain(`${rule.name}.md`);
       expect(mdFiles, `${providerName}: RULES-INDEX.md still ships`).toContain('RULES-INDEX.md');
     });
   });
@@ -789,14 +800,13 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       ({ projectDir, homeDir } = await createTestEnv('codex-home'));
-    });
-    afterEach(async () => { await cleanupTestEnv(projectDir, homeDir); });
+      runDeploy('codex', projectDir, homeDir);
+    }, 135_000);
+    afterAll(async () => { await cleanupTestEnv(projectDir, homeDir); });
 
     it('deploys skills to project .agents/skills/ and NOT the legacy ~/.codex/skills/ home dir', async () => {
-      runDeploy('codex', projectDir, homeDir);
-
       // Skills must land in the cross-provider .agents/skills/ — the path
       // codex-rs scans. runDeploy forces --copy-all, so the full set deploys.
       const agentsSkillsDir = path.join(projectDir, '.agents', 'skills');
@@ -812,7 +822,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     });
 
     it('deploys prompts/commands to ~/.codex/prompts/ (home directory)', async () => {
-      runDeploy('codex', projectDir, homeDir);
       const homePromptsDir = path.join(homeDir, '.codex', 'prompts');
       const exists = await pathExists(homePromptsDir);
       // Note: if this dir doesn't exist, codex prompt deployment may need investigation
@@ -915,13 +924,13 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       ({ projectDir, homeDir } = await createTestEnv('completeness'));
-    });
-    afterEach(async () => { await cleanupTestEnv(projectDir, homeDir); });
+      runDeploy('claude', projectDir, homeDir);
+    }, 135_000);
+    afterAll(async () => { await cleanupTestEnv(projectDir, homeDir); });
 
     it('every source agent is deployed to .claude/agents/', async () => {
-      runDeploy('claude', projectDir, homeDir);
       const agentsDir = path.join(projectDir, '.claude/agents');
       const deployedFiles = await listFilesRecursive(agentsDir);
       const deployedNames = new Set(
@@ -947,7 +956,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Deployment Completeness', () => {
     });
 
     it('every source skill is deployed to .claude/.aiwg/skills/', async () => {
-      runDeploy('claude', projectDir, homeDir);
       const skillsDir = path.join(projectDir, '.claude/.aiwg/skills');
       const entries = await fs.readdir(skillsDir, { withFileTypes: true }).catch(() => []);
       const deployedSkillDirs = new Set(

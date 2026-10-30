@@ -3,13 +3,16 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  auditLegacyPermissions,
   evaluateAuthorization,
   exportProviderMappings,
+  isDefaultDeliveryPolicy,
   normalizeLegacyPermissions,
   normalizeProjectPermissions,
   validateAuthorization,
   type AuthorizationConfig,
 } from '../../../src/policy/authorization.js';
+import { emptyConfig } from '../../../src/config/aiwg-config.js';
 
 function model(): AuthorizationConfig {
   return {
@@ -110,6 +113,31 @@ describe('legacy normalization', () => {
     expect(second).toBe(first);
     expect(Object.keys(first.authorization?.permissions ?? {})).toEqual(['repo.read', 'repo.commit']);
     expect(first.authorization?.default_effect).toBe('deny');
+  });
+
+  it('does not flag the tool-written delivery default as a legacy permission source (#3635)', async () => {
+    expect(isDefaultDeliveryPolicy(emptyConfig().delivery)).toBe(true);
+    const dir = await mkdtemp(join(tmpdir(), 'aiwg-auth-delivery-default-'));
+    try {
+      const config = { ...emptyConfig(), delivery: emptyConfig().delivery };
+      const diagnostics = await auditLegacyPermissions(dir, config);
+      expect(diagnostics.map(d => d.code)).not.toContain('legacy-delivery-policy');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still flags operator-edited delivery as a legacy permission source (#3635)', async () => {
+    const edited = { ...emptyConfig().delivery, mode: 'direct' as const };
+    expect(isDefaultDeliveryPolicy(edited)).toBe(false);
+    const dir = await mkdtemp(join(tmpdir(), 'aiwg-auth-delivery-edited-'));
+    try {
+      const config = { ...emptyConfig(), delivery: edited };
+      const diagnostics = await auditLegacyPermissions(dir, config);
+      expect(diagnostics.map(d => d.code)).toContain('legacy-delivery-policy');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('imports historical YAML action fields without retaining a new legacy repos block', async () => {

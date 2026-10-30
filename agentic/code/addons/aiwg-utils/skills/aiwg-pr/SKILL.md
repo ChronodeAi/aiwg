@@ -158,7 +158,32 @@ Use the template at `.gitea/pull_request_template.md` (or `.github/pull_request_
 
 The body should be **agent-readable**: clear sections, specific paths, no marketing speak.
 
-### 8. CI green before done
+### 8. Sync with current main before readiness (#2654)
+
+A PR must never be declared ready to merge from stale branch state. After
+push and before any ready-to-merge declaration:
+
+```bash
+git fetch origin
+"$AIWG_ROOT/tools/git/pr-base-sync.sh" --main-ref origin/main
+```
+
+- `status=up-to-date` → proceed: re-run the step 4 verification on this head
+  and record the verified head SHA and main SHA in the PR readiness summary.
+- `status=behind` → synchronize with the project-approved method (default
+  `git rebase origin/main`; use merge/update instead where the project
+  requires merge commits or a merge queue — never force a rebase-only
+  policy), then re-run the step 4 verification. Readiness must cite the
+  post-sync verification, never the pre-sync one.
+- `status=conflict` → readiness is blocked. Resolve the conflicts locally,
+  re-sync, re-verify, and record the conflicted areas and next steps in the
+  PR instead of marking it ready.
+
+Only `ready=true` (up-to-date plus fresh verification) may be reported as
+ready to merge. Where PRs do not run CI, the required verification is the
+project's local verification; CI status then applies to the post-merge run.
+
+### 9. CI green before done
 
 A commit isn't done until CI is green. After push:
 
@@ -177,7 +202,7 @@ AIWG CI runs ~2 minutes. **Wait for it.** If it fails:
 
 **Never leave `main` in a red state.**
 
-### 9. After merge (pr-required) or push (direct)
+### 10. After merge (pr-required) or push (direct)
 
 - The linked issue auto-closes via `Closes #N`
 - If you imported a cross-tracker report, **thank the original reporter** in a closing comment on the source tracker (the recent jmagly→roctinam imports did this for sebuh-infsol on each of #108–#112)

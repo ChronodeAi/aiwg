@@ -6,6 +6,25 @@ agent reaches a rule by asking a question ("am I allowed to delete this?"), so a
 rule that declares no trigger phrases is effectively unreachable by the discovery
 protocol that is supposed to surface it.
 
+## Declare activation explicitly
+
+Every shipped rule requires `activation:` frontmatter. Choose `core` for a compact
+universal body, `kernel` for an always-on contract, `summary` for an always-on fetch
+obligation, `bound` for named artifact invocations, `paths` for file scopes, or
+`on-demand` for guidance fetched when needed. Summary, bound, and path rules also
+require an authored `summary`.
+
+Deployment warns about legacy rules without activation and treats them as
+on demand regardless of enforcement. Lint rejects missing activation in shipped
+`agentic/code/` rules. Enforcement severity does not select delivery.
+
+`aiwg use all` delivers kernel skills, selected kernel/core rules, and the rule
+index. Rule membership comes from installed bundles and required dependencies;
+provider adapters change how that set is presented. Agent and skill definitions
+link to their section in `<provider>/RULES-BOUND.md`. This index contains only
+the selected deployment’s bindings and fetch commands for the full contracts.
+Follow that section before governed work.
+
 ## Rules support `triggers`
 
 `rule` is in `OPERATIONAL_DISCOVERY_TYPES`, so the indexer runs the same trigger
@@ -15,6 +34,8 @@ Declare triggers in frontmatter:
 ```markdown
 ---
 enforcement: high
+activation: summary
+summary: Verify authorization before governed actions.
 triggers:
   - "am I allowed to do this"
   - "do I need permission for this"
@@ -88,6 +109,19 @@ aiwg discover "<the question your rule answers>"
 
 The build step only works at the install root — the framework graph indexes the
 AIWG corpus, which does not exist in a consumer project.
+
+## Core rules (`activation: core`)
+
+A core rule is injected into every harness's always-loaded surface in every deploy
+mode. Reserve it for non-negotiable behavior; the budget is deliberately small.
+
+- Put the rule in the always-installed `aiwg-utils` addon, set `activation: core`,
+  and omit `bound_to` (a core rule already reaches every agent).
+- Write the compact normative text in `<name>.core.md` beside the rule: plain
+  markdown, no frontmatter, at most 1024 bytes, all core bodies together at most
+  6144 bytes. Deploy and `aiwg lint --ruleset rule-activation` fail above either cap.
+- End the body with a plain pointer, `aiwg show rule <name>`. Never use an `@`
+  import of the full rule; deploy rejects `@` file references in core bodies.
 
 ## Related
 

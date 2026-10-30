@@ -12,7 +12,7 @@ export class BoundedDecisionTraceExporter {
 
   constructor(
     private readonly sink: DecisionTraceSink,
-    private readonly options: { capacity: number; timeoutMs: number; maximumDiagnostics?: number; maximumTraceBytes?: number; canaries?: readonly string[] },
+    private readonly options: { capacity: number; timeoutMs: number; maximumDiagnostics?: number; maximumTraceBytes?: number; canaries?: readonly string[]; redactErrors?: boolean },
   ) {
     if (!Number.isSafeInteger(options.capacity) || options.capacity < 1 || !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1
       || !Number.isSafeInteger(options.maximumTraceBytes ?? 65_536) || (options.maximumTraceBytes ?? 65_536) < 1
@@ -66,7 +66,8 @@ export class BoundedDecisionTraceExporter {
           timeout = setTimeout(() => { controller.abort(); reject(new Error('telemetry export timed out')); }, this.options.timeoutMs);
         });
         try { await Promise.race([this.sink.export(trace, controller.signal), deadline]); }
-        catch (error) { this.record(controller.signal.aborted ? 'timeout' : 'failed', error instanceof Error ? error.message : 'export failed'); }
+        catch (error) { this.record(controller.signal.aborted ? 'timeout' : 'failed', this.options.redactErrors
+          ? 'telemetry export failed' : error instanceof Error ? error.message : 'export failed'); }
         finally { if (timeout) clearTimeout(timeout); }
       }
     })().finally(() => { this.draining = null; });

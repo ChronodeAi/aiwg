@@ -142,10 +142,10 @@ export function parseRef(raw: string): PackageRef {
 /**
  * Resolve a ref to a PackageSource using the appropriate adapter
  */
-export async function resolveRef(ref: PackageRef): Promise<{ source: PackageSource; adapter: PackageRegistryAdapter } | null> {
+export async function resolveRef(ref: PackageRef, options: FetchOptions = {}): Promise<{ source: PackageSource; adapter: PackageRegistryAdapter } | null> {
   for (const adapter of ALL_ADAPTERS) {
     if (!adapter.canResolve(ref.raw)) continue;
-    const source = await adapter.resolve(ref);
+    const source = await adapter.resolve(ref, options);
     if (source) return { source, adapter };
   }
   return null;
@@ -246,7 +246,7 @@ export async function installPackage(
 }> {
   const ref = parseRef(rawRef);
 
-  const resolved = await resolveRef(ref);
+  const resolved = await resolveRef(ref, options);
   if (!resolved) {
     throw new Error(
       `Cannot resolve package reference: '${rawRef}'\n` +
@@ -262,7 +262,7 @@ export async function installPackage(
 
   const { source, adapter } = resolved;
   if (options.ref) source.ref = options.ref;
-  const cachePath = await adapter.fetch(source, { refresh: options.refresh });
+  const cachePath = await adapter.fetch(source, { refresh: options.refresh, tokenInput: options.tokenInput });
   const discovered = await discoverInstallablePackage(cachePath, options.packageSelector);
   const standardEnvelopePaths = [
     join(cachePath, '.aiwg', 'marketplace', 'envelope.json'),

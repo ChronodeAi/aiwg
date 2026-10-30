@@ -35,3 +35,7 @@ count.
 Return supported/defective/unresolved review conclusions with concrete evidence, not blanket certification. Carry
 forward unreviewed cases and stale hash bindings. Provide repair acceptance conditions; do not secretly alter the
 reviewed test.
+
+## Evaluator evidence
+
+Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `$AIWG_ROOT/docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.

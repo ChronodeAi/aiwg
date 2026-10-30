@@ -667,6 +667,7 @@ export const refreshHandler: CommandHandler = {
             // #2507: give operators a reclaim path for artifacts an older
             // AIWG left behind without a managed marker.
             ...(forceDeploy ? ['--force'] : []),
+            ...(hasFlag(ctx.args, '--allow-over-budget') ? ['--allow-over-budget'] : []),
             ...modelDeployArgs,
           ],
           rawArgs: ['use', fw],
@@ -684,6 +685,17 @@ export const refreshHandler: CommandHandler = {
         for (const fw of frameworks) {
           ui.dim(`    Would re-deploy: ${fw}`);
         }
+      }
+    }
+
+    // Runtime updates can change the corpus even when there are no recorded
+    // deployments. Refresh both discovery representations, independently of use.
+    if (!dryRun) {
+      try {
+        const { refreshFrameworkCapabilities } = await import('../../artifacts/framework-capabilities.js');
+        await refreshFrameworkCapabilities(frameworkRoot, true, { force: true });
+      } catch (error) {
+        ui.warn(`Capability index refresh failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 

@@ -1,5 +1,7 @@
 # Browser Control Addon
 
+Evidence status: design intent.
+
 **Status: DRAFT** — scaffolded post-PoC, implementation pending. See `.aiwg/intake/browser-control-intake.md` for the formal intake form and `.aiwg/architecture/adr-remote-browser-control.md` for the architectural decision.
 
 Drive a real, user-installed Chromium-derived browser from an AIWG agent. Handles the painful parts: which browser to use, how the Playwright MCP Bridge extension fits in, how the per-install token is captured and stored, how it gets injected into the AIWG MCP registry, and how the agent stays inside an allow-list with audit trail.

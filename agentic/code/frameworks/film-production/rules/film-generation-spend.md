@@ -3,6 +3,12 @@ id: film-generation-spend
 name: Film Generation and Spend
 description: Bound film generation by verified capability, existing authority, task reconciliation, and actual cost evidence.
 enforcement: high
+activation: bound
+summary: Bound film generation by verified capability, existing authority, task reconciliation, and actual cost evidence.
+bound_to:
+  agents: [film-producer, film-story-director, film-scene-supervisor, film-continuity-supervisor, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-provider-preflight, film-motion-coverage, film-performance-sound, film-reference-edit, film-reference-footage, film-story-proof, film-storyboard]
+  flows: [film-develop, film-design, film-previs, film-generate, film-finish, film-resume, film-revise-with-impact]
 ---
 
 # Film Generation and Spend

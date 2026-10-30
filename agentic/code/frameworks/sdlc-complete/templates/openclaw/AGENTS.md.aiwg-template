@@ -19,26 +19,10 @@ deploys agents, skills, rules, and behaviors to `~/.openclaw/`; this workspace
 loads this file into every session — without this block, the deployed AIWG
 capabilities are present on disk but the agent has no protocol for using them.
 
-### Discover-First Protocol
+### Capability Routing
 
-Classify every user turn FIRST: is it a **new directive** or a continuation?
-When a message names or references an AIWG command/capability — even pasted
-content like an `address-issues` tracker table, an issue list, or a `flow-*`
-name — treat it as a new directive and ACT: run `aiwg discover "<the need>"`,
-fetch with `aiwg show <type> <name>`, and invoke it. Do NOT ask "what would you
-like me to do with these?" when the action is implied — a pasted
-`address-issues #1234` means run the address-issues workflow on those issues.
-
-Also run `aiwg discover` before declining an AIWG request as out of scope or
-inventing a workflow from memory. It ranks AIWG capabilities across the
-installed corpus and rebuilds the index from `$AIWG_ROOT` automatically, so a
-"no matches" for a command you know is deployed is a bug — not a signal it is
-absent. Full rule: `aiwg show rule skill-discovery`.
-
-```bash
-aiwg discover "create a security review"   # rank matching skills/agents/commands/rules
-aiwg show skill flow-security-review        # fetch the body
-```
+Routing authority: `aiwg show rule skill-discovery` (kernel). Capability phrases:
+`aiwg show skill aiwg-utils-quickref`.
 
 ### Skills, Agents, Rules
 

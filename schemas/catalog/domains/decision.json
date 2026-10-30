@@ -13,6 +13,43 @@
   },
   "artifacts": [
     {
+      "logicalName": "decision.d29-access.v2",
+      "id": "https://aiwg.io/schemas/decision/D29Study.v10.schema.json",
+      "version": "10.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/D29Study.v10.schema.json"
+      },
+      "fixtures": {
+        "valid": [
+          "test/fixtures/decision/d29-signed-access/valid.json"
+        ],
+        "invalid": [
+          "test/fixtures/decision/d29-signed-access/unsigned.json",
+          "test/fixtures/decision/d29-signed-access/missing-bundle.json",
+          "test/fixtures/decision/d29-signed-access/bad-time.json",
+          "test/fixtures/decision/d29-signed-access/unknown-field.json"
+        ]
+      },
+      "compatibility": {
+        "mode": "breaking"
+      },
+      "consumers": [
+        {
+          "id": "heldout-access",
+          "boundary": "Signed first-access timestamp and frozen bundle membership",
+          "path": "src/decision/heldout/access.ts"
+        }
+      ]
+    },
+    {
       "logicalName": "decision.definition",
       "id": "https://aiwg.io/schemas/decision/DecisionDefinition.v1alpha1.schema.json",
       "version": "1.0.0",

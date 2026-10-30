@@ -35,6 +35,7 @@ function snapshot(directory: string): Record<string, string> {
   const files: Record<string, string> = {};
   if (!fs.existsSync(directory)) return files;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === 'freshness.json') continue;
     const file = path.join(directory, entry.name);
     if (entry.isDirectory()) Object.assign(files, snapshot(file));
     else files[file] = `${fs.statSync(file).mtimeMs}:${fs.readFileSync(file, 'base64')}`;
@@ -268,6 +269,12 @@ describe('index refresh', () => {
       ['graph', 'project'], ['graph', 'codebase'], ['runtime', undefined], ['models', undefined],
     ]);
     expect(jobs.filter(job => job.scope !== 'host').every(job => job.workspace === workspace)).toBe(true);
+  });
+
+  it('is not gated by the worker cap, since a refresh is not a worker launch', async () => {
+    const live = { supported: true, availMemGb: 16, loadRatio: 0, memPsiAvg10: 0, memPsiAvg60: 0, freeDiskGb: 100 };
+    expect(await refreshResourceGate(workspace, { ...live, workers: 12 })).toEqual({ ok: true, reason: undefined });
+    expect(await refreshResourceGate(workspace, live)).toEqual({ ok: true, reason: undefined });
   });
 
   it('uses the dispatch gate with 8 GiB memory and 0.8 load per core, including stricter configured limits', async () => {

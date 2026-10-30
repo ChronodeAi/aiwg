@@ -2,8 +2,27 @@
 enforcement: medium
 id: no-binary-blobs
 severity: MEDIUM
-applies_to: [all-agents, security-auditor, code-reviewer]
-tags: [binary-blobs, reviewability, provenance, repository-hygiene]
+applies_to:
+  - all-agents
+  - security-auditor
+  - code-reviewer
+tags:
+  - binary-blobs
+  - reviewability
+  - provenance
+  - repository-hygiene
+activation: bound
+summary: Keep committed binaries out of source repositories unless documented fixture, asset, attestation, or governed vendoring exceptions apply.
+bound_to:
+  agents:
+    - code-reviewer
+    - security-auditor
+    - deployment-manager
+  skills:
+    - binary-blob-audit
+    - supply-chain-trust
+triggers:
+  - audit committed binary blobs
 ---
 
 # No Binary Blobs

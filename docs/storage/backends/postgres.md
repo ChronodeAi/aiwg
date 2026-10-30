@@ -14,9 +14,12 @@ Install the exact optional driver through AIWG's feature manager:
 aiwg features install postgres
 ```
 
-Configuration stores only an environment-variable locator. Put the connection
-URL in the approved runtime secret provider and pass its variable name as
-`connectionStringEnv`; never put a password or bearer value in project config.
+Configuration stores only a credential reference. `connectionStringEnv` accepts
+an environment name (default `AIWG_POSTGRES_URL`), `file:ABSOLUTE_PATH` or
+`store:NAME`; never put a connection URL, password or bearer value in project
+config. File/store sources use the [shared sensitive-value resolver](../../cli/sensitive-values.md#storage-backend-references),
+including private-file checks. Missing selected input fails without prompting
+or falling back. Driver errors never forward connection strings or credentials.
 Remote endpoints require `ssl: verify-full` or `ssl: require`.
 `ssl: disable` is rejected unless the URL host is explicitly loopback.
 

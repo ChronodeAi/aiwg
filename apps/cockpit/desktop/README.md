@@ -77,6 +77,21 @@ with `RUSTSEC-2024-0429` still reported. The alpha also requires Rust 1.95.
 No released Tauri line can remove the advisory until Wry ships a WebKitGTK 6
 (GTK4) backend.
 
+Re-check 2026-10-22 (#3413, GHSA-wrw7-89jp-8q8g): `cargo tree --locked -i
+glib` still resolves `glib 0.18.5`. The locked chain includes `tauri 2.11.5`
+→ `tauri-runtime-wry 2.11.4` → `wry 0.55.1` → `webkit2gtk 2.0.2` /
+`gtk 0.18.2` → `glib 0.18.5`; Tauri also depends directly on GTK 0.18.
+`cargo update --dry-run` offers `tauri 2.12.5`,
+`tauri-runtime-wry 2.12.3`, and `wry 0.57.0`, but all three still declare
+`gtk ^0.18`, and WebKitGTK 2.0.2 requires `glib ^0.18.0`.
+`cargo update -p glib --precise 0.20.0 --dry-run` fails because GTK 0.18.2
+requires `glib ^0.18`. GTK 0.19.0 is published with `glib ^0.22`, but the
+current Tauri/Wry constraints cannot select it. Remediation requires an
+upstream stable Tauri/runtime/Wry release that removes every GTK 0.18 and
+WebKitGTK 2.0 dependency in favor of bindings using `glib >=0.20`; no such
+compatible stable release is available. The Rust manifest and lockfile remain
+unchanged, and the Linux bundle hold remains in force.
+
 ## Why a token file (not a socket handshake)
 
 The runtime file is the cross-platform handshake every shell shares (see

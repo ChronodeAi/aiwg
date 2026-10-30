@@ -3,7 +3,7 @@
 Status: accepted
 Date: 2026-10-18
 Decision owners: AIWG maintainers
-Related: #2935, #2936–#2945, #3222, #2562, #2839, #2645, #2646
+Related: #2935, #2936–#2945, #3222, #2562, #2839, #2645, #2646, #3292, #3568
 
 ## Context
 
@@ -54,11 +54,22 @@ activation does not install an excluded addon or authorize an operation.
 
 | Mode | Delivery obligation | Incremental global startup cost |
 |---|---|---|
+| `core` | Deliver the compact `<name>.core.md` body (at most 1024 bytes; all core bodies together at most 6144 bytes) to every provider's always-loaded surface in every deploy mode, placed before kernel rules and never demoted or spilled. The full rule stays reachable only by plain path or `aiwg show rule <name>`, never an `@` import. Owned by the always-installed `aiwg-utils` addon. | The compact body only, within the reserved 6144-byte core budget (also counted in the inline budget). |
 | `kernel` | Load the complete canonical rule body in every session and subagent before task execution. | Full body plus framing. |
 | `summary` | Load one imperative summary and a full-rule pointer in the kernel index; deliver it through bindings as well when declared. | Summary (at most 240 characters), identity, and pointer, never the full body. |
 | `bound` | Deliver when a declared skill, agent, or flow is loaded/invoked. | Zero rule text; bound blocks live inside artifact bodies, not their startup listings. |
 | `paths` | Deliver the full rule when any declared project-relative path glob matches a file being read or changed; bindings can also deliver it. | Native loaders: no unmatched body, possibly native description/glob metadata. Emulated loaders: a compact glob/summary/pointer index, never unmatched bodies. |
 | `on-demand` | Discoverable and explicitly fetchable; no automatic delivery. | Zero rule text; use the shared discovery entry point rather than a startup list of every rule. |
+
+Core delivery by provider (#3450): Claude writes `.claude/rules/core-<name>.md`;
+Cursor writes `.cursor/rules/core-<name>.mdc` with `alwaysApply: true`; Codex,
+Hermes, Warp and the other emulated providers put a `## Core rules` section
+first in their managed startup block (`AGENTS.md`, `.github/copilot-instructions.md`, `.omp/AGENTS.md`, `WARP.md`), inline
+for Hermes even when the rule is not `critical`. A deploy fails with a clear
+diagnostic when a body exceeds 1024 bytes, the core set exceeds 6144 bytes, a
+body is missing, or a body contains an `@` file reference. `aiwg doctor` reports
+the core slice (`bytes used / 6144`) separately from the aggregate startup
+context. Operator pins do not re-promote a core rule.
 
 Provider skill/agent listings have their own cost; `bound` does not promise to
 eliminate that existing cost. Invocation-time retrieval counts as task context.
@@ -94,9 +105,9 @@ against the artifact index before accepting a migrated declaration.
 
 | Field | Shape and validation |
 |---|---|
-| `activation` | Scalar enum: `kernel`, `summary`, `bound`, `paths`, `on-demand`. Required after migration. A sequence, combined string, or unknown mode is an error. |
+| `activation` | Scalar enum: `core`, `kernel`, `summary`, `bound`, `paths`, `on-demand`. Required after migration. A sequence, combined string, or unknown mode is an error. |
 | `summary` | Nonempty single-line imperative string, at most 240 Unicode code points after trimming. Required for `summary`, `bound`, and `paths`; optional for `kernel`/`on-demand`. Never synthesize it by truncating the body. |
-| `bound_to` | Mapping with only `skills`, `agents`, `flows`; each value is a list of nonempty canonical artifact IDs. Missing lists mean empty. At least one target is required for `bound`; optional for `summary`/`paths`. Reject bindings on `kernel`/`on-demand` as contradictory or redundant. |
+| `bound_to` | Mapping with only `skills`, `agents`, `flows`; each value is a list of nonempty canonical artifact IDs. Missing lists mean empty. At least one target is required for `bound`; optional for `summary`/`paths`. Reject bindings on `core`/`kernel`/`on-demand` as contradictory or redundant. |
 | `paths` | Nonempty list of project-relative glob strings, required for `paths` and rejected on other tagged modes. Match normalized `/` paths; reject absolute paths and parent traversal. Match reads and writes, including proposed new filenames. |
 
 Bindings resolve by artifact type and canonical ID, using existing index
@@ -114,11 +125,12 @@ Migrate `applies_to`/`scope` intent to explicit `bound_to`; they remain descript
 legacy metadata, not competing activation inputs. Manifest `rules` arrays remain
 inventory only.
 
-Reserve the exact key **`enforcedBy`** for #2839. Do not author it in this wave,
-assign a value schema, dispatch hooks, or infer mechanical enforcement from it.
-If encountered, preserve it as opaque reserved metadata and report that it has
-no effect. #2839 owns its eventual type and enforcement semantics. Activation
-delivers instructions; it is not proof that a runtime enforces them.
+**`enforcedBy`** was reserved during the activation rollout. #2839 defines it as
+an optional list of `<namespaced-pack-id>#<gate-id>` strings, checked by the
+existing rule schema and resolved by lint against the composed gate registry.
+`aiwg gates coverage` reports these declarations and labels unmapped rules
+guidance-only. A declaration does not dispatch hooks or execute gates.
+Activation delivers instructions; it is not proof that a runtime enforces them.
 
 ### Both binding delivery paths are required
 
@@ -182,19 +194,36 @@ Native behavior hook/script execution remains owned by its current runtime.
 
 ### Provider projection
 
-These capability statements describe the checked-in adapters, not unverified
-claims about future vendor releases. `support.rules: native` alone does not
-establish native support for every activation mode. The target projections
-below are work for #2939, not descriptions of already-shipping bindings.
+**Operator decision 2026-10-29 (#3740):** startup owners contain only the
+WORKSPACE.md → AIWG.md bootstrap, precedence statement, unchanged compact core
+bodies, and one hook line per deployed harness. Kernel bodies, summary indexes,
+path indexes and definition routes live in each harness's rules location.
+Provider-specific managed sections preserve other deployed harnesses' hooks and
+operator text outside AIWG blocks. Redeployment removes former inline blocks.
 
-| Provider and current source | `kernel` / `summary` target | `bound` / `on-demand` target | `paths` target |
-|---|---|---|---|
-| [Cursor](../../tools/agents/providers/cursor.mjs): native MDC rules; conventional agents/commands | Full kernel MDC with `alwaysApply: true`; always-applied summary index. Optional full summary-mode rule uses `alwaysApply: false` plus `description` for native auto selection. | Bound artifact blocks and show/MCP; no auto description or always-applied body for bound rules. On-demand bodies use explicit show/manual reference. | Native MDC `globs` from `paths`, `alwaysApply: false`; no severity prefilter. |
-| [Claude](../../tools/agents/providers/claude.mjs): native `.claude/rules`, agents and skills | Complete kernel bodies and summary-only `RULES-INDEX.md` in native rules. | Blocks in native artifact bodies plus show/MCP. Keep bound/on-demand full bodies outside the recursively loaded rules tree. | Native rule frontmatter `paths`; preserve any tier. |
-| [Codex](../../tools/agents/providers/codex.mjs): conventional `.codex/rules`, native skill/agent deployment | Managed startup context reached through `AGENTS.md` must carry full trimmed kernel bodies and the summary index; a conventional rules directory alone is insufficient. | Blocks in loaded artifacts plus show/MCP; no assumed rule-directory loader. | Emulated path index/check through the startup instruction; fetch matches before file work. No native glob attachment in this adapter. |
-| [Hermes](../../tools/agents/providers/hermes.mjs): native home skills, aggregated agent routing, no rule loader | Startup context reached through `.hermes.md`/`AGENTS.md`. Replace hardcoded compressed CRITICAL directives with activation-selected kernel and summary content. | Blocks in skills and fetched agent/flow definitions plus show/MCP. Aggregated routing entries point to definitions rather than inlining bound blocks. | Emulated path index/check; no native glob loader in this adapter. |
-| [Warp](../../tools/agents/providers/warp.mjs): native skills; agents/rules aggregated into `WARP.md` via setup script | Managed kernel/summary section in startup context reached through `WARP.md`. Include the aggregate writer in the change; discrete `.warp/rules` copies are insufficient. | Blocks in skills/fetched definitions plus show/MCP; keep only agent/flow routing pointers in startup aggregation. | Emulated path index/check; no native glob attachment in this adapter. |
-| [OpenClaw](../../tools/agents/providers/openclaw.mjs): native rule/behavior directories, active workspace `AGENTS.md` bridge | Kernel/summary delivery through native rules and the active-workspace bridge; verify actual loading, not just home-directory file existence. | Blocks in artifact definitions plus show/MCP; native behavior activation remains available. | Emulated path index/check: the adapter has no path-condition translator despite its native rule directory. |
+| Provider | `kernel` / `summary` delivery | `paths` delivery |
+|---|---|---|
+| Claude | Complete bodies and summary `RULES-INDEX.md` in `.claude/rules/`, loaded natively; compact core remains native. | Native `paths` frontmatter. |
+| Cursor | Complete MDC bodies and index in `.cursor/rules/`, `alwaysApply: true`; compact core remains native. | Native MDC `globs`, `alwaysApply: false`. |
+| Grok Build | Complete Markdown bodies and index in `.grok/rules/`, discovered by the verified native loader. AGENTS.md names the index. | Index and explicit fetch; no verified glob attachment. |
+| Windsurf | Complete bodies and index in `.windsurf/rules/`, `trigger: always_on`. AGENTS.md names the index. | `trigger: glob` with the translator's `glob` field. |
+| OpenCode | Complete bodies and index in `.opencode/rule/`, registered through `opencode.json` `instructions` (recursive Markdown glob). Preserve existing config and instruction entries. | Index and explicit fetch; instructions registration is unconditional. |
+| Codex | `.codex/rules/RULES-INDEX.md` lists every complete local kernel file; AGENTS.md requires reading it before every task and subagent task. | Prompt index/check, fetch matching rules. |
+| Muse | `.muse/rules/RULES-INDEX.md`, reached through its own AGENTS.md hook. No declared rules path exists; `.muse` follows its existing harness directory convention. | Prompt index/check. Workspace trust still applies. |
+| Factory / Antigravity / Pi | `.factory/rules/`, `.antigravity/rules/`, `.pi/rules/` respectively; RULES-INDEX and complete local kernel files reached through each harness's AGENTS.md hook. | Prompt index/check. |
+| Hermes | `.hermes/rules/RULES-INDEX.md` and every complete kernel file, reached through hooks in both `.hermes.md` and AGENTS.md. | Prompt index/check. |
+| Copilot | `.github/instructions/RULES-INDEX.md` and complete local kernel files reached through `.github/copilot-instructions.md`; this adapter does not claim an automatic rule loader. | Prompt index/check. |
+| Warp / OMP | `.warp/rules/` through WARP.md; `.omp/rules/` through `.omp/AGENTS.md`. Each hook requires reading RULES-INDEX and every local kernel file. | Prompt index/check. |
+| OpenClaw | Complete bodies and index in its existing rules location, reached through the active workspace AGENTS.md hook. | Prompt index/check. |
+
+On prose-only harnesses, kernel rules are reached because the hook directs the
+agent to read them, not through an automatic loader. RULES-INDEX names every
+kernel file and requires reading all of them before every task and subagent
+task. It also carries summary instructions, full-rule fetch commands and path
+checks. Bound rules still use artifact-body blocks and show/MCP; on-demand
+bodies stay outside native recursively loaded rule trees. No startup hook
+inlines kernel, summary or path indexes. All rule-file bytes reached through
+hooks remain included in deployment accounting and managed-file receipts.
 
 Cursor's `auto(description)` is a model-selected retrieval hint, not an exact
 binding or a guaranteed policy gate. It supplements summary-mode delivery; it
@@ -212,16 +241,18 @@ emulation, not an OS hook or mechanically guaranteed interception; fixtures
 and positive/negative probes must expose that limitation. Do not inline all
 path-rule bodies as a fallback.
 
-Codex currently inlines no rule bodies: its benefit is compliance, not a
-claimed token saving. Kernel parity may add text there; deduplicate existing
-startup directives and measure total startup context, including bridge reads.
-The epic's no-provider-regression gate still applies; an adapter that cannot
-meet parity and its budget blocks that wave rather than claiming a free gain.
-Keep Codex `AGENTS.md` below 32 KB. Hermes currently warns above 15,000 characters
-and fails above 19,000; full kernel projection must fit those limits after
-trimming, or report failure. Do not silently compress a tagged `kernel` rule
-into `summary` to fit. Reuse the existing bootstrap/context owners and preserve
-operator content instead of creating a second provider policy file hierarchy.
+The 8 KiB per-file bridge guard is unchanged; this repository's fixture config
+must produce AGENTS.md ≤4 KB. Compact core budgets remain ≤1,024 B per body and
+≤6,144 B total, always loaded and never demoted or spilled. Core full bodies
+remain fetchable without automatic imports.
+
+The **Operator decision 2026-10-29** supersedes Hermes's **2026-10-19**
+CRITICAL-only inline exception. All kernel bodies now live in rule files,
+including CRITICAL rules and explicit pins. There is no 19,000-byte overflow
+projection or inline kernel index. Keep Hermes's final context hard cap of
+19,000 characters for bootstrap, core, wrappers and operator additions; rule
+file bodies do not consume that file's cap. Preserve its explicit fetch-and-follow
+obligation in the hook. Bulk `use all` retains its kernel-skill-only selection.
 
 ### Budget is a guard, never an activation selector
 
@@ -295,14 +326,44 @@ A proposed kernel rule must pass **all** of these review/fixture checks:
    examples/rationale into on-demand companions, without truncating the rule
    at deployment. Reject duplicate normative text already supplied by another
    kernel rule or startup template; verify generated startup output for repeats.
-4. **Provider fit:** a deployment fixture for all six providers loads the
-   complete selected kernel once, including subagent dispatch, and passes the
-   configured guard and provider caps. References without demonstrated loading
-   fail this check.
+4. **Provider fit:** deployment fixtures verify complete selected kernel files
+   and native activation or the explicit task/subagent hook. No kernel body may
+   be inline in AGENTS.md. Missing hooks or kernel files fail the fixture.
+   Preserve configured budgets and provider caps, counting hook-reached files.
 5. **Observed compliance:** provide positive probes for the universal invariant
    and ordinary tasks outside its originating workflow, n=5 each. Meet or
    exceed baseline with no probe below 80%. Failed admission retains the prior
    placement and blocks the move; word count or severity cannot waive it.
+
+#### Compound discovery admission addendum (#3292)
+
+Discovery now delivers the selected action's governing bound rules, matching
+project paths and declared triggers, with `required_rule_checks` and explicit
+fetch-and-follow-before-work obligations. These are delivery contracts, not
+claims of mechanical enforcement. The routing kernel requires agents to
+complete every such check before invoking a discovered or already loaded
+skill, agent, command, or flow, including subagent work. Kernel rules are not
+repeated in compound discovery results.
+
+This strengthens admission check 2: when discovery or the selected component's
+binding can reliably deliver a task-specific rule first, that route is the
+candidate placement. It does not prove the move safe. The universal safety
+core and routing rule remain admitted under all five checks above; severity
+and a byte target cannot demote a rule. This change moves or removes no safety
+rule. U5 positive/negative model evidence at n=5 and the real release comparison
+remain required before approving any new migration; offline fetch-order probes
+only verify the delivery/assertion mechanism.
+
+Response `rule_stats` counts unique attached rules and every emitted required
+check, including medium/low rules. Whole-response totals deduplicate rules
+shared by several ranked artifacts, merging their applicability reasons.
+This differs intentionally from the small relationship reader's existing
+`required_checks` severity inventory (CRITICAL/HIGH), which remains unchanged.
+A response checklist is an obligation for every governing rule, not a severity
+filter. Per-result `startup_rule_stats` separately reports the relationship
+inventory, including operator pins counted as kernel activation. Look it up by
+the result's stable source identity; display names can be ambiguous. Unbound result rows retain their previous fields; no empty
+`bound_rules` or check list is added.
 
 The five core candidates below satisfy the universal-guard rationale:
 authorization limits any action; comprehension constrains every directive;
@@ -314,6 +375,105 @@ long bodies still require trimming and validation in #2944. Additional
 authorship, secret disclosure, and fabricated claims across roles. Their
 examples remain candidates for extraction in #2945, not blanket exemptions
 for all CRITICAL rules. For example, CRITICAL `versioning` is release-scoped.
+
+#### Amendment 2026-10-25 (proposed): root kernel re-evaluated for compound discovery (#3292 item 3)
+
+> **Operator decision 2026-10-25: rejected as proposed.** `no-attribution` and
+> `anti-laziness` are two of the behaviours AIWG fights hardest, so both stay
+> always loaded: `no-attribution` stays `kernel` and `anti-laziness` stays
+> `core`. Delivery at the point of action does not replace them. The other
+> dispositions in the table below are proposals only. Each needs a separate
+> operator decision per rule before any rule file changes. The re-derived U1
+> figures assume every proposed move and are therefore not adopted.
+
+> **U5 live probe result 2026-10-25: no move ships.** The four
+> operator-approved candidate moves (`instruction-comprehension` and
+> `research-before-decision` to summary, `artifact-output-policy` and
+> `citation-policy` to bound) were implemented on a candidate package and
+> probed live through compound discovery (Codex gpt-6.1-sol, low effort, n=5,
+> 12 scenarios, 60 calls, `test/uat/rule-binding/kernel-moves-probes.yaml`).
+> Positive compliance, meaning that the governing rule was retrieved and
+> followed before acting: instruction-comprehension 0.1,
+> research-before-decision 0.1, artifact-output-policy 0.2, citation-policy
+> 0.8 (0.6 on a second paired run). Negatives were 1.0 for all four. No
+> candidate passed its U5 gate. The citation-policy U7 comparison against a
+> kernel baseline (positive 0.0, because a kernel rule is never fetched)
+> also failed. Under the failed-move rule, all four keep their kernel
+> placement. The probe definitions remain for a future attempt after
+> discovery and delivery improve.
+
+
+Compound discovery is implemented: every action result carries its governing
+rules (`bound_rules[]`), per-result and whole-response `rule_stats`, and
+machine-checkable `required_rule_checks[]` with a fetch-and-follow obligation
+(`839f3a46f` in [`query-engine.ts`](../../src/artifacts/query-engine.ts),
+tests in #3568). The governing rules now arrive at the point of action, so
+kernel admission is re-evaluated. The root kernel becomes the small set of
+universal safety rules plus the routing rule (`skill-discovery`) that obliges
+agents to run discovery and follow the rules it returns. This amendment moves
+or removes no rule file; implementing the dispositions below is a later issue.
+
+Revised admission: checks 1, 3, 4, and 5 above are unchanged. For placements
+decided after this date, check 2 reads as the **discovery-first test**: a rule
+stays kernel only if a compliant agent could violate its invariant before it
+can run discovery or load any scoped artifact. When compound discovery or the
+selected component's binding reliably delivers the rule first, that route is
+the placement. Severity and byte targets still cannot demote a rule, and a
+failed move retains the prior placement.
+
+Census method: kernel rules are the rule files under `agentic/code/**/rules/`
+whose frontmatter declares the scalar `activation: kernel` (validated by
+[`rule-activation.ts`](../../src/lint/rule-activation.ts);
+`npm run lint:rule-activation`). Skill `kernel: true` is a separate
+artifact-index flag, not rule admission, and `RULES-INDEX.md` files are
+summary-and-path indexes the artifact index excludes from the rule census. On
+2026-10-25 that census is **19 files holding 18 distinct rules**:
+`skill-discovery` ships as two byte-identical bodies (`addons/aiwg-utils` and
+`plugins/utils`; counted once below, deduplication without semantic change is
+later work), and `citation-policy` uses the equivalent quoted form
+`activation: "kernel"`.
+
+Disposition of the 18 distinct kernel rules under the revised criteria:
+
+| Rule | Disposition | Reason |
+|---|---|---|
+| `human-authorization` | Stay kernel | Acting on a finding can precede any discovery call, so no binding delivers it first. |
+| `token-security` | Stay kernel | A secret can leak in the first reply before any artifact is selected. |
+| `skill-discovery` | Stay kernel, one canonical copy | The routing obligation cannot be delivered by the discovery it mandates. |
+| `instruction-comprehension` | Move to `summary` | Universal but not safety; a startup one-liner plus discovery-delivered detail suffices. |
+| `research-before-decision` | Move to `summary` | Governed decisions always follow task framing that discovery can see. |
+| `artifact-output-policy` | Move to `bound` | Artifact production always follows scoped workflow selection; bind to artifact-producing workflows. |
+| `no-attribution` | **Stay kernel (operator decision 2026-10-25)** | Proposed move to `bound` rejected: attribution leaks happen in any output, not only delivery artifacts. |
+| `citation-policy` | Move to `bound` | Claims travel with research outputs; deliver with the research artifacts that produce them. |
+| `dev-pipeline-safety` | Kernel when extension installed | Suppressing a CI signal happens in the first pipeline command, before discovery. |
+| `it-change-control` | Kernel when extension installed | Network/identity changes are destructive before any scoped artifact loads. |
+| `net-change-blast-radius` | Kernel when extension installed | Blast-radius assessment must precede the change itself. |
+| `sec-key-material-handling` | Kernel when extension installed | Key-material exposure precedes artifact selection. |
+| `sec-luks-dual-phase` | Kernel when extension installed | Disk-encryption operations are irreversible without the gate. |
+| `stream-safety` | Kernel when extension installed | Stream credential exposure precedes scoped work. |
+| `sys-hardware-safety` | Kernel when extension installed | Firmware/partition operations are destructive before discovery runs. |
+| `sys-interactive-gate` | Kernel when extension installed | Interactive shell commands occur before artifact loading. |
+| `ops-safety` | Kernel when ops framework installed | Destructive-command approval precedes discovery. |
+| `ops-information-governance` | Kernel when ops framework installed | Operational payloads reach responses before scoped selection. |
+
+Re-derived Wave 4 U1 target: the base always-loaded profile (aiwg-utils plus
+sdlc-complete) currently holds 8 kernel files totalling 26,177 B. Under the
+dispositions above the retained root kernel is 3 rules totalling 9,429 B
+(`human-authorization` 2,672 + `token-security` 3,475 + `skill-discovery`
+3,282, canonical copy); 16,748 B across the 5 moved rules leaves the kernel,
+returning only summaries and index pointers as I. The emitted rule-byte
+formula is unchanged (K + I + P, plus separately reported B), and the Wave 4
+target stays ≤45,000 B, so I + P + delivery overhead must fit the remaining
+35,571 B once the complete retained set is measured. Extension kernels
+(8 rules, 33,246 B) and ops-framework kernels (2 rules, 10,501 B) are excluded
+from the base-profile count and measured inside their own profiles. This
+re-derivation raises no target and drops no safety contract to manufacture a
+pass.
+
+U5 probe re-runs of every moved rule through compound discovery are pending:
+per operator direction 2026-10-20, full verification runs quarterly, so no
+disposition above ships before its n=5 positive/negative gate and the release
+comparison pass.
 
 ### Starting disposition: the epic's 20 rules
 
@@ -419,6 +579,21 @@ injected blocks on six providers; U4 CLI/MCP JSON parity; U5 n=5 compliance at
 least baseline and ≥80%; U6 top-three natural-language rule discovery; U7 no
 irrelevant fetch in at least 4/5 negatives; U8 full-deploy steward/mission
 subagent dispatch headroom; U9 provider fixtures and Codex <32 KB.
+Re-derive U1 from retained contracts rather than inventing a smaller root set:
+let K be the complete retained kernel bodies in each harness rules surface, I the required rule indexes/routing wrappers, P the native
+path-conditioned bodies counted by the measurement fixture, and B its behavior
+bytes. The emitted rule-byte total is K + I + P, and total policy footprint
+also reports B. The historical five-core Wave 4 fixture measured 9,706 B of
+kernel bodies, leaving 35,294 B within the 45,000 B target for the other retained
+contracts and delivery overhead. That fixture actually emitted 142,962 B
+(including legacy fallback/index/path content), a 97,962 B gap; it did not pass
+U1. Those numbers are historical evidence, not a current full-profile claim.
+Compound summaries move no rule bytes by themselves. Keep the 45,000 B target
+and provider hard caps as explicit unmet checks until the complete retained
+set is measured; do not raise the target or drop safety contracts to manufacture
+a pass. Future target changes require a reviewed component-level derivation
+and U5 evidence, not this offline implementation alone.
+
 The full-profile ~40–55 KB outcome remains a projection pending Wave 5 and
 behavior validation, not an achieved result of this documentation change.
 
@@ -537,3 +712,34 @@ epic_rule_outside_profile:
   addons/decision-engine/rules:
     decision-offload: bound
 ```
+
+### Legacy provider migration (#3457)
+
+Copilot, Factory, OpenCode, Windsurf, Antigravity, Muse, OMP and Grok Build
+use the shared transactional activation projector for direct deployments as
+well as kernel-only `use all`. Compact core bodies are first in the managed
+startup rule block; a harness-specific hook reaches kernel bodies and the activation index in rule files. Core bodies
+retain the shared 1,024-byte per-body and 6,144-byte aggregate caps, with no
+imports of full rule files.
+
+| Provider | Always-loaded project surface | Loader evidence |
+|---|---|---|
+| Copilot | `.github/copilot-instructions.md` | Copilot custom instructions contract |
+| Factory | `AGENTS.md` | Factory AGENTS discovery hierarchy |
+| OpenCode | `AGENTS.md`, `AIWG.md`, `.opencode/rule/*.md` | [OpenCode rules and instructions registration](https://opencode.ai/docs/rules/) (`CONTEXT_CONTRACTS`) |
+| Windsurf | `AGENTS.md` | Windsurf/Devin topology contract |
+| Antigravity | `AGENTS.md` | [Qualified CLI 1.1.26 project context](https://antigravity.google/docs/cli/overview/) (`CONTEXT_CONTRACTS`, verified 2026-09-04) |
+| Muse | `AGENTS.md` | Muse context contract; workspace trust required |
+| OMP | `.omp/AGENTS.md` | [OMP 18.1.10 context loader at 5964a0f7649275bcde818f20073193fd032451f2](https://github.com/can1357/oh-my-pi/blob/5964a0f7649275bcde818f20073193fd032451f2/packages/coding-agent/src/system-prompt.ts#L451); shadows root context |
+| Grok Build (`grok-build`) | `AGENTS.md`, `.grok/rules/*.md` | [xAI project-rules hierarchical discovery](https://docs.x.ai/build/features/project-rules); [released CLI 1.0.38, reviewed public tree 2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8](../providers/grok-build-qualification.md) (source pin, not binary build provenance) |
+
+The authoritative loader evidence and source links are in
+`src/providers/provider-definitions.ts` (`CONTEXT_CONTRACTS`), with qualified
+provider documentation under `docs/providers/`. Native rule helpers remain
+available for compatibility; staged deployment lets activation projection own
+rule output and startup policy.
+
+There is no bare `grok` provider alias. Grok Bot (`grokbot`) is a separate,
+degraded target whose automatic startup loader is unverified. It cannot claim
+always-loaded core delivery; do not treat writing a conventional AGENTS file
+as proof of a Grok Bot loader.

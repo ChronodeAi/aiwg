@@ -56,7 +56,8 @@ PostgREST applies PostgreSQL's CSV field coercions; use JSON bootstrap when a
 
 Remote endpoints require HTTPS. Plain HTTP is accepted only for an explicit
 loopback development URL. Put the complete `Authorization` header in a named
-environment variable through `authorizationEnv`; credentials are rejected in
+environment variable, private file or named store through `authorizationEnv`
+(see [Authorization references](#authorization-references)); credentials are rejected in
 the URL and are never included in adapter error text.
 
 The RPC functions are `SECURITY INVOKER`. Use a login-only authenticator role,
@@ -91,3 +92,13 @@ serialization and network overhead separately from database execution time.
 The opt-in live tests use `AIWG_POSTGRES_LIVE_URL` for direct PostgreSQL and
 `AIWG_POSTGREST_LIVE_URL` for HTTP; supply `AIWG_POSTGREST_AUTHORIZATION` when
 the qualification service requires a JWT.
+
+## Authorization references
+
+`authorizationEnv` accepts an environment name, `file:ABSOLUTE_PATH` or
+`store:NAME`. The selected value supplies the complete Authorization header
+(including `Bearer ` when required). Omitting the selector keeps unauthenticated
+requests; missing selected input fails without prompting or falling back.
+See [Supplying sensitive values](../../cli/sensitive-values.md#storage-backend-references)
+for private-file checks and named-store setup. Reflected transport and database
+errors do not expose authorization values.

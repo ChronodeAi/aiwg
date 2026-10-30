@@ -118,20 +118,23 @@ describe.skipIf(missingBuiltCli())('UAT: MW-019 — each regenerate branch is id
 
   it('legacy --full-inject branch: second run is byte-identical and the sentinel survives', async () => {
     const env = await buildHermeticEnv({ aiwgConfig: configDir });
+    // This fixture edits CLAUDE.md; pin its provider rather than inheriting
+    // detection from the harness running the UAT lane.
+    const regenerate = ['regenerate', '--full-inject', '--provider', 'claude'];
 
     expect(runAiwgCli(['init', '--non-interactive'], { cwd: projectDir, env }).status).toBe(0);
-    expect(runAiwgCli(['regenerate', '--full-inject'], { cwd: projectDir, env }).status).toBe(0);
+    expect(runAiwgCli(regenerate, { cwd: projectDir, env }).status).toBe(0);
 
     const claudeMdPath = join(projectDir, 'CLAUDE.md');
     const baseline = readFileSync(claudeMdPath, 'utf-8');
     const withSentinel = `${baseline}\n\n${SENTINEL}\n`;
     require('fs').writeFileSync(claudeMdPath, withSentinel);
 
-    const run1 = runAiwgCli(['regenerate', '--full-inject'], { cwd: projectDir, env });
+    const run1 = runAiwgCli(regenerate, { cwd: projectDir, env });
     expect(run1.status).toBe(0);
     const afterRun1 = readFileSync(claudeMdPath, 'utf-8');
 
-    const run2 = runAiwgCli(['regenerate', '--full-inject'], { cwd: projectDir, env });
+    const run2 = runAiwgCli(regenerate, { cwd: projectDir, env });
     expect(run2.status).toBe(0);
     const afterRun2 = readFileSync(claudeMdPath, 'utf-8');
 

@@ -22,6 +22,7 @@
 #
 # Example:
 #   tools/release/cut-tag.sh 2026.5.6
+#   tools/release/cut-tag.sh 2026.5.6-rc.1  # package version stays 2026.5.6
 #   tools/release/cut-tag.sh 2026.5.6 -m "v2026.5.6 — Some Theme"
 #
 # What it does (fail-fast at each step):
@@ -33,6 +34,7 @@
 #   6. Verifies package-lock.json version matches (CI check:versions / npm ci gate)
 #   7. Verifies CHANGELOG.md has an entry for [<version>]
 #   8. Verifies docs/releases/v<version>-announcement.md exists
+#  8b. Builds the CLI and requires the release infrastructure test lane to pass
 #   9. Verifies the AIWG release-signing key is available locally
 #  10. Verifies the release-signing key is published in .gitea/keys/maintainers.asc
 #  11. Creates the signed tag with `git tag -s -u <release-key-fingerprint>`
@@ -77,6 +79,11 @@ EOF
 fi
 
 VERSION="$1"
+TAG_VERSION="$VERSION"
+# RC tags identify a validation attempt; package versions remain stable X.
+if [[ "$VERSION" =~ ^(.+)-rc\.([1-9][0-9]*)$ ]]; then
+  VERSION="${BASH_REMATCH[1]}"
+fi
 shift
 
 TAG_MESSAGE=""
@@ -93,7 +100,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-TAG="v${VERSION}"
+TAG="v${TAG_VERSION}"
 
 cat <<EOF
 ====================================================================
@@ -106,7 +113,7 @@ EOF
 # ---------------------------------------------------------------------------
 if ! [[ "$VERSION" =~ ^[0-9]{4}\.([1-9]|1[0-2])\.([0-9]|[1-9][0-9]+)$ ]]; then
   cat <<EOF >&2
-FAIL: '$VERSION' does not match CalVer 'YYYY.M.PATCH'.
+FAIL: '$TAG_VERSION' does not match stable or RC CalVer 'YYYY.M.PATCH'.
        - Month must be 1-12 with NO leading zero (use '5' not '05').
        - Patch must have no leading zero either.
        See docs/contributing/versioning.md.
@@ -217,6 +224,12 @@ EOF
 fi
 echo "  [8/13] Announcement file OK"
 
+# Required before either an RC or stable tag can be created. Run before any
+# signing-key lookup so failed infrastructure checks do not open the keyring.
+npm run build:cli
+node tools/ci/run-with-hang-report.mjs --timeout 30m -- npm run test:release-slow
+echo "  [8b/13] Release infrastructure lane passed"
+
 # ---------------------------------------------------------------------------
 # 7b. Source the signing key from the configured vault into an ephemeral keyring.
 # ---------------------------------------------------------------------------
@@ -287,7 +300,7 @@ FAIL: Release-signing key $RELEASE_KEY_FINGERPRINT not found in local
          gpgconf --list-dirs | grep '^homedir:'
        The runtime may set HOME to an isolated role directory. If the
        operator keyring is elsewhere, rerun with:
-         GNUPGHOME=/home/<user>/.gnupg tools/release/cut-tag.sh $VERSION
+         GNUPGHOME=/home/<user>/.gnupg tools/release/cut-tag.sh $TAG_VERSION
        See docs/contributing/versioning.md → "Signing your release tag".
 EOF
   exit 1
@@ -330,7 +343,7 @@ FAIL: Tag '$TAG' already exists locally. Refusing to overwrite.
        To recreate intentionally:
          git tag -d $TAG
          git push origin :refs/tags/$TAG    # if it was already pushed
-         $0 $VERSION                          # re-run this script
+         $0 $TAG_VERSION                          # re-run this script
 EOF
   exit 1
 fi
@@ -360,6 +373,21 @@ echo "  [12/13] Local 'git tag -v' verification passed"
 # ---------------------------------------------------------------------------
 # 13. Report next steps; do NOT auto-push
 # ---------------------------------------------------------------------------
+if [ "$TAG_VERSION" != "$VERSION" ]; then
+  cat <<EOF
+
+  [13/13] RC tag verified. Push the exact candidate to the GitHub mirror
+  when its full validation run is authorized:
+
+    git push github main "refs/tags/$TAG"
+
+  Watch release-candidate.yml and preserve its immutable artifact bundle.
+  Complete the real release comparison and regression disposition before
+  requesting stable promotion. See docs/contributing/versioning.md.
+
+====================================================================
+EOF
+else
 cat <<EOF
 
   [13/13] Ready to push. The push step is left manual on purpose —
@@ -374,3 +402,4 @@ cat <<EOF
 
 ====================================================================
 EOF
+fi

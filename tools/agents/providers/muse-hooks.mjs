@@ -43,9 +43,7 @@
  * Servers inherit the operator's process environment; pass `MUSE_SESSION_ID`
  * through at runtime instead of hardcoding a session id into `env`.
  *
- * This module is intentionally dependency-free (node builtins +
- * muse-paths.mjs only) so provider-policy-style import graphs never pull it
- * in transitively.
+ * MCP writes use the shared config writer, resolved for source and packaged installs.
  *
  * @issue #228
  */
@@ -53,8 +51,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { importImpl } from '../../_resolve-impl.mjs';
 import { stripJsonComments } from './base.mjs';
 import { resolveMuseXdgSkillsDir, museXdgSkillsDirRemediation } from './muse-paths.mjs';
+
+const { assertConfigDestination, writeConfigAtomic, writeConfigTransaction } = await importImpl(import.meta.url, 'mcp/config-file.mjs');
 
 // ---------------------------------------------------------------------------
 // Shared JSON helpers
@@ -631,7 +633,7 @@ export function mergeMcpProfile(existingDoc, opts = {}) {
  * preserving unknown keys, timestamped backup before writing, atomic write,
  * dry-run diff with zero writes, fail closed on unparseable settings.
  */
-export function deployMuseMcp(opts = {}) {
+export async function deployMuseMcp(opts = {}) {
   const { dryRun = false, quiet = false, mcp = false, env = process.env, userHome = os.homedir() } = opts;
   const log = quiet ? () => {} : (msg) => console.log(msg);
 
@@ -642,6 +644,8 @@ export function deployMuseMcp(opts = {}) {
 
   const settingsPath = assertMuseUserSettingsPath(env, userHome);
   const configDir = path.dirname(settingsPath);
+  await assertConfigDestination(settingsPath);
+  await assertConfigDestination(path.join(configDir, MUSE_MCP_SIDECAR_NAME));
   const { doc: existingDoc, raw: existingRaw, existed } = readSettingsDoc(settingsPath);
   const sidecar = readMcpSidecar(configDir);
   const profile = aiwgMcpServerProfile();
@@ -680,14 +684,15 @@ export function deployMuseMcp(opts = {}) {
     return { settingsPath, changed: true, plan, wrote: false, warnings };
   }
 
-  fs.mkdirSync(configDir, { recursive: true });
   let backupPath = null;
   if (existed) {
-    backupPath = `${settingsPath}.aiwg-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    fs.copyFileSync(settingsPath, backupPath);
+    backupPath = `${settingsPath}.aiwg-backup-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+    await writeConfigAtomic(backupPath, existingRaw, { userScope: true });
   }
-  atomicWrite(settingsPath, afterText);
-  atomicWrite(sidecar.path, canonicalJson({ version: 1, servers: ['aiwg'] }));
+  await writeConfigTransaction([
+    { file: settingsPath, content: afterText, options: { userScope: true } },
+    { file: sidecar.path, content: canonicalJson({ version: 1, servers: ['aiwg'] }), options: { userScope: true } },
+  ]);
 
   log(`Muse MCP: merged AIWG stdio profile into ${settingsPath}`);
   for (const step of plan) log(`  ${step}`);
@@ -700,11 +705,13 @@ export function deployMuseMcp(opts = {}) {
  * Removal path: drop the AIWG-managed `aiwg` server key (only when recorded
  * in the sidecar) and delete the sidecar. Operator servers are never touched.
  */
-export function pruneMuseMcp(opts = {}) {
+export async function pruneMuseMcp(opts = {}) {
   const { dryRun = false, quiet = false, env = process.env, userHome = os.homedir() } = opts;
   const log = quiet ? () => {} : (msg) => console.log(msg);
   const settingsPath = assertMuseUserSettingsPath(env, userHome);
   const configDir = path.dirname(settingsPath);
+  await assertConfigDestination(settingsPath);
+  await assertConfigDestination(path.join(configDir, MUSE_MCP_SIDECAR_NAME));
 
   if (!fs.existsSync(settingsPath)) {
     log(`Muse MCP: no ${settingsPath}; nothing to prune.`);
@@ -731,10 +738,10 @@ export function pruneMuseMcp(opts = {}) {
     return { settingsPath, pruned: true, wrote: false };
   }
 
-  const backupPath = `${settingsPath}.aiwg-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  fs.copyFileSync(settingsPath, backupPath);
-  atomicWrite(settingsPath, canonicalJson(merged));
-  if (fs.existsSync(sidecar.path)) fs.unlinkSync(sidecar.path);
+  const backupPath = `${settingsPath}.aiwg-backup-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+  await writeConfigAtomic(backupPath, existingRaw, { userScope: true });
+  await writeConfigAtomic(settingsPath, canonicalJson(merged), { userScope: true });
+  if (await assertConfigDestination(sidecar.path)) fs.unlinkSync(sidecar.path);
   log(`Muse MCP: removed mcp_servers.aiwg from ${settingsPath} (backup: ${backupPath}).`);
   return { settingsPath, pruned: true, wrote: true, backupPath };
 }

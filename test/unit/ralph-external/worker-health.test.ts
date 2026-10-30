@@ -1,4 +1,4 @@
-/** Synthetic ACP and bounded replay vectors for #2994/#2965. */
+/** Scrubbed live/synthetic ACP and bounded replay vectors for #2994/#2965. */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { GrokBuildAdapter } from '../../../tools/ralph-external/lib/grok-build-adapter.mjs';
@@ -13,8 +13,57 @@ function fixture() {
   return { observer, progress(key: string) { now++; observer.observe({ kind: 'progress', key }); }, set(time: number) { now = time; } };
 }
 
+describe('T-OG-24 managed observer fencing', () => {
+  it('starts evidence at the admitted generation and retains continuity gaps', () => {
+    const observer = createWorkerHealthObserver({ health, invocationId: 'synthetic', observerGeneration: 4 });
+    expect(observer.snapshot().observerGeneration).toBe(4);
+    expect(observer.evidence().observerGeneration).toBe(4);
+    observer.gap('OBSERVER_GAP');
+    expect(observer.snapshot().observerGeneration).toBe(5);
+    expect(createWorkerHealthObserver({ health }).snapshot().observerGeneration).toBe(0);
+  });
+});
+
 describe('legacy Grok observer ACP grammar', () => {
   const direct = new GrokBuildAdapter();
+  const liveWire = readFileSync(new URL('../../fixtures/providers/grok-build/health/live-1.0.38-stream.ndjson', import.meta.url), 'utf8');
+  const liveEvents = liveWire.trim().split('\n').map(line => JSON.parse(line));
+  const liveEnd = liveEvents.at(-1);
+  const liveBinding = { sessionId: liveEnd.sessionId, requestId: liveEnd.requestId };
+
+  it.each(liveEvents.map((event, index) => ({ index, event })))('recognizes live event $index ($event.type) with direct adapter parity', ({ event }) => {
+    const expected = event.type === 'end'
+      ? { kind: 'terminal', success: true, key: 'end_turn' }
+      : ['tool_call', 'tool_call_update'].includes(event.type)
+        ? { kind: 'progress', key: 'fixture-toolCallId-1' } : { kind: 'activity' };
+    expect(observeProviderHealthEvent('grok-build', event, source, liveBinding)).toEqual(expected);
+    expect(direct.observeHealthEvent(event, source, liveBinding)).toEqual(expected);
+  });
+
+  it('completes the chunked live stream through both shared and direct health observers', () => {
+    let now = 0;
+    const options = { provider: 'grok-build', health: { ...health, handshake: 'process-only' },
+      ...liveBinding, now: () => now, wallNow: () => 0 };
+    const shared = createWorkerHealthObserver(options);
+    const adapter = direct.createHealthObserver(options);
+    const wire = Buffer.from(liveWire);
+    for (const observer of [shared, adapter]) {
+      observer.processStarted({ pid: 123, startTicks: '1', executable: '/synthetic/grok' });
+      for (let offset = 0; offset < wire.length; offset += 7) {
+        now++;
+        observer.feed(wire.subarray(offset, offset + 7));
+      }
+      expect(observer.snapshot().lastProgressAt).not.toBeNull();
+      expect(observer.evidence().events.at(-1)).toMatchObject({ kind: 'terminal' });
+      expect(observer.finish({ exitCode: 0, termination: 'confirmed', finalValid: true }).state).toBe('completed');
+    }
+    expect(shared.evidence().events.map(event => event.kind)).toEqual(adapter.evidence().events.map(event => event.kind));
+  });
+
+  it('extracts only the final answer after the live usage and tool boundaries', () => {
+    expect(direct.parseDirectFinal(liveWire)).toEqual({ text: 'ok', stopReason: 'end_turn', sessionId: liveEnd.sessionId });
+  });
+
   it('replays the documented ACP fixture through the shared observer with chunked framing', () => {
     const base = new URL('../../fixtures/providers/grok-build/health/', import.meta.url);
     const wire = readFileSync(new URL('stream.ndjson', base));

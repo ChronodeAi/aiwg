@@ -1,0 +1,15 @@
+{
+  "T-OG-09": [
+    "test/conformance/orchestration-v1/worker-telemetry.test.ts"
+  ],
+  "T-OG-10": [
+    "test/unit/decision/worker-telemetry.test.ts",
+    "test/unit/decision/worker-otlp.test.ts",
+    "test/conformance/orchestration-v1/worker-telemetry.test.ts"
+  ],
+  "T-OG-13": [
+    "test/unit/decision/worker-telemetry.test.ts",
+    "test/unit/decision/worker-otlp.test.ts",
+    "test/conformance/orchestration-v1/worker-telemetry.test.ts"
+  ]
+}

@@ -9,6 +9,9 @@ triggers:
   - audit self grading
   - reward hacking audit
   - evaluator immutability review
+commandHint:
+  modelRole: reasoning
+  modelTier: standard
 ---
 
 # Governance Escape-Hatch Audit

@@ -680,7 +680,7 @@ describe("Fortemi Core no-regression parity fixtures (#1691)", () => {
   it("keeps show and query JSON shapes compatible", async () => {
     seedProjectGraph();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       name: ".aiwg/skills/intake-wizard/SKILL.md",
       graph: "project",
       json: true,
@@ -688,7 +688,7 @@ describe("Fortemi Core no-regression parity fixtures (#1691)", () => {
     const localShow = readConsoleJson();
     consoleSpy.mockClear();
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       name: ".aiwg/skills/intake-wizard/SKILL.md",
       graph: "project",
       json: true,
@@ -699,7 +699,7 @@ describe("Fortemi Core no-regression parity fixtures (#1691)", () => {
     expect(fortemiShow.path).toBe(localShow.path);
     expect(fortemiShow.content).toBe(localShow.content);
 
-    await showArtifact(tmp, {
+    await showArtifact(tmp, { body: true,
       name: "intake-wizard",
       graph: "project",
       json: true,
@@ -867,7 +867,7 @@ describe("Fortemi Core no-regression parity fixtures (#1691)", () => {
     const previousAiwgRoot = process.env.AIWG_ROOT;
     process.env.AIWG_ROOT = tmp;
     try {
-      await showArtifact(tmp, {
+      await showArtifact(tmp, { body: true,
         name: "Search Architecture",
         typeFilter: ["adr"],
         graph: "project",
@@ -876,7 +876,7 @@ describe("Fortemi Core no-regression parity fixtures (#1691)", () => {
       const localTitleFallback = readConsoleJson();
       consoleSpy.mockClear();
 
-      await showArtifact(tmp, {
+      await showArtifact(tmp, { body: true,
         name: "Search Architecture",
         typeFilter: ["adr"],
         graph: "project",
@@ -888,7 +888,7 @@ describe("Fortemi Core no-regression parity fixtures (#1691)", () => {
       expect(fortemiTitleFallback.path).toBe(localTitleFallback.path);
       expect(fortemiTitleFallback.title).toBe("Search Architecture");
 
-      await showArtifact(tmp, {
+      await showArtifact(tmp, { body: true,
         name: "aiwg-steward",
         typeFilter: ["agent"],
         graph: "project",
@@ -897,7 +897,7 @@ describe("Fortemi Core no-regression parity fixtures (#1691)", () => {
       const localAgent = readConsoleJson();
       consoleSpy.mockClear();
 
-      await showArtifact(tmp, {
+      await showArtifact(tmp, { body: true,
         name: "aiwg-steward",
         typeFilter: ["agent"],
         graph: "project",

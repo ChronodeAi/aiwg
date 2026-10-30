@@ -28,6 +28,19 @@ The core rule is simple:
   boundaries.
 - A governance skeptic agent for adversarial review.
 
+## Model policy and rule delivery
+
+The governance skeptic and the two adversarial review skills declare provider-neutral
+`reasoning` / `standard` policy; corpus inventory uses `efficiency` / `economy`.
+The agent retains the portable `sonnet` alias rather than pinning a provider model ID.
+No premium exemption or acceptance authority is granted.
+
+All five rules use explicit `bound` activation with short summaries and bindings to
+the skeptic and all three governance skills. Discovery exposes their required rule
+checks, and deployment uses the shared rule-delivery contract rather than relying
+on the missing-activation migration fallback. Full rule bodies remain unchanged.
+
+
 ## Non-Goals
 
 - No Ring code is ported in v1.

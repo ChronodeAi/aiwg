@@ -4,7 +4,10 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { importImpl } from '../../_resolve-impl.mjs';
-import { collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot, rulesIndexProjectionName } from './base.mjs';
+import { withRuleDeployment, collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot } from './base.mjs';
+
+import { withModelWrapper } from './model-wrapper.mjs';
+import { writeContextFileSync } from './context-write.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
 export const paths = { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules' };
@@ -21,7 +24,8 @@ function diagnostic(opts, message) { opts.diagnostics?.push(message); if (!opts.
 // Resolved through the shared resolver: an installed package ships these
 // modules under dist/src, not src, so a literal path into src fails there.
 const { resolveOmpPaths } = await importImpl(import.meta.url, 'providers/omp-paths.mjs');
-const { transformAgent, mapModel } = await importImpl(import.meta.url, 'providers/omp-agent.mjs');
+const { transformAgent: translateAgent, mapModel } = await importImpl(import.meta.url, 'providers/omp-agent.mjs');
+const transformAgent = withModelWrapper('omp', translateAgent);
 export { transformAgent, mapModel };
 const array = value => Array.isArray(value) ? value : typeof value === 'string' ? value.split(',').map(s => s.trim()).filter(Boolean) : [];
 export function transformCommand(src, content, opts = {}) {
@@ -50,6 +54,17 @@ function assertNoSymlink(destination) {
     try { if (fs.lstatSync(current).isSymbolicLink()) throw new Error(`OMP preserves symlink destination: ${current}`); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     const parent = path.dirname(current); if (parent === current) break; current = parent;
+  }
+}
+// Staging materializes links. Validate the logical rule tree first so the
+// shared projector cannot turn an operator link into an ordinary owned file.
+function assertRuleTree(directory) {
+  assertNoSymlink(directory);
+  if (!fs.existsSync(directory)) return;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) throw new Error(`OMP preserves symlink destination: ${file}`);
+    if (entry.isDirectory()) assertRuleTree(file);
   }
 }
 function readReceipt(dir) {
@@ -116,22 +131,10 @@ function writeOwned(dest, content, source, opts = {}, transformation = 'identity
 export function deploySkillSupportAsset(source, destination, opts = {}) {
   return writeOwned(destination, fs.readFileSync(source), source, opts, 'omp-skill');
 }
-function assignRuleNames(files) {
-  const indexes = files.filter(src => path.basename(src) === 'RULES-INDEX.md');
-  const preferred = indexes.find(src => rulesIndexProjectionName(src) === 'RULES-INDEX-sdlc-complete.md') ?? indexes[0];
-  const names = new Map(); const used = new Set();
-  for (const src of files) {
-    const original = path.basename(src);
-    const name = original === 'RULES-INDEX.md' && src !== preferred ? rulesIndexProjectionName(src) : original;
-    if (used.has(name)) throw new Error(`OMP rules collision: ${name}`);
-    used.add(name); names.set(src, name);
-  }
-  return names;
-}
-function deployType(files, target, opts, type, transform, nameFor = src => path.basename(src)) {
+function deployType(files, target, opts, type, transform) {
   let count = 0; const seen = new Set();
   for (const src of files) {
-    const basename = nameFor(src);
+    const basename = path.basename(src);
     if (seen.has(basename)) throw new Error(`OMP ${type} collision: ${basename}`);
     seen.add(basename);
     const diagnostics = [];
@@ -143,11 +146,6 @@ function deployType(files, target, opts, type, transform, nameFor = src => path.
 }
 export const deployAgents = (files, target, opts = {}) => deployType(files, target, opts, 'agents', transformAgent);
 export const deployCommands = (files, target, opts = {}) => deployType(files, target, opts, 'prompts', transformCommand);
-export function deployRules(files, target, opts = {}) {
-  const names = assignRuleNames(files);
-  for (const [src, name] of names) if (name !== path.basename(src)) diagnostic(opts, `preserved distinct rules index ${src} as ${name}`);
-  return deployType(files, target, opts, 'rules', transformRule, src => names.get(src));
-}
 export function deploySkills(dirs, target, opts = {}) {
   let count = 0; const written = new Map(); const root = roots(target, opts);
   const unique = [...new Set(dirs)];
@@ -192,7 +190,7 @@ export function createAgentsMd(target, srcRoot, dryRun = false) {
   const content = current.includes(start) && current.includes(end) ? current.slice(0, current.indexOf(start)) + block + current.slice(current.indexOf(end) + end.length) : `${current}${current ? '\n\n' : ''}${block}\n`;
   if (!dryRun) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    if (content !== current) fs.writeFileSync(dest, content);
+    if (content !== current) writeContextFileSync(dest, content);
     const receiptPath = path.join(path.dirname(dest), '.aiwg-manifest.json');
     // Block ownership must never claim the operator's complete context file.
     receipt.managed['AGENTS.md'] = { blockHash: `sha256:${hash(block)}`, source: 'omp-bootstrap', provider: 'omp', transformation: 'managed-block' };
@@ -247,18 +245,30 @@ export function deployExtensionBridge(target, opts = {}) {
   return writeOwned(path.join(roots(target, opts).native, 'extensions/aiwg-bridge.ts'), fs.readFileSync(src, 'utf8'), src, opts, 'omp-extension');
 }
 export async function postDeploy(target, opts) {
-  if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) createAgentsMd(target, opts.srcRoot, opts.dryRun);
+  if (opts.contextFiles !== false && (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly))) createAgentsMd(target, opts.srcRoot, opts.dryRun);
 }
 export const getFileExtension = () => '.md';
 export async function deploy(opts) {
+  if (!opts.deferRuleProjection && (opts.kernelOnly || opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly))) {
+    assertRuleTree(path.isAbsolute(paths.rules) ? paths.rules : path.join(opts.target, paths.rules));
+  }
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, async staged => {
+    let count = await deploySelected(staged);
+    for (const srcRoot of staged.additionalSources || []) {
+      count += await deploySelected({ ...staged, srcRoot });
+    }
+    return count;
+  });
+}
+
+async function deploySelected(opts) {
   const mode = normalizeDeploymentMode(opts.mode);
-  const include = { includeAgents: true, includeCommands: opts.deployCommands || opts.commandsOnly, includeSkills: opts.deploySkills || opts.skillsOnly, includeRules: opts.deployRules || opts.rulesOnly };
+  const include = { includeAgents: true, includeCommands: opts.deployCommands || opts.commandsOnly, includeSkills: opts.deploySkills || opts.skillsOnly, includeRules: false };
   const directSource = ['agents', 'commands', 'skills', 'rules'].some(type => fs.existsSync(path.join(opts.srcRoot, type)));
   const framework = directSource ? {
     agents: listMdFiles(path.join(opts.srcRoot, 'agents')),
     commands: include.includeCommands ? listMdFiles(path.join(opts.srcRoot, 'commands')) : [],
     skills: include.includeSkills ? listSkillDirs(path.join(opts.srcRoot, 'skills')) : [],
-    rules: include.includeRules ? listMdFiles(path.join(opts.srcRoot, 'rules')) : [],
   } : collectFrameworkArtifacts(opts.srcRoot, mode, include);
   const addon = !directSource && ['general','sdlc','both','all'].includes(mode) ? getAddonFiles(opts.srcRoot, include) : { agents: [], commands: [], skills: [], rules: [] };
   const selected = type => {
@@ -275,9 +285,22 @@ export async function deploy(opts) {
   let count = 0;
   if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) count += deployAgents(selected('agents'), opts.target, opts);
   if (include.includeCommands && !opts.skillsOnly && !opts.rulesOnly) count += deployCommands(selected('commands'), opts.target, opts);
-  if (include.includeSkills && !opts.commandsOnly && !opts.rulesOnly) count += deploySkills(selected('skills'), opts.target, opts);
-  if (include.includeRules && !opts.commandsOnly && !opts.skillsOnly) count += deployRules(selected('rules'), opts.target, opts);
+  if (include.includeSkills && !opts.commandsOnly && !opts.rulesOnly) {
+    // Different frameworks may index same-named standard skills. With copying
+    // disabled they share only a stale-copy cleanup destination, not a native
+    // definition slot. Keep one cleanup pass; retain collision checks for every
+    // kernel skill and for explicitly copied standard skills.
+    const lazyNames = new Set();
+    const skills = selected('skills').filter(dir => {
+      if (opts.copyStandardSkills || isKernelSkill(dir)) return true;
+      const basename = path.basename(dir);
+      if (lazyNames.has(basename)) return false;
+      lazyNames.add(basename);
+      return true;
+    });
+    count += deploySkills(skills, opts.target, opts);
+  }
   if (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly) count += deployExtensionBridge(opts.target, opts);
   await postDeploy(opts.target, opts); return count;
 }
-export default { name, aliases, paths, kernelSkillsPath, support, capabilities, mapModel, transformAgent, transformCommand, transformRule, deployAgents, deployCommands, deploySkills, deployRules, deployExtensionBridge, createAgentsMd, postDeploy, getFileExtension, deploy, uninstall };
+export default { name, aliases, paths, kernelSkillsPath, support, capabilities, mapModel, transformAgent, transformCommand, transformRule, deployAgents, deployCommands, deploySkills, deployExtensionBridge, createAgentsMd, postDeploy, getFileExtension, deploy, uninstall };

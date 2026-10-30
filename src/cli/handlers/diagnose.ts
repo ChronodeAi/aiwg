@@ -45,9 +45,22 @@ export const diagnoseHandler: CommandHandler = {
   category: 'maintenance',
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: [
+      'Usage: aiwg diagnose [--stdout] [--include-secrets]',
+      '',
+      '--stdout          Print the bundle as JSON instead of writing a tarball.',
+      '--include-secrets Disable sanitization. Output contains secrets; review it before sharing.',
+    ].join('\n') };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--help') || ctx.args.includes('-h')) return diagnoseHandler.help!(ctx);
     const stdoutMode = ctx.args.includes('--stdout');
     const includeSecrets = ctx.args.includes('--include-secrets');
+    if (includeSecrets) {
+      process.stderr.write('Warning: --include-secrets output contains secrets. Review it before sharing.\n');
+    }
     const cwd = getProjectDir(ctx, ctx.args);
 
     const log = getLogger('cli:diagnose');

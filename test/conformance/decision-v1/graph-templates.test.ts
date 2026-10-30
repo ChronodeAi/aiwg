@@ -36,7 +36,8 @@ describe('first-class dependent graph templates', () => {
     const manifest = decisionGraphToFlow(graph, { resolvedPins: base.resolvedPins, decisionSkillId: skill, terminal: 'verifier' });
     expect(validateFlowGraph(manifest, { catalogIds: new Set([skill]) }).valid).toBe(true);
     const records: any[] = [];
-    const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan),
+    // Routing assertions must not depend on a loaded host meeting a 100 ms deadline.
+    const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, [], () => 0),
       () => ({ attempts: 1, tokens: 2, costMicros: 2 }),
       async ({ node }: any) => ({ outputs: node.id === 'extractor' ? { evidence: 'evidence' } :
         node.id === 'verifier' ? { result: 'verified', 'needs-fallback': needed } : { result: 'fallback' },

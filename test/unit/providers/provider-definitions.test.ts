@@ -49,6 +49,12 @@ describe('provider definition registry', () => {
     }
   });
 
+  it('declares root AIWG.md for every provider including home-scoped and generic adapters', () => {
+    for (const definition of listProviderDefinitions()) {
+      expect(definition.paths.contextFiles.aiwgMd, definition.id).toBe(true);
+    }
+  });
+
   it('normalizes existing provider aliases through definition data', () => {
     expect(normalizeProviderDefinitionId('claude-code')).toBe('claude');
     expect(normalizeProviderDefinitionId('openai')).toBe('codex');
@@ -195,6 +201,10 @@ describe('provider definition registry', () => {
   });
 
   it('models context-discovery paths separately where regenerate differs from deploy paths', () => {
+    expect(getProviderDefinition('pi')?.paths.artifacts.rules).toBe('.pi/rules');
+    expect(getProviderDefinition('pi')?.paths.contextDiscovery.rules).toBeNull();
+    expect(getProviderDefinition('hermes')?.paths.artifacts.rules).toBe('.hermes/rules');
+    expect(getProviderDefinition('hermes')?.paths.contextDiscovery.rules).toBeNull();
     expect(getProviderDefinition('codex')?.paths.artifacts.skills).toBe('.codex/.aiwg/skills');
     expect(getProviderDefinition('codex')?.paths.contextDiscovery.skills).toBe('.agents/skills');
     expect(getProviderDefinition('copilot')?.paths.artifacts.rules).toBe('.github/copilot-rules');

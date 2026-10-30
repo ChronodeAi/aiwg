@@ -128,6 +128,6 @@ describe('D26 shadow context snapshot against ContextBudgetManager', () => {
       }
     };
     for (const dir of ['src', 'tools']) walk(join(root, dir));
-    expect(consumers.sort()).toEqual(['src/decision/context-pruning.ts']);
+    expect(consumers.sort()).toEqual(['src/decision/context-pruning-pilot.ts']);
   });
 });

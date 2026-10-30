@@ -1,5 +1,7 @@
 # Composition Engine
 
+Evidence status: design intent; shipped records are synthetic-conformance only.
+
 The Composition Engine adds a typed, provider-neutral execution-graph profile
 to AIWG's existing Flow metalanguage. The profile uses:
 

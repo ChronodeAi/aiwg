@@ -1,4 +1,5 @@
-import type { QualificationIntegrityMetadata } from '../decision/qualification/release.js';
+import type { GateOutcome } from './lattice.js';
+import type { QualificationIntegrityMetadata } from './upstream-ceiling.js';
 import type { DecisionPredicate } from '../decision/types.js';
 
 export const GATES_API_VERSION = 'gates.aiwg.io/v1alpha1' as const;
@@ -216,7 +217,7 @@ export interface GateHoldoutInputs {
   digest: Sha256Digest;
 }
 
-export type GateOutcome = 'PROMOTE' | 'HOLD' | 'ROLLBACK';
+export type { GateOutcome } from './lattice.js';
 
 export type GateStatus = 'pass' | 'fail' | 'insufficient';
 

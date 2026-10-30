@@ -19,6 +19,8 @@ What changed and why, in one short paragraph.
 - [ ] `npm test` passes (or specific suite: …)
 - [ ] CI green on this branch / commit
 - [ ] Manual verification: <what was checked>
+- [ ] Branch synced with current `main` (`tools/git/pr-base-sync.sh` reports `up-to-date`; verification above re-ran after any rebase/update)
+- Verified head SHA: <…> / main SHA: <…>
 
 ## Risk and rollback
 

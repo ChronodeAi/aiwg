@@ -515,14 +515,15 @@ When multiple behaviors are attached to the same agent, their directives and too
 
 ### Directives
 
-Directives are unioned by `id`. If two behaviors define a directive with the same `id`, the later one in the attachment order wins, and a warning is emitted:
+Directives are unioned by `id`. If two behaviors define a directive with the same `id`, the directive with the higher numeric `priority` wins. Omitted priority defaults to `0`. Equal priorities are resolved by attachment order: the later behavior wins.
+
+Every collision emits a warning naming the winning and losing behaviors, their priorities, and the reason. For example, when both priorities default to `0`:
 
 ```
-WARN: directive id "budget-gate" defined in both "ops-toolset" and "cost-reporter".
-      "cost-reporter" wins (later in attachment order). To suppress, set explicit priority.
+WARN: Directive 'budget-gate': 'cost-reporter' (priority 0) wins over 'ops-toolset' (priority 0); equal priority; later in attachment order
 ```
 
-To suppress the warning and declare intent explicitly, add a `priority` field:
+To make a directive win regardless of attachment order, give it a higher `priority` than the competing directive:
 
 ```yaml
 directives:
@@ -531,6 +532,8 @@ directives:
     rule: >
       ...
 ```
+
+This directive wins over a competing `budget-gate` with priority `0` in either attachment order. The collision still produces a warning identifying both behaviors.
 
 ### Tools
 
@@ -557,7 +560,7 @@ If the behavior is missing, verify the file is in one of the three discovery pat
 
 **Directive conflict warning on startup**
 
-Two attached behaviors define the same directive `id`. The later behavior in the `behaviors` array wins. If the outcome is wrong, either rename the directive in your custom behavior or set `priority` fields explicitly.
+Two attached behaviors define the same directive `id`. The higher `priority` wins (default `0`); for equal priorities, the later behavior in the `behaviors` array wins. The warning identifies the winner and loser. If the outcome is wrong, either rename the directive in your custom behavior or set `priority` fields explicitly.
 
 **Tool name collision error**
 

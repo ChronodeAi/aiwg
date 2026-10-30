@@ -1,4 +1,28 @@
 ---
+activation: bound
+summary: Define measurable completion and gate criteria with explicit thresholds or checks; cap every loop with a maximum iteration count and a fallback.
+bound_to:
+  skills:
+    - aiwg-mission
+    - complexity-gate
+    - flow-gate-check
+    - gate-evaluation
+    - infer-completion-criteria
+    - mission-control
+    - ralph
+    - ralph-config
+    - ralph-external
+    - ralph-resume
+    - security-gate
+  agents:
+    - ralph-loop
+    - ralph-verifier
+  flows:
+    - flow-gate-check
+triggers:
+  - write measurable loop completion criteria
+  - replace good enough with a concrete quality gate
+  - bound iterations with a fallback
 enforcement: high
 ---
 
@@ -135,7 +159,7 @@ loop:
 ## References
 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/instruction-comprehension.md
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md
 - OpenProse antipatterns guidance (research: #617)
 
 ---

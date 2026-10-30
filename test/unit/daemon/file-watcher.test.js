@@ -165,8 +165,16 @@ describe('FileWatcher', () => {
 
       expect(stats).toEqual({
         enabled: true,
+        max_handles: null,
+        watch_handles: 0,
         paths: ['.aiwg/'],
-        events_received: 0
+        events_received: 0,
+        unavailable_roots: [],
+        polling_roots: [],
+        scan_incomplete_roots: [],
+        pending_changes: 0,
+        reconciliation_pending: false,
+        recovery_required: false
       });
     });
 
@@ -232,6 +240,7 @@ describe('FileWatcher', () => {
       vi.spyOn(fileWatcher, 'watchPath').mockImplementation(() => {
         throw new Error('Permission denied');
       });
+      vi.spyOn(fileWatcher, 'scan').mockReturnValue({ state: new Map(), identity: '1:1' });
 
       expect(() => fileWatcher.start()).not.toThrow();
       expect(consoleSpy).toHaveBeenCalled();

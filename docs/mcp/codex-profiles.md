@@ -5,6 +5,12 @@ implements OAuth isolation per MCP profile by giving each profile its own runtim
 home directory. Codex is launched with `HOME=<runtime-home>` so all config reads,
 auth token writes, and OAuth flows are scoped to that profile.
 
+AIWG preserves the parent configuration directory through `AIWG_CONFIG` before
+changing `HOME`. Commands inside the profile therefore retain the operator's
+installation identity and development channel. An explicit `AIWG_CONFIG` takes
+precedence; otherwise AIWG resolves the parent's existing `~/.aiwg` or
+`~/.config/aiwg` directory.
+
 This mirrors the sysops `codex-role.sh` pattern from `roctinam/sysops`.
 
 ## How It Works
@@ -81,54 +87,24 @@ other profiles.
 
 ## Explicit Login
 
-Run OAuth login for a profile without starting a full session:
+Log in to a profile without starting a full session:
 
 ```bash
 aiwg mcp profile login ops
 ```
 
-This calls `codex login` with `HOME`/`CODEX_HOME` set to the profile runtime home.
-Useful for pre-authenticating profiles before starting a session. With a terminal
-attached, this runs the normal interactive OAuth flow — the same one a first
-`aiwg session --provider codex --profile ops` would trigger.
-
-**Running headless (#3062):** without a terminal, pass exactly one of three flags
-naming where the API key comes from — see
-[Supplying credentials safely](#supplying-credentials-safely) for which one to
-prefer and why:
+With a terminal, AIWG reads an API key without echo and sends it to `codex login --with-api-key` over stdin with the profile runtime home selected. Without a terminal, select a source explicitly:
 
 ```bash
-# Most preferred: piped from a secret manager, never in an environment or on argv
 vault read -field=key secret/openai | aiwg mcp profile login ops --api-key-stdin
-
-# Preferred: a private file only you can read
-aiwg mcp profile login ops --api-key-file ~/.config/aiwg/openai-key
-
-# Least preferred: a named environment variable (go/no-go review, blocker 1C)
+aiwg mcp profile login ops --api-key-file "$HOME/.config/aiwg/openai-key"
+aiwg mcp profile login ops --api-key-store openai-production
 aiwg mcp profile login ops --api-key-env OPENAI_API_KEY
 ```
 
-In every case the key reaches `codex login --with-api-key` over stdin only — it
-never appears on argv, in logs, or in any error message. `--api-key-stdin` refuses
-if stdin is a terminal (run the plain interactive login instead) or empty.
-`--api-key-file <path>` refuses unless the file is a regular file, not a symlink,
-with exactly one hard link, owned by you, and not readable or writable by group or
-other (`chmod 600`) — never printing the path's contents. `--api-key-env` reads the
-named variable and, as of the go/no-go review's blocker 1, is also kept out of
-*this process's own* child environment and out of `NODE_DEBUG=child_process`
-diagnostics, including a background subprocess this CLI itself might otherwise
-start (see [Supplying credentials safely](#supplying-credentials-safely)); it
-remains the least preferred of the three because the variable is still visible to
-every *other* child process the invoking shell starts. Only one of the three may be
-given — more than one is a usage error naming the flags given. If the named
-variable (or file) is unset/missing, the error names it (never a value, since there
-was none). Without a terminal and without any of the three, the command errors
-naming all three flags instead of hanging waiting for input nobody can supply.
+When several source flags are supplied, precedence is interactive entry, stdin, file, store, then environment; a failed selected source does not fall through. `--api-key-interactive` explicitly requests terminal entry. On supported POSIX hosts, private files must be regular, owned by you, have no group/other access, and have one hard link; symlinks are refused. Windows file input fails closed until native ACL validation is available; use stdin or the native store. Missing/empty input errors name the options without printing a value. The command requires a built CLI (`npm run build:cli` in a checkout, or an installed `aiwg`).
 
-This command requires the built CLI (`npm run build:cli` in a source checkout, or
-an installed `aiwg`) — if the compiled module is missing it reports that directly
-instead of attempting to load TypeScript source and failing deep inside an unrelated
-import (#3062 second review, finding 3).
+See [Supplying sensitive values](../cli/sensitive-values.md) for all methods, named-store setup, headless behavior and what each method exposes.
 
 ## Running A Profile Session Headless
 
@@ -141,64 +117,7 @@ and `docs/providers/codex-direct.md` for the evidence), never on argv.
 
 ## Supplying Credentials Safely
 
-Go/no-go review, blocker 1. When a headless command needs a secret (an API key, a
-token), prefer these methods in this order — most preferred first — because each
-one is visible to a progressively wider audience on the machine running it:
-
-1. **Interactive login at a terminal.** Nothing is ever supplied on the command
-   line or in the environment at all; `codex` prompts you directly.
-
-   ```bash
-   aiwg mcp profile login ops
-   ```
-
-2. **Piped from a secret manager, over this process's own stdin.** The secret
-   exists only for the lifetime of the pipe; it is never written to an
-   environment variable or a file, and never appears on any command line.
-
-   ```bash
-   vault read -field=key secret/openai | aiwg mcp profile login ops --api-key-stdin
-   ```
-
-3. **A private file.** The secret sits on disk, but only you (and anything
-   running as you) can read it — enforced, not just documented: a mode-600,
-   non-symlink, single-hard-link regular file you own.
-
-   ```bash
-   aiwg mcp profile login ops --api-key-file ~/.config/aiwg/openai-key
-   ```
-
-4. **A named environment variable.** The least preferred of the four: an
-   environment variable is visible to *every other child process the invoking
-   shell starts* for the lifetime of that shell, not just to the one command you
-   meant it for.
-
-   ```bash
-   export OPENAI_API_KEY=sk-...
-   aiwg mcp profile login ops --api-key-env OPENAI_API_KEY
-   ```
-
-Two things make option 4 riskier than it looks, and apply to *any* secret-bearing
-environment variable, not just this command:
-
-- **A command-line argument is visible in a process listing** (`ps`, `/proc`,
-  task managers) to anyone who can see your process list — never pass a secret
-  value itself as an argument; a variable *name* is fine.
-- **Debug logging of child processes prints environments.** Setting
-  `NODE_DEBUG=child_process` (or an equivalent diagnostic in another language's
-  child-process library) makes that process print every child's full spawn
-  options — including its environment — to your own terminal. This is exactly
-  how the go/no-go review found blocker 1: a background subprocess this CLI
-  itself starts on every invocation (the update-notifier bootstrap,
-  `src/update/notifier.mjs`) used to inherit the whole parent environment,
-  which under `NODE_DEBUG=child_process` printed whatever `--api-key-env` named.
-  Fixed two ways, both durable regardless of which command runs: `bin/aiwg.mjs`
-  now never starts that bootstrap subprocess at all for a command it recognizes
-  as credential-handling (today: `aiwg mcp profile login`,
-  `aiwg decision setup jev`), and the bootstrap subprocess's own environment is
-  now an explicit allow-list (`notifierChildEnv()`) instead of a full copy of
-  the parent's, so a secret this CLI does not yet know to name is still never
-  copied into it, for *any* command.
+The shared [Supplying sensitive values](../cli/sensitive-values.md) page covers terminal entry, pipes, private files, named native-store entries, environment-variable exposure, and child-process debug logging. It also records every sensitive-input command family and remaining adoption work.
 
 ## Shared State Policy
 

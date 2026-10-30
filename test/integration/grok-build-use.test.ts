@@ -1,3 +1,4 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 /**
  * Practical end-to-end coverage for `aiwg use --provider grok-build`.
  * Project deploy, $GROK_HOME user mirroring, registry record, and receipts.
@@ -6,15 +7,28 @@
  *
  * @issue #2575
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const roots: string[] = [];
+
+function repositoryDeploymentState() {
+  return {
+    status: execFileSync('git', ['status', '--porcelain', '--', 'AGENTS.md', '.grok-build'], {
+      cwd: REPO_ROOT, encoding: 'utf8', timeout: 30_000,
+    }),
+    agents: readFileSync(path.join(REPO_ROOT, 'AGENTS.md'), 'utf8'),
+    grokBuildExists: existsSync(path.join(REPO_ROOT, '.grok-build')),
+  };
+}
+
+let repositoryBefore: ReturnType<typeof repositoryDeploymentState>;
+beforeEach(() => { repositoryBefore = repositoryDeploymentState(); });
 
 function isolated(prefix: string): string {
   const root = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -24,13 +38,16 @@ function isolated(prefix: string): string {
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  expect(repositoryDeploymentState(), 'Grok Build tests must leave the repository root unchanged')
+    .toEqual(repositoryBefore);
 });
 
 function runUse(args: string[], env: NodeJS.ProcessEnv, cwd: string) {
   const routerUrl = pathToFileURL(path.join(REPO_ROOT, 'src/cli/router.ts')).href;
   const runner = `import { run } from ${JSON.stringify(routerUrl)}; await run(process.argv.slice(1), { cwd: process.env.AIWG_TEST_PROJECT_ROOT }); process.exit(typeof process.exitCode === 'number' ? process.exitCode : 0);`;
-  const result = spawnSync(process.execPath, ['--import', 'tsx', '--eval', runner, ...args], {
-    cwd: REPO_ROOT,
+  const result = spawnSync(process.execPath, ['--import', pathToFileURL(require.resolve('tsx')).href, '--eval', runner, ...args], {
+    // The CLI also uses process.cwd() when --target is omitted.
+    cwd,
     encoding: 'utf8',
     timeout: 180_000,
     env: {
@@ -60,7 +77,7 @@ function runRemoval(args: string[], env: NodeJS.ProcessEnv, cwd: string) {
   const routerUrl = pathToFileURL(path.join(REPO_ROOT, 'dist/src/cli/router.js')).href;
   const runner = `import { run } from ${JSON.stringify(routerUrl)}; await run(process.argv.slice(1), { cwd: process.env.AIWG_TEST_PROJECT_ROOT }); process.exit(typeof process.exitCode === 'number' ? process.exitCode : 0);`;
   const result = spawnSync(process.execPath, ['--eval', runner, ...args], {
-    cwd: REPO_ROOT,
+    cwd,
     encoding: 'utf8',
     timeout: 180_000,
     env: { ...process.env, ...env, NO_UPDATE_NOTIFIER: '1' },
@@ -164,7 +181,7 @@ describe('aiwg use grok-build e2e (#2575)', () => {
     const projectAgents = path.join(project, '.grok', 'agents');
     expect(existsSync(projectAgents)).toBe(true);
     expect(readdirSync(projectAgents).filter(name => name.endsWith('.md')).length).toBeGreaterThan(0);
-    expect(existsSync(path.join(project, '.grok', 'rules'))).toBe(false);
+    assertStartupRuleDelivery(project, 'grok-build', readFileSync(path.join(project, 'AGENTS.md'), 'utf8'), '.grok/rules');
 
     // User-scope mirror via $GROK_HOME/skills
     expect(existsSync(path.join(grokHome, 'skills'))).toBe(true);
@@ -212,6 +229,19 @@ describe('aiwg use grok-build e2e (#2575)', () => {
 
     // --no-utils deploys the framework alone, so the managed skill is one sdlc ships itself.
     const managedSkill = path.join(project, '.grok', 'skills', 'sdlc-quickref', 'SKILL.md');
+    // #3457: generated binding text is removable only while its receipt still
+    // matches. Edits inside that generated block are operator changes too.
+    const boundSkill = projectSkills.map(name => path.join(project, '.grok', 'skills', name, 'SKILL.md'))
+      .find(file => readFileSync(file, 'utf8').includes('<!-- AIWG:bound-rules:start -->'));
+    expect(boundSkill).toBeDefined();
+    const boundOriginal = readFileSync(boundSkill!, 'utf8');
+    writeFileSync(boundSkill!, boundOriginal.replace('<!-- AIWG:bound-rules:start -->',
+      '<!-- AIWG:bound-rules:start -->\nOperator binding modification.'));
+    const boundPreview = runRemoval(['remove', 'grok-build', '--provider', 'grok-build', '--dry-run'], useEnv, project);
+    expect(boundPreview.status).toBe(1);
+    expect(boundPreview.stdout + boundPreview.stderr).toContain(`Preserved modified or unverifiable: ${path.relative(project, path.dirname(boundSkill!))}`);
+    expect(readFileSync(boundSkill!, 'utf8')).toContain('Operator binding modification.');
+    writeFileSync(boundSkill!, boundOriginal);
     const originalSkill = readFileSync(managedSkill, 'utf8');
     writeFileSync(managedSkill, `${originalSkill}\nOperator modification.\n`);
     const modifiedPreview = runRemoval(['remove', 'grok-build', '--provider', 'grok-build', '--dry-run'], useEnv, project);

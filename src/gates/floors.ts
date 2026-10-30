@@ -1,3 +1,4 @@
+import { GATE_RANK } from './lattice.js';
 import { validateGateDocument } from './schema.js';
 import { splitPackId } from './registry.js';
 import type { GateOutcome, GatePack, GateParentPin, ProviderAllowlistEntry } from './types.js';
@@ -56,8 +57,6 @@ export interface ProjectFloors {
   providers?: ProviderAllowlistEntry[];
 }
 
-const OUTCOME_RANK: Record<GateOutcome, number> = { PROMOTE: 0, HOLD: 1, ROLLBACK: 2 };
-
 const OUTCOMES: readonly GateOutcome[] = ['PROMOTE', 'HOLD', 'ROLLBACK'];
 
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
@@ -84,7 +83,7 @@ export function projectCeilingSatisfied(
   configured: GateOutcome | undefined,
 ): boolean {
   if (configured === undefined) return true;
-  return OUTCOME_RANK[declared ?? 'PROMOTE'] >= OUTCOME_RANK[configured];
+  return GATE_RANK[declared ?? 'PROMOTE'] >= GATE_RANK[configured];
 }
 
 /**
@@ -125,7 +124,7 @@ export function assertCeilingDefaults(ceilings: Record<string, unknown> | undefi
     }
     if (study === '*') continue;
     if (!starValid) throw new Error(`gates.ceilings: per-study ceilings require the project-wide '*' default ceiling`);
-    if (OUTCOME_RANK[ceiling as GateOutcome] < OUTCOME_RANK[star as GateOutcome]) {
+    if (GATE_RANK[ceiling as GateOutcome] < GATE_RANK[star as GateOutcome]) {
       throw new Error(`gates.ceilings.${study}: must tighten the project default ceiling ${String(star)}, not loosen it`);
     }
   }
@@ -183,7 +182,7 @@ export function validateGatesConfig(gates: unknown): string[] {
         for (const [study, ceiling] of Object.entries(gates.ceilings)) {
           if (study !== '*' && typeof ceiling === 'string'
             && (OUTCOMES as readonly string[]).includes(ceiling)
-            && OUTCOME_RANK[ceiling as GateOutcome] < OUTCOME_RANK[star as GateOutcome]) {
+            && GATE_RANK[ceiling as GateOutcome] < GATE_RANK[star as GateOutcome]) {
             errors.push(`gates.ceilings.${study}: must tighten the project default ceiling ${star}, not loosen it`);
           }
         }

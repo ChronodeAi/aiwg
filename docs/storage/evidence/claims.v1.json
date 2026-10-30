@@ -38,7 +38,8 @@
       "sourceFiles": [
         "src/storage/backends/postgrest.ts",
         "src/storage/qualification.ts",
-        "test/integration/storage-postgrest-live.test.ts"
+        "test/integration/storage-postgrest-live.test.ts",
+        "src/storage/backends/postgres.ts"
       ],
       "requiredMetrics": [
         "transportOverheadMs"

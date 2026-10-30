@@ -2,6 +2,7 @@
 id: pm-os-runtime
 name: PMOS Runtime Safety and Resolution
 enforcement: high
+activation: kernel
 severity: HIGH
 tier: addon
 description: Resolve PMOS resources from the addon root and preserve confirmation gates for writes, external systems, hooks, and upgrades.

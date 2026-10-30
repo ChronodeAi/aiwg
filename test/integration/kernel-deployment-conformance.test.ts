@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   providerNeedsCommands,
   providerUsesSkillsNatively,
@@ -89,6 +89,11 @@ function canonicalKernelNames(): string[] {
 
 const EXPECTED_KERNEL = canonicalKernelNames();
 const CODEX_LISTING_CHAR_CAP = 8_000;
+const DEPLOY_CHILD_TIMEOUT_MS = 60_000;
+const SINGLE_DEPLOY_TEST_TIMEOUT_MS = DEPLOY_CHILD_TIMEOUT_MS + 15_000;
+const DOUBLE_DEPLOY_TEST_TIMEOUT_MS = 2 * DEPLOY_CHILD_TIMEOUT_MS + 15_000;
+const USER_SCOPE_CHILD_TIMEOUT_MS = 120_000;
+const USER_SCOPE_TEST_TIMEOUT_MS = USER_SCOPE_CHILD_TIMEOUT_MS + 15_000;
 
 function codexListingStats(root: string): { count: number; totalChars: number } {
   let count = 0;
@@ -131,7 +136,7 @@ function deploy(
     ...(options.dryRun ? ['--dry-run'] : []),
     // #284: the Grok Bot skill root is user scope only.
     ...(provider === 'grokbot' && !options.projectScope ? ['--scope', 'user'] : []),
-  ], { timeout: 60_000,
+  ], { timeout: DEPLOY_CHILD_TIMEOUT_MS,
     cwd: REPO_ROOT,
     // #2119: pin HERMES_HOME to the fake home too. Without this, a HERMES_HOME
     // inherited from the developer's environment (e.g. a per-role Hermes home)
@@ -162,45 +167,53 @@ describe('kernel deployment conformance', () => {
 
     expect(stats.count).toBe(EXPECTED_KERNEL.length);
     expect(stats.totalChars).toBeLessThanOrEqual(CODEX_LISTING_CHAR_CAP);
-  });
+  }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
   for (const provider of PROVIDERS) {
-    it(`${provider.id} deploys every canonical kernel skill and no standard skills`, () => {
-      const { project, home } = deploy(provider.id);
-      const deployedRoot = provider.root(project, home);
-      const deployed = skillDirs(deployedRoot)
-        .map(dir => dir.split('/').at(-1)!)
-        .sort();
+    describe(provider.id, () => {
+      let baseline: { project: string; home: string };
+      beforeAll(() => {
+        baseline = deploy(provider.id, { suffix: 'baseline' });
+      }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
+      it(`${provider.id} deploys every canonical kernel skill and no standard skills`, () => {
+        const { project, home } = baseline;
+        const deployedRoot = provider.root(project, home);
+        const deployed = skillDirs(deployedRoot)
+          .map(dir => dir.split('/').at(-1)!)
+          .sort();
 
-      expect(deployed).toEqual(EXPECTED_KERNEL);
-      for (const name of deployed) {
-        const content = readFileSync(join(deployedRoot, name, 'SKILL.md'), 'utf8');
-        // Provider translators may intentionally remove AIWG-only routing
-        // metadata such as `kernel` and `platforms`. The portable contract is
-        // a valid named skill with a substantive body at the kernel location.
-        expect(content, `${provider.id}/${name}`).toMatch(/^---\n[\s\S]*\n---\n/m);
-        expect(content, `${provider.id}/${name}`).toMatch(
-          new RegExp(`^name:\\s*["']?${name}["']?\\s*$`, 'm'),
-        );
-        expect(content.length, `${provider.id}/${name}`).toBeGreaterThan(100);
-      }
-    });
+        expect(deployed).toEqual(EXPECTED_KERNEL);
+        expect(existsSync(join(deployedRoot, 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
+        expect(existsSync(join(provider.standardRoot(project, home), 'harness-memory-maintenance', 'SKILL.md'))).toBe(false);
+        for (const name of deployed) {
+          const content = readFileSync(join(deployedRoot, name, 'SKILL.md'), 'utf8');
+          // Provider translators may intentionally remove AIWG-only routing
+          // metadata such as `kernel` and `platforms`. The portable contract is
+          // a valid named skill with a substantive body at the kernel location.
+          expect(content, `${provider.id}/${name}`).toMatch(/^---\n[\s\S]*\n---\n/m);
+          expect(content, `${provider.id}/${name}`).toMatch(
+            new RegExp(`^name:\\s*["']?${name}["']?\\s*$`, 'm'),
+          );
+          expect(content.length, `${provider.id}/${name}`).toBeGreaterThan(100);
+        }
+      }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
-    it(`${provider.id} copies the standard tier only with --copy-all`, () => {
-      const defaultDeploy = deploy(provider.id, { suffix: 'no-copy' });
-      const defaultStandardRoot = provider.standardRoot(defaultDeploy.project, defaultDeploy.home);
-      expect(existsSync(join(defaultStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(false);
+      it(`${provider.id} copies the standard tier only with --copy-all`, () => {
+        const defaultDeploy = baseline;
+        const defaultStandardRoot = provider.standardRoot(defaultDeploy.project, defaultDeploy.home);
+        expect(existsSync(join(defaultStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(false);
 
-      const fullDeploy = deploy(provider.id, { copyAll: true, suffix: 'copy-all' });
-      const fullRoot = provider.root(fullDeploy.project, fullDeploy.home);
-      const fullStandardRoot = provider.standardRoot(fullDeploy.project, fullDeploy.home);
-      expect(existsSync(join(fullStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(true);
-      for (const kernelName of EXPECTED_KERNEL) {
-        expect(
-          existsSync(join(fullRoot, kernelName, 'SKILL.md')),
-          `${provider.id}/${kernelName}`,
-        ).toBe(true);
-      }
+        const fullDeploy = deploy(provider.id, { copyAll: true, suffix: 'copy-all' });
+        const fullRoot = provider.root(fullDeploy.project, fullDeploy.home);
+        const fullStandardRoot = provider.standardRoot(fullDeploy.project, fullDeploy.home);
+        expect(existsSync(join(fullStandardRoot, 'voice-apply', 'SKILL.md'))).toBe(true);
+        for (const kernelName of EXPECTED_KERNEL) {
+          expect(
+            existsSync(join(fullRoot, kernelName, 'SKILL.md')),
+            `${provider.id}/${kernelName}`,
+          ).toBe(true);
+        }
+      }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
     });
   }
 
@@ -222,7 +235,7 @@ describe('kernel deployment conformance', () => {
     expect(skillDirs(root).map(dir => dir.split('/').at(-1)!).filter(name =>
       EXPECTED_KERNEL.includes(name)
     ).sort()).toEqual(EXPECTED_KERNEL);
-  });
+  }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
 
   for (const provider of PROVIDERS) {
     it(`${provider.id} repairs a full-copy deployment while preserving operator-owned skills`, () => {
@@ -249,7 +262,7 @@ describe('kernel deployment conformance', () => {
         expect(stats.count).toBe(EXPECTED_KERNEL.length + 1);
         expect(stats.totalChars).toBeLessThanOrEqual(CODEX_LISTING_CHAR_CAP);
       }
-    });
+    }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
   }
 
   it('moves managed skills cleanly across kernel and standard tiers', async () => {
@@ -298,7 +311,7 @@ describe('kernel deployment conformance', () => {
 
     expect(readFileSync(sentinel, 'utf8')).toBe(before);
     expect(existsSync(join(root, 'voice-apply', 'SKILL.md'))).toBe(false);
-  });
+  }, DOUBLE_DEPLOY_TEST_TIMEOUT_MS);
 
   it('matches the command mirror policy for every deployable provider', () => {
     const commandProviders = ['factory', 'opencode', 'warp', 'windsurf', 'copilot', 'codex', 'openclaw'];
@@ -336,7 +349,7 @@ describe('grokbot fail-closed kernel deploy (#219)', () => {
     const { project, home } = deploy('grokbot', { suffix: 'project-scope', projectScope: true });
     expect(existsSync(join(home, 'configured-grokbot-skills'))).toBe(false);
     expect(skillDirs(project)).toEqual([]);
-  });
+  }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 
   it('does not invent ~/grokbot-skills when AIWG_GROKBOT_SKILLS_DIR is unset', () => {
     const project = join(TEST_ROOT, 'grokbot-unset');
@@ -352,7 +365,7 @@ describe('grokbot fail-closed kernel deploy (#219)', () => {
       stdout = execFileSync(
         'node',
         [join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'all', '--provider', 'grokbot', '--scope', 'user', '--dry-run'],
-        { cwd: project, env, encoding: 'utf8', timeout: 120_000 },
+        { cwd: project, env, encoding: 'utf8', timeout: USER_SCOPE_CHILD_TIMEOUT_MS },
       );
     } catch (error) {
       const err = error as { status?: number; stdout?: string; stderr?: string };
@@ -365,7 +378,7 @@ describe('grokbot fail-closed kernel deploy (#219)', () => {
     expect(existsSync(join(home, 'grokbot-skills'))).toBe(false);
     expect(existsSync(join(home, '.grokbot'))).toBe(false);
     expect(existsSync(join(project, '.cursor'))).toBe(false);
-  });
+  }, USER_SCOPE_TEST_TIMEOUT_MS);
 });
 
 
@@ -386,7 +399,7 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
       output = execFileSync(
         'node',
         [join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'all', '--provider', 'muse', '--scope', 'user', '--dry-run'],
-        { cwd: project, env, encoding: 'utf8', timeout: 120_000 },
+        { cwd: project, env, encoding: 'utf8', timeout: USER_SCOPE_CHILD_TIMEOUT_MS },
       );
     } catch (error) {
       const err = error as { status?: number; stdout?: string; stderr?: string };
@@ -409,7 +422,7 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
     expect(existsSync(join(home, '.muse'))).toBe(false);
     expect(existsSync(join(home, '.config', 'muse'))).toBe(false);
     expect(existsSync(join(project, '.cursor'))).toBe(false);
-  });
+  }, USER_SCOPE_TEST_TIMEOUT_MS);
 
   it('passes the user-scope gate with a documented XDG root and invents no ~/.muse tree', () => {
     const xdg = join(TEST_ROOT, 'muse-userscope-xdg');
@@ -425,7 +438,7 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
     expect(existsSync(join(home, '.muse'))).toBe(false);
     expect(existsSync(join(home, '.agents', 'skills'))).toBe(false);
     expect(existsSync(join(project, '.cursor'))).toBe(false);
-  });
+  }, USER_SCOPE_TEST_TIMEOUT_MS);
 
   it('pins the documented user skill roots ($XDG_CONFIG_HOME/muse/skills, ~/.config/muse/skills default)', async () => {
     const { resolveMuseXdgSkillsDir } = await import('../../src/providers/muse-paths.js');
@@ -442,5 +455,5 @@ describe('muse XDG user-scope kernel deploy (#236)', () => {
     expect(existsSync(join(project, '.cursor'))).toBe(false);
     expect(existsSync(join(home, '.muse'))).toBe(false);
     expect(existsSync(join(museEntry.root(project, home), 'aiwg-issue', 'SKILL.md'))).toBe(true);
-  });
+  }, SINGLE_DEPLOY_TEST_TIMEOUT_MS);
 });

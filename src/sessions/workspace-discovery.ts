@@ -6,9 +6,18 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { inspectMuseNativeWorkspace, type MuseWorkspaceInspection } from './adapters/muse.js';
 import { readOmpSessionHeader } from './adapters/omp.js';
 import { grokbotConversationIdFromLocator } from './adapters/grokbot-locator.js';
-import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import {
-  SESSION_PROVIDER_IDS,
+  GROK_BUILD_ACTIVE_FRESHNESS_MS,
+  grokBuildLiveState, grokBuildNativeAvailability,
+  grokBuildSourceWorkspaceMatch,
+  readGrokBuildActiveRegistry,
+  type GrokBuildActiveRegistry,
+  type GrokBuildLiveEvidence,
+} from './adapters/grok-build-native.js';
+import { hermesSnapshotStagingDir } from './adapters/hermes-state-db.js';
+import { resolveOmpPaths } from '../providers/omp-paths.mjs';
+import { readAiwgConfig } from '../config/aiwg-config.js';
+import {
   SessionCoveragePreflightSchema,
   SessionContractError,
   type SessionCoveragePreflight,
@@ -20,7 +29,7 @@ import {
 } from './contracts.js';
 import { redactSourceLocator, type SessionSourceAdapterRegistry } from './discovery.js';
 import { createSessionAdapterRegistry } from './adapter-registry.js';
-import { coveragePreflight, expectedSessionProviders } from './coverage-preflight.js';
+import { coveragePreflight, providerScopeWarnings, resolveSessionProviderScope } from './coverage-preflight.js';
 import { fingerprintSourceFile, streamJsonLines } from './readers.js';
 import { matchSessionWorkspace, type WorkspaceMatchKind } from './workspace-matching.js';
 import { matchImportExclusion, nativeSessionIdFromLocator, resolveImportExclusions, type SourceExclusion } from './import-exclusions.js';
@@ -32,6 +41,11 @@ export type DiscoveryProviderStatus =
   | 'unavailable'
   | 'export-required'
   | 'not-checked';
+
+export interface GrokBuildSourceLiveEvidence extends GrokBuildLiveEvidence {
+  observedAt: string;
+  expiresAt: string | null;
+}
 
 export interface DiscoveryManifestSource {
   sourceId: string;
@@ -46,6 +60,8 @@ export interface DiscoveryManifestSource {
   nativeSessionId?: string;
   status?: 'excluded';
   exclusion?: SourceExclusion;
+  /** Advisory provider-reported activity; excluded from the manifest identity hash. */
+  liveEvidence?: GrokBuildSourceLiveEvidence;
 }
 
 export interface DiscoveryProviderReport {
@@ -90,6 +106,8 @@ export interface DiscoverWorkspaceOptions {
   workspace: string;
   exclude?: string[];
   knownSources?: readonly DiscoveryManifestSource[];
+  /** Re-derive maintenance scope from config while retaining saved root grants. */
+  refreshFrom?: SessionDiscoveryManifest;
   /** Logical paths to the same canonical workspace, used for provider project keys. */
   workspaceAliases?: readonly string[];
   expectedProviders?: readonly string[];
@@ -103,19 +121,22 @@ export interface DiscoverWorkspaceOptions {
   museRoot?: string;
   dshRoot?: string;
   grokbotRoot?: string;
+  grokRoot?: string;
+  grokActiveSessions?: string;
+  hermesRoot?: string;
   createdAt?: string;
   /** Restrict maintenance discovery to previously authorized roots, with no defaults. */
   authorizedRoots?: Partial<Record<SessionProviderId, string[]>>;
 }
 
 interface DiscoverableProvider {
-  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse' | 'grokbot';
+  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness' | 'muse' | 'grokbot' | 'grok-build' | 'hermes';
   roots: string[];
 }
 
 const MANUAL_EXPORT_PROVIDERS = new Set<SessionProviderId>([
-  'copilot', 'hermes', 'opencode', 'openclaw', 'openhuman', 'grok-build',
-  'warp', 'devin-desktop', 'generic',
+  'copilot', 'opencode', 'openclaw', 'openhuman',
+  'warp', 'devin-desktop', 'generic', 'grok-build',
 ]);
 
 export async function discoverWorkspaceHistories(
@@ -123,9 +144,28 @@ export async function discoverWorkspaceHistories(
 ): Promise<SessionDiscoveryManifest> {
   const registry = options.registry ?? createSessionAdapterRegistry();
   const exclusions = resolveImportExclusions(undefined, options.exclude);
-  const expectedProviders = expectedSessionProviders(options.expectedProviders ?? SESSION_PROVIDER_IDS);
   const supportedProviders = new Set(registry.list().map((adapter) => adapter.provider));
   const workspacePath = await canonicalPath(options.workspace);
+  const config = await readAiwgConfig(workspacePath);
+  const configuredProviders = config?.providers ?? [];
+  const explicitlyRootedProviders = [
+    ...(options.codexRoot || options.codexRoots?.length || config?.sessions?.codex_roots?.length ? ['codex'] : []),
+    ...(options.ompRoot ? ['omp'] : []),
+    ...(options.museRoot ? ['muse'] : []),
+    ...(options.dshRoot ? ['deepseek-harness'] : []),
+    ...(options.grokbotRoot ? ['grokbot'] : []),
+    ...(options.grokRoot ? ['grok-build'] : []),
+    ...(options.hermesRoot ? ['hermes'] : []),
+  ];
+  const savedRoots = options.authorizedRoots ?? options.refreshFrom?.authorizedRoots;
+  const authorizedProviders = options.refreshFrom
+    ? Object.keys(savedRoots ?? {}).filter(provider => savedRoots?.[provider as SessionProviderId]?.length)
+    : configuredProviders.length ? explicitlyRootedProviders : undefined;
+  const providerScope = resolveSessionProviderScope(configuredProviders, options.expectedProviders, authorizedProviders);
+  if (options.refreshFrom) {
+    providerScope.scopeWarnings = providerScopeWarnings(configuredProviders, options.refreshFrom.preflight?.expectedProviders ?? []);
+  }
+  const { expectedProviders } = providerScope;
   const workspaceId = workspacePath;
   const workspacePaths = [...new Set([workspacePath, resolve(options.workspace),
     ...(options.workspaceAliases ?? []).map((alias) => resolve(alias))])];
@@ -153,16 +193,30 @@ export async function discoverWorkspaceHistories(
     // no-filtering behavior already used for `pi`/`deepseek-harness`).
     { provider: 'grokbot', roots: options.grokbotRoot
       ? [resolve(options.grokbotRoot)] : [] },
+    // Grok Build authorizes the sessions directory itself, never Grok home:
+    // `<root>/<url-encoded cwd>/<id>/chat_history.jsonl`. No fallback through
+    // $HOME, GROK_HOME, or --provider-home grants access.
+    { provider: 'grok-build', roots: options.grokRoot
+      ? [resolve(options.grokRoot)] : [] },
+    // Hermes authorizes `<root>/state.db` for a read-only backup snapshot.
+    // Staging joins the scope below; nothing else under the root is read.
+    { provider: 'hermes', roots: options.hermesRoot
+      ? [resolve(options.hermesRoot)] : [] },
     {
       provider: 'claude',
-      roots: providerHomes.flatMap((providerHome) => workspacePaths.map(
-        (workspace) => join(providerHome, '.claude', 'projects', claudeProjectKey(workspace)),
-      )),
+      // Same scope rule as codex: configured providers keep their root grant
+      // even when a narrow discovery does not scan them (#3402).
+      roots: savedRoots || (!expectedProviders.includes('claude') && !providerScope.configuredProviders?.includes('claude'))
+        ? [] : await claudeDiscoveryRoots(providerHomes, workspacePaths, workspacePath, registry, exclusions),
     },
     {
       provider: 'codex',
-      roots: options.authorizedRoots || !expectedProviders.includes('codex')
-        ? [] : await codexDiscoveryRoots(options),
+      roots: savedRoots || (!expectedProviders.includes('codex') && !providerScope.configuredProviders?.includes('codex')
+        && !explicitlyRootedProviders.includes('codex'))
+        ? [] : await codexDiscoveryRoots({ ...options, codexRoots: [
+          ...(config?.sessions?.codex_roots ?? []).map(root => resolve(workspacePath, root)),
+          ...(options.codexRoots ?? []),
+        ] }),
     },
     {
       provider: 'cursor',
@@ -198,20 +252,29 @@ export async function discoverWorkspaceHistories(
     },
   ];
 
-  const authorizedRoots: Partial<Record<SessionProviderId, string[]>> = { ...options.authorizedRoots };
+  const authorizedRoots: Partial<Record<SessionProviderId, string[]>> = { ...savedRoots };
   const reports = new Map<string, DiscoveryProviderReport>();
   const candidates: DiscoveryManifestSource[] = [];
   const seen = new Set<string>();
   for (const entry of discoverable) {
+    // A hand-run narrow scope must not discard explicit root grants, including
+    // configured providers under an authorized home. Do not scan their histories.
+    if (!savedRoots && !expectedProviders.includes(entry.provider)
+      && (explicitlyRootedProviders.includes(entry.provider)
+        || (providerScope.configuredProviders?.includes(entry.provider) && options.providerHome))) {
+      const roots: string[] = [];
+      for (const root of entry.roots) if (await pathExists(root)) roots.push(await canonicalPath(root));
+      authorizedRoots[entry.provider] = [...new Set(roots)];
+    }
     if (!expectedProviders.includes(entry.provider) || !supportedProviders.has(entry.provider)) continue;
     const adapter = registry.get(entry.provider);
     if (adapter.disposition === 'unsupported' || !adapter.supportedOperations.includes('discover')) continue;
     const availableRoots: string[] = [];
     const rootCounts = new Map<string, NonNullable<DiscoveryProviderReport['rootCounts']>[number]>();
-    for (const root of options.authorizedRoots ? options.authorizedRoots[entry.provider] ?? [] : entry.roots) {
+    for (const root of savedRoots ? savedRoots[entry.provider] ?? [] : entry.roots) {
       if (await pathExists(root)) {
         const canonical = await canonicalPath(root);
-        if (options.authorizedRoots && canonical !== root) {
+        if (savedRoots && canonical !== root) {
           throw new SessionContractError('INVALID_ARGUMENT', 'previously authorized provider root changed; rediscover with explicit authorization');
         }
         if (!availableRoots.includes(canonical)) {
@@ -229,20 +292,23 @@ export async function discoverWorkspaceHistories(
       }
     }
     if (availableRoots.length === 0) {
-      const codexNeedsAuthorization = (entry.provider === 'codex' || entry.provider === 'omp'
+      const needsExplicitRoot = (entry.provider === 'codex' || entry.provider === 'omp'
         || entry.provider === 'deepseek-harness' || entry.provider === 'muse'
-        || entry.provider === 'grokbot')
+        || entry.provider === 'grokbot' || entry.provider === 'grok-build'
+        || entry.provider === 'hermes')
         && entry.roots.length === 0;
+      const expectedFlag = entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider === 'grok-build' ? 'grok' : entry.provider;
+      const rootKind = entry.provider === 'hermes' ? 'Hermes home (state.db is snapshotted read-only)' : 'sessions root';
       reports.set(entry.provider, providerReport(
         entry.provider,
-        codexNeedsAuthorization ? 'export-required' : 'unavailable',
-        codexNeedsAuthorization ? 'manual-export' : 'discoverable',
+        needsExplicitRoot ? 'export-required' : 'unavailable',
+        needsExplicitRoot ? 'manual-export' : 'discoverable',
         [],
-        codexNeedsAuthorization
+        needsExplicitRoot
           ? 'SHARED_ROOT_AUTHORIZATION_REQUIRED'
           : 'PROVIDER_ROOT_UNAVAILABLE',
-        codexNeedsAuthorization
-          ? `Pass --${entry.provider === 'deepseek-harness' ? 'dsh' : entry.provider}-root with an explicitly authorized sessions root.`
+        needsExplicitRoot
+          ? `Pass --${expectedFlag}-root with an explicitly authorized ${rootKind}.`
           : `No authorized ${entry.provider} workspace history root was found.`,
       ));
       if (entry.provider === 'codex') reports.get(entry.provider)!.rootCounts = [...rootCounts.values()];
@@ -253,13 +319,48 @@ export async function discoverWorkspaceHistories(
       workspaceId,
       allowedRoots: availableRoots,
     };
+    if (entry.provider === 'hermes') {
+      // The consistent snapshot is staged under owned workspace staging (the
+      // provider home stays read-only); staged locators need scope cover, and
+      // refresh must retain both the origin grant and the staging grant.
+      const staging = hermesSnapshotStagingDir(workspacePath);
+      if (!scope.allowedRoots.includes(staging)) scope.allowedRoots.push(staging);
+      authorizedRoots[entry.provider] = [...new Set([...availableRoots, staging])];
+      if (!rootCounts.has(staging)) {
+        rootCounts.set(staging, {
+          root: redactSourceLocator(staging), rootId: sha256(staging),
+          status: 'checked', sourceCount: 0, duplicateCount: 0,
+        });
+      }
+    }
     const providerSources: DiscoveryManifestSource[] = [];
     let matchedBySubfolder = 0;
     let matchedByWorktree = 0;
     const museSourceInspections: NonNullable<DiscoveryProviderReport['museSourceInspections']> = [];
+    // Grok Build live detection reads exactly one explicitly authorized file
+    // (never the sessions root's parent implicitly); absence means unknown.
+    let grokActiveRegistry: GrokBuildActiveRegistry | null = null;
+    let grokActiveRegistryLoaded = false;
+    const grokActiveEvidence = async (): Promise<GrokBuildActiveRegistry | null> => {
+      if (grokActiveRegistryLoaded || entry.provider !== 'grok-build' || !options.grokActiveSessions) return grokActiveRegistry;
+      grokActiveRegistryLoaded = true;
+      try {
+        grokActiveRegistry = await readGrokBuildActiveRegistry(
+          resolve(options.grokActiveSessions),
+          [resolve(options.grokActiveSessions)].map((file) => dirname(file)),
+        );
+      } catch {
+        grokActiveRegistry = null;
+      }
+      return grokActiveRegistry;
+    };
     for await (const descriptor of adapter.discover(scope)) {
       const known = options.knownSources?.find(source => source.provider === descriptor.provider && source.locator === descriptor.locator);
-      const nativeSessionId = known?.nativeSessionId ?? descriptor.nativeSessionId ?? nativeSessionIdFromLocator(descriptor);
+      // A Hermes projection holds many sessions, so its locator basename is
+      // never a session identity.
+      const nativeSessionId = entry.provider === 'hermes'
+        ? (known?.nativeSessionId ?? descriptor.nativeSessionId)
+        : (known?.nativeSessionId ?? descriptor.nativeSessionId ?? nativeSessionIdFromLocator(descriptor));
       const exclusion = matchImportExclusion({ ...descriptor, nativeSessionId }, exclusions);
       if (exclusion) {
         const locator = resolve(descriptor.locator);
@@ -300,6 +401,12 @@ export async function discoverWorkspaceHistories(
         workspaceMatch = await codexSourceWorkspaceMatch(locator, workspacePath);
         if (!workspaceMatch) continue;
       }
+      if (entry.provider === 'grok-build') {
+        // The url-encoded cwd directory is the only workspace evidence; an
+        // unresolvable or conflicting value never attaches to the caller.
+        workspaceMatch = await grokBuildSourceWorkspaceMatch(locator, workspacePath);
+        if (!workspaceMatch) continue;
+      }
       const ompHeader = entry.provider === 'omp' ? await readOmpSessionHeader({ ...descriptor, sourceId: 'discovery', authorizedScope: scope }) : undefined;
       if (ompHeader) {
         workspaceMatch = await matchSessionWorkspace(ompHeader.cwd, workspacePath);
@@ -310,8 +417,11 @@ export async function discoverWorkspaceHistories(
         (root) => locator === root || locator.startsWith(`${root}/`),
       );
       if (!authorizedRoot) continue;
-      if (entry.provider === 'claude'
-        && !await claudeSourceMatchesWorkspace(locator, workspacePath)) continue;
+      if (entry.provider === 'claude') {
+        const exactProject = workspacePaths.some(path => basename(authorizedRoot) === claudeProjectKey(path));
+        workspaceMatch = await claudeSourceWorkspaceMatch(locator, workspacePath, exactProject);
+        if (!workspaceMatch) continue;
+      }
       const fingerprint = await fingerprintSourceFile({
         selectedPath: locator,
         allowedRoots: [authorizedRoot],
@@ -338,16 +448,37 @@ export async function discoverWorkspaceHistories(
         fingerprint.digest,
       );
       source.nativeSessionId = rolloutId ?? ompHeader?.id ?? nativeSessionId;
+      if (entry.provider === 'hermes') {
+        // A state.db projection holds many sessions; the locator basename is
+        // not a session identity.
+        delete source.nativeSessionId;
+      }
+      if (entry.provider === 'grok-build' && source.nativeSessionId) {
+        // Provider-reported activity only; histories stay usable without it.
+        const observedAt = options.createdAt ?? new Date().toISOString();
+        const registry = await grokActiveEvidence();
+        const evidence = grokBuildLiveState(registry, source.nativeSessionId);
+        source.liveEvidence = {
+          ...evidence,
+          observedAt,
+          expiresAt: evidence.state === 'active'
+            ? new Date(Date.parse(observedAt) + GROK_BUILD_ACTIVE_FRESHNESS_MS).toISOString()
+            : null,
+        };
+      }
       if (ompHeader) source.sourceId = sha256(['omp-native-source-v1', workspaceId, ompHeader.id].join('\0'));
       if (entry.provider === 'grokbot') {
         // The replica is rewritten wholesale as its sliding window evicts
         // old entries, so a content-digest sourceId (the default above)
         // would churn every re-discovery and break checkpoint continuity.
         // Key it on the conversation id instead, same rationale as the OMP
-        // override above.
+        // override above. Unlike OMP, the key carries no workspaceId: Grok
+        // Bot conversations are account-scoped (#3232), so the same replica
+        // must resolve to one host-catalog source no matter which workspace
+        // authorizes it; workspace catalogs keep a reference instead of a copy.
         const conversationId = grokbotConversationIdFromLocator(locator);
         if (conversationId) {
-          source.sourceId = sha256(['grokbot-native-source-v1', workspaceId, conversationId].join('\0'));
+          source.sourceId = sha256(['grokbot-native-source-v1', conversationId].join('\0'));
         }
       }
       providerSources.push(source);
@@ -394,10 +525,10 @@ export async function discoverWorkspaceHistories(
       manual ? 'export-required' : 'not-checked',
       manual ? 'manual-export' : 'unsupported',
       [],
-      grokBuild ? 'CLI_EXPORT_REQUIRED'
+      grokBuild ? grokBuildNativeAvailability().reasonCode
         : manual ? 'EXPLICIT_EXPORT_REQUIRED' : 'PROVIDER_NOT_CHECKED',
       grokBuild
-        ? 'Run `grok sessions list` or `grok sessions search`, then export an authorized session with `grok export <id> <id>.md`; Grok Build resolves $GROK_HOME itself.'
+        ? grokBuildNativeAvailability().remediation
         : manual
         ? `Select and authorize a supported ${provider} export before importing it.`
         : `No discovery strategy is registered for ${provider}.`,
@@ -407,7 +538,7 @@ export async function discoverWorkspaceHistories(
   const sources = candidates.sort(compareSources);
   const providers = [...reports.values()].sort((a, b) => a.provider.localeCompare(b.provider));
   const preflight = coveragePreflight({
-    expectedProviders, expectedProviderBasis: options.expectedProviders ? 'explicit' : 'declared-default',
+    ...providerScope,
     registry, runtime: options.runtime, reports: providers,
   });
   const identity = {
@@ -583,11 +714,11 @@ async function rediscoverManifestIdentity(manifest: SessionDiscoveryManifest): P
 
 async function codexDiscoveryRoots(options: DiscoverWorkspaceOptions): Promise<string[]> {
   const explicit = [...(options.codexRoots ?? []), ...(options.codexRoot ? [options.codexRoot] : [])];
-  if (explicit.length > 0) return [...new Set(explicit.map((root) => resolve(root)))];
+  const roots = [...new Set(explicit.map((root) => resolve(root)))];
   // Shared stores require the same explicit provider-home authorization as the default root.
-  if (!options.providerHome) return [];
+  if (!options.providerHome) return roots;
   const codexHome = join(resolve(options.providerHome), '.codex');
-  const roots = [join(codexHome, 'sessions')];
+  roots.push(join(codexHome, 'sessions'));
   if (process.env.CODEX_HOME) roots.push(resolve(process.env.CODEX_HOME, 'sessions'));
   try {
     const roles = await readdir(join(codexHome, 'roles-runtime'), { withFileTypes: true });
@@ -661,10 +792,43 @@ async function canonicalPath(path: string): Promise<string> {
   return realpath(resolve(path));
 }
 
-async function claudeSourceMatchesWorkspace(
+/** Claude keys are lossy: use transcript cwd, never decode hyphens into paths. */
+async function claudeDiscoveryRoots(
+  homes: string[], paths: string[], workspace: string,
+  registry: SessionSourceAdapterRegistry, exclusions: string[],
+): Promise<string[]> {
+  const roots = homes.flatMap(home => paths.map(path =>
+    join(home, '.claude', 'projects', claudeProjectKey(path))));
+  const adapter = registry.get('claude');
+  for (const home of homes) {
+    const projects = join(home, '.claude', 'projects');
+    let entries;
+    try { entries = await readdir(projects, { withFileTypes: true }); }
+    catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue;
+      throw error;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isDirectory()) continue;
+      const root = join(projects, entry.name);
+      if (roots.includes(root)) continue;
+      for await (const descriptor of adapter.discover({ workspaceId: workspace, allowedRoots: [root] })) {
+        if (matchImportExclusion(descriptor, exclusions)) continue;
+        if (await claudeSourceWorkspaceMatch(descriptor.locator, workspace, false)) {
+          roots.push(root);
+          break;
+        }
+      }
+    }
+  }
+  return [...new Set(roots)];
+}
+
+async function claudeSourceWorkspaceMatch(
   locator: string,
   workspacePath: string,
-): Promise<boolean> {
+  exactProject: boolean,
+): Promise<WorkspaceMatchKind | null> {
   let count = 0;
   for await (const { line } of streamJsonLines(locator, { end: 1024 * 1024 - 1 })) {
     if (++count > 50) break;
@@ -676,14 +840,10 @@ async function claudeSourceMatchesWorkspace(
     }
     const cwd = asObject(value).cwd;
     if (typeof cwd !== 'string' || cwd.length === 0) continue;
-    try {
-      return await canonicalPath(cwd) === workspacePath;
-    } catch {
-      return resolve(cwd) === workspacePath;
-    }
+    return matchSessionWorkspace(cwd, workspacePath);
   }
-  // Older transcripts without cwd still use the selected project folder.
-  return true;
+  // Only exact project keys can establish ownership without cwd.
+  return exactProject ? 'exact' : null;
 }
 
 export function claudeProjectKey(path: string): string {

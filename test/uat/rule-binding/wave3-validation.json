@@ -1,0 +1,640 @@
+{
+  "issue": 2943,
+  "scope": "Wave 3 current orchestration text and anti-laziness; Wave 2 rules untouched; no model probes",
+  "disposition_authority": "docs/architecture/adr-rule-activation-and-bound-delivery.md; anti-laziness summary in budget-demotion table and machine-readable map",
+  "measurement_fixture": {
+    "base": "test/fixtures/rule-binding/project",
+    "extra_files": {
+      ".aiwg/aiwg.config": {
+        "version": "1",
+        "rules": {
+          "inline_budget_tokens": 0
+        }
+      }
+    },
+    "note": "Same temporary guard-disabled fixture as Wave 1, before and after. Native directory bytes include path-conditioned rule bodies; this is not an exact model context/token observation."
+  },
+  "rules": [
+    {
+      "name": "subagent-scoping",
+      "source": "agentic/code/addons/aiwg-utils/rules/subagent-scoping.md",
+      "activation": "summary",
+      "summary": "Delegate one bounded objective with minimal context and explicit outputs; parallelize independent work within provider, project, and context caps.",
+      "bound_to": {
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "chunk",
+          "fanout",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "mission-control",
+          "orchestrate-project",
+          "parallel-dispatch",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "rlm-batch",
+          "rlm-mode",
+          "rlm-prep",
+          "rlm-query",
+          "rlm-search",
+          "rlm-status"
+        ],
+        "agents": [
+          "aiwg-orchestrator",
+          "executive-orchestrator",
+          "recovery-orchestrator",
+          "rlm-agent",
+          "ralph-loop",
+          "ralph-verifier"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "binding_pair_count": 77,
+      "before_native_bytes": 27471,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "god-session",
+      "source": "agentic/code/addons/aiwg-utils/rules/god-session.md",
+      "activation": "summary",
+      "summary": "Keep agent definitions and sessions focused on bounded responsibilities; decompose broad scopes before context or coherence degrades.",
+      "bound_to": {
+        "agents": [
+          "agentsmith"
+        ],
+        "skills": [
+          "add-agent",
+          "devkit-create-agent",
+          "smith-agenticdef"
+        ]
+      },
+      "binding_pair_count": 4,
+      "before_native_bytes": 4671,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "auto-compact-continue",
+      "source": "agentic/code/addons/aiwg-utils/rules/auto-compact-continue.md",
+      "activation": "summary",
+      "summary": "Checkpoint durable state, compact context, and continue authorized work without asking whether to keep going; stop only for real blockers or completion.",
+      "bound_to": {
+        "skills": [
+          "address-issues",
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "checkpoint",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "mission-control",
+          "orchestrate-project",
+          "ralph",
+          "ralph-external",
+          "ralph-resume"
+        ],
+        "agents": [
+          "ralph-loop",
+          "ralph-verifier",
+          "executive-orchestrator",
+          "recovery-orchestrator"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "binding_pair_count": 68,
+      "before_native_bytes": 8822,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "cli-secondary",
+      "source": "agentic/code/addons/aiwg-utils/rules/cli-secondary.md",
+      "activation": "summary",
+      "summary": "Use local or discovered skills and agents before raw action CLI commands; call discovery commands directly and use CLI steps within their owning workflows.",
+      "bound_to": {
+        "agents": [
+          "aiwg-steward",
+          "aiwg-finder"
+        ],
+        "skills": [
+          "aiwg-doctor",
+          "aiwg-init",
+          "aiwg-refresh",
+          "aiwg-regenerate",
+          "aiwg-regenerate-agents",
+          "aiwg-regenerate-claude",
+          "aiwg-regenerate-codex",
+          "aiwg-regenerate-copilot",
+          "aiwg-regenerate-cursorrules",
+          "aiwg-regenerate-existing-project",
+          "aiwg-regenerate-factory",
+          "aiwg-regenerate-legacy",
+          "aiwg-regenerate-opencode",
+          "aiwg-regenerate-warp",
+          "aiwg-regenerate-windsurfrules",
+          "aiwg-regenerate-workspace",
+          "aiwg-status",
+          "aiwg-sync",
+          "customize-rebuild",
+          "customize-upstream-sync",
+          "hook-disable",
+          "hook-enable",
+          "hook-regenerate",
+          "install",
+          "migrate-workspace",
+          "remove",
+          "rollback-workspace",
+          "steward",
+          "update",
+          "use",
+          "workspace-health",
+          "workspace-prune-working",
+          "workspace-realign",
+          "workspace-reset"
+        ]
+      },
+      "binding_pair_count": 36,
+      "before_native_bytes": 9261,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "anti-laziness",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md",
+      "activation": "summary",
+      "summary": "Complete authorized implementation and verification; fix root causes without deleting tests, weakening assertions, hiding failures, or removing features to pass.",
+      "bound_to": {
+        "agents": [
+          "ai-ml-engineer",
+          "aiwg-model-coding-worker",
+          "blockchain-developer",
+          "build-engineer",
+          "code-reviewer",
+          "component-owner",
+          "data-engineer",
+          "database-optimizer",
+          "dead-code-analyzer",
+          "debugger",
+          "devops-engineer",
+          "django-expert",
+          "frontend-specialist",
+          "integration-engineer",
+          "kubernetes-expert",
+          "laziness-detector",
+          "legacy-modernizer",
+          "mobile-developer",
+          "mutation-analyst",
+          "performance-engineer",
+          "quality-assessor",
+          "ralph-loop",
+          "ralph-verifier",
+          "react-expert",
+          "regression-analyst",
+          "reliability-engineer",
+          "security-auditor",
+          "self-debug",
+          "software-implementer",
+          "spring-boot-expert",
+          "test-architect",
+          "test-engineer",
+          "toolsmith",
+          "toolsmith-dynamic",
+          "toolsmith-provider"
+        ],
+        "skills": [
+          "address-issues",
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "auto-test-execution",
+          "build-poc",
+          "execute-feedback",
+          "flow-construction-to-transition",
+          "flow-delivery-track",
+          "flow-elaboration-to-construction",
+          "flow-guided-implementation",
+          "flow-iteration-dual-track",
+          "flow-performance-optimization",
+          "flow-security-review-cycle",
+          "flow-test-strategy-execution",
+          "generate-tests",
+          "mission-control",
+          "pr-review",
+          "ralph",
+          "ralph-external",
+          "ralph-resume",
+          "test-coverage"
+        ],
+        "flows": [
+          "flow-guided-implementation",
+          "flow-delivery-track",
+          "flow-iteration-dual-track",
+          "flow-elaboration-to-construction",
+          "flow-construction-to-transition",
+          "flow-test-strategy-execution",
+          "flow-performance-optimization",
+          "flow-security-review-cycle",
+          "flow-agentloop-lfd-controls"
+        ]
+      },
+      "binding_pair_count": 66,
+      "before_native_bytes": 10352,
+      "after_native_bytes": 0
+    }
+  ],
+  "artifact_gaps": [],
+  "gates": {
+    "U1": {
+      "passed": true,
+      "provider": "claude",
+      "wave1_limit_bytes": 265307,
+      "before_rule_bytes": 265307,
+      "after_rule_bytes": 205914,
+      "before_behavior_bytes": 0,
+      "after_behavior_bytes": 0,
+      "saved_bytes": 59393,
+      "absolute_release_target_bytes": 110000,
+      "absolute_release_target_met": false,
+      "other_provider_regression": "Six canonical delivery fixtures pass; comparable full-profile byte baselines for other providers are not asserted."
+    },
+    "U2": {
+      "activation_lint": "pass",
+      "explicit_wave3_rules": 5,
+      "previously_budget_demoted_restored": [
+        "subagent-scoping",
+        "auto-compact-continue",
+        "cli-secondary",
+        "anti-laziness"
+      ],
+      "restored_delivery": "summary with nonempty, resolvable bindings; no discovery-only demotion",
+      "remaining_migration_warnings": 148,
+      "complete_corpus_coverage": false,
+      "note": "Whole-corpus coverage remains Wave 5 work."
+    },
+    "U3": {
+      "passed": true,
+      "declared_rule_artifact_pairs": 251,
+      "distinct_artifacts": 158,
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "delivered_pair_checks": 1506,
+      "includes": "Concrete skill entry points, indexed YAML flows projected as skills, and agents; each block occurs exactly once, carries the summary and fetch pointer, and stays outside startup listings."
+    },
+    "U4": {
+      "passed": true,
+      "default_cli_bound_rule_pair_checks": 251,
+      "distinct_cli_artifact_envelopes": 158,
+      "mcp_parity_cases": 4,
+      "note": "Three shared discovery-tool CLI parity cases plus flow-show forwarding/body-expansion parity. Actual CLI checks all canonical Wave 3 pairs."
+    },
+    "U5": {
+      "status": "not run; conductor on titan",
+      "rollback": "Set a failing rule to activation: kernel and remove bound_to; revert rules independently."
+    },
+    "U6": {
+      "passed": true,
+      "results": [
+        {
+          "name": "subagent-scoping",
+          "phrase": "how do I split this work",
+          "rank": 1,
+          "top3": [
+            "subagent-scoping",
+            "artifact-discovery",
+            "ops-cross-repo"
+          ]
+        },
+        {
+          "name": "god-session",
+          "phrase": "agent has too many responsibilities",
+          "rank": 1,
+          "top3": [
+            "god-session",
+            "anti-laziness",
+            "subagent-scoping"
+          ]
+        },
+        {
+          "name": "auto-compact-continue",
+          "phrase": "context is getting long",
+          "rank": 1,
+          "top3": [
+            "auto-compact-continue",
+            "agent-friendly-code",
+            "context-bloat"
+          ]
+        },
+        {
+          "name": "cli-secondary",
+          "phrase": "use a skill or raw CLI",
+          "rank": 1,
+          "top3": [
+            "cli-secondary",
+            "escalation-discipline",
+            "research-before-decision"
+          ]
+        },
+        {
+          "name": "anti-laziness",
+          "phrase": "can I skip this test",
+          "rank": 1,
+          "top3": [
+            "anti-laziness",
+            "agent-generation-guardrails",
+            "test-conformance-evidence"
+          ]
+        }
+      ]
+    },
+    "U7": {
+      "status": "not run; conductor on titan"
+    },
+    "U8": {
+      "status": "not run; full-deploy model dispatch/headroom requires conductor validation"
+    },
+    "U9": {
+      "passed": true,
+      "provider_fixture_count": 6,
+      "codex_full_sdlc_deployment_exit_code": 0,
+      "codex_agents_md_bytes": 1199,
+      "codex_agents_md_limit_bytes": 32768
+    }
+  },
+  "real_deploy": {
+    "provider": "claude",
+    "exit_code": 0,
+    "root": "/tmp/aiwg-2943-real-claude-CRlM5o",
+    "project": "/tmp/aiwg-2943-real-claude-CRlM5o/project",
+    "home": "/tmp/aiwg-2943-real-claude-CRlM5o/home",
+    "channel": {
+      "channel": "edge",
+      "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/2943",
+      "devMode": true,
+      "checkOnStartup": false
+    },
+    "aiwg_home_unset": true,
+    "inline_budget": "default 64000 tokens; no override; normal local report-only guard",
+    "git_initialization": "standard empty repository metadata written directly; no git command",
+    "agents_md_bytes": null,
+    "log": "/tmp/aiwg-2943-evidence/real-deploy-claude.log",
+    "command": [
+      "env",
+      "-u",
+      "AIWG_HOME",
+      "node",
+      "/home/roctinam/dev/jmagly/aiwg-wt/2943/bin/aiwg.mjs",
+      "use",
+      "sdlc",
+      "--provider",
+      "claude"
+    ],
+    "aiwg_config": "/tmp/aiwg-2943-real-claude-CRlM5o/config"
+  },
+  "strict_ci_deploy": {
+    "provider": "claude",
+    "exit_code": 1,
+    "root": "/tmp/aiwg-2943-real-claude-tHq0nN",
+    "project": "/tmp/aiwg-2943-real-claude-tHq0nN/project",
+    "home": "/tmp/aiwg-2943-real-claude-tHq0nN/home",
+    "channel": {
+      "channel": "edge",
+      "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/2943",
+      "devMode": true,
+      "checkOnStartup": false
+    },
+    "aiwg_home_unset": true,
+    "inline_budget": "default 64000 tokens; no override",
+    "git_initialization": "standard empty repository metadata written directly; no git command",
+    "agents_md_bytes": null,
+    "log": "/tmp/aiwg-2943-evidence/real-deploy-claude.log",
+    "passed": false,
+    "selected_context_bytes": 262749,
+    "estimated_tokens": 65687.25,
+    "limit_tokens": 64000,
+    "note": "Additional diagnostic attempt with CI=1. The normal requested local command uses the existing report-only guard. Remaining untagged/Wave 2+ rules and bootstrap context still block the strict CI budget. No rule outside Wave 3 was changed and no guard was raised."
+  },
+  "validation": {
+    "typecheck": "pass",
+    "build_cli": "pass",
+    "package_plugins": "pass",
+    "plugin_copies": "pass",
+    "rule_triggers": "pass",
+    "activation_lint": "pass; isolated config",
+    "corrected_test_iterations": "Initial U4 exhausted the 180-second limit across 158 separate CLI processes; bound read-only calls now run in groups of four with a 600-second test cap. U6 now force-builds its own isolated framework index, matching the real discovery verification. No binding or rank assertion was removed.",
+    "unit_tests": {
+      "passed": 283,
+      "files": 15,
+      "reports": [
+        "neighbors.json",
+        "wave3-tests.json"
+      ]
+    },
+    "orchestration_conformance": {
+      "passed": 932,
+      "files": 36,
+      "config": "config/vitest.config.js",
+      "maxWorkers": 4,
+      "note": "Vitest API uses the required base config and overrides only include/exclude to admit the orchestrationConformanceFiles lane. No repository config changed."
+    },
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:plugin-copies",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-triggers",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-activation",
+        "exit_code": 0,
+        "environment": "isolated HOME/AIWG_CONFIG/XDG directories; registered operator install is not changed",
+        "initial_attempt": "blocked by pre-existing registered-install identity drift"
+      }
+    ],
+    "omitted_ci_lints": [
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Requires npm registry network access, prohibited by task."
+      },
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Invokes git ls-files, prohibited by task."
+      },
+      {
+        "script": "lint:affected-packages",
+        "reason": "CI condition requires an external affected-package CSV feed that is not supplied; network fetching is prohibited."
+      }
+    ],
+    "constraints": "Only this worktree and system temp; no explicit git commands, network, installs, tracker writes, or model calls; one Vitest at a time within this task, nice -n 19, required base config and maxWorkers=4."
+  },
+  "evidence": {
+    "before": "wave3-measurement-before.json",
+    "after": "wave3-measurement-after.json",
+    "temporary_logs": "/tmp/aiwg-2943-evidence"
+  }
+}

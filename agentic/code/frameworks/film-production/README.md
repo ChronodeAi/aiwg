@@ -16,6 +16,12 @@ aiwg show template film-shot-record
 
 Reload the provider session after deployment for new kernel/agent listings. Standard skills are retrieved through discovery; absence from the flat provider list is expected. Commands are generated from skills, not separately authored source duplicates. Film agents pin the standard (`sonnet`) tier for subagent work; this framework does not change the user's session model or install media services.
 
+The nine production rules declare explicit `bound` activation, concise summaries,
+and bindings to the relevant film agents, skills, and lifecycle/revision flows.
+Discovery exposes these required rule checks before governed work; deployment uses
+the shared rule-delivery contract. They are not silently demoted to the legacy
+missing-activation on-demand fallback, nor loaded as unrelated global kernel rules.
+
 ## The production contract
 
 - One current state, exact input versions and dimension-specific approvals; historical decisions do not compete with current state.

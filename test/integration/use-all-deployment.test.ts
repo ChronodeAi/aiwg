@@ -8,17 +8,22 @@
  *   - New addons added to agentic/code/addons/ are auto-discovered
  */
 
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'fs/promises';
 import { existsSync, mkdtempSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
+import { sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { execFileSync, spawnSync } from 'child_process';
 // @ts-expect-error — .mjs provider module without type declarations
 import {
+  getAddonSkillDirs,
   listOnDemandRuleFiles,
   onDemandRuleNames,
 } from '../../tools/agents/providers/base.mjs';
+// @ts-expect-error — .mjs deployment module without type declarations
+import { collectMirrorSkillDirs } from '../../tools/agents/deploy-agents.mjs';
+import { addonPath, getAllAddons } from '../../src/cli/handlers/use.js';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -27,6 +32,8 @@ vi.mock('child_process', async (importOriginal) => {
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const BIN = path.join(REPO_ROOT, 'bin/aiwg.mjs');
+const DEPLOY_CHILD_TIMEOUT_MS = 180_000;
+const DEPLOY_TEST_TIMEOUT_MS = 210_000;
 const TEST_HOME = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-cli-home-'));
 
 afterAll(() => {
@@ -56,7 +63,7 @@ function runAiwg(
   const result = spawnSync(process.execPath, [BIN, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 180_000,
+    timeout: DEPLOY_CHILD_TIMEOUT_MS,
     // Full-corpus deployment/indexing can exceed a minute on shared runners.
     // Do not inherit the operator's ~/.aiwg/channel.json. A dev/edge pointer
     // can otherwise route this release-candidate test through another checkout.
@@ -77,7 +84,7 @@ function runAiwgWithEnv(
   const result = spawnSync(process.execPath, [BIN, ...args], {
     cwd,
     encoding: 'utf-8',
-    timeout: 180_000,
+    timeout: DEPLOY_CHILD_TIMEOUT_MS,
     env: isolatedCliEnv(env),
   });
   return {
@@ -102,14 +109,7 @@ function canInitGit(): boolean {
 const GIT_AVAILABLE = canInitGit();
 
 const EXPECTED_ON_DEMAND_RULE_NAMES: string[] = onDemandRuleNames(listOnDemandRuleFiles(REPO_ROOT));
-const ISSUE_1784_MISSING_EXAMPLES = [
-  'activity-log',
-  'context-budget',
-  'diagram-generation',
-  'voice-framework',
-  'prose-bridge',
-  'scoped-reasoning',
-];
+
 const TESTING_QUALITY_SKILLS = [
   'tdd-enforce',
   'mutation-test',
@@ -204,290 +204,331 @@ describe('aiwg use — disallow list', () => {
 // aiwg use all — deployment coverage
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeout: 60_000 }, () => {
-  let projectDir: string;
+describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeout: DEPLOY_TEST_TIMEOUT_MS }, () => {
   const fullUseAllArgs = (target: string) => ['use', 'all', '--target', target];
 
-  beforeEach(async () => {
-    projectDir = await makeProject();
+  describe('shared legacy full deployment', () => {
+    let projectDir: string;
+    let result: ReturnType<typeof runAiwg>;
+
+    // These assertions inspect one immutable result and deployment tree. A fresh
+    // full-corpus copy for each assertion repeated the same CLI work eight times.
+    beforeAll(async () => {
+      projectDir = await makeProject();
+      result = runAiwg(fullUseAllArgs(projectDir), projectDir);
+      expect(result.exitCode, `aiwg use all failed (exit ${result.exitCode}):\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+    }, DEPLOY_TEST_TIMEOUT_MS);
+
+    afterAll(async () => {
+      await cleanProject(projectDir);
+    });
+
+    it('deploys to .claude/.aiwg/skills/ without errors', () => {
+      expect(result.exitCode, `aiwg use all failed (exit ${result.exitCode}):\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
+      expect(existsSync(skillsDir)).toBe(true);
+    });
+
+    it('reports deployed and indexed skill counts in separate sections', () => {
+      expect(result.exitCode, `aiwg use all failed (exit ${result.exitCode}):\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+
+      // #3470 names the explicit --copy-all override the full surface.
+      expect(result.stdout).toMatch(/Installing full AIWG surface/);
+      expect(result.stdout).toMatch(/Deployed to Claude Code \(claude\)[\s\S]*\bSkills \d+\b/);
+      expect(result.stdout).toMatch(/Indexed for discovery[\s\S]*\bskill \d+\b/);
+      expect(result.stdout).not.toMatch(/Discoverable skills\s+\d+ deployed/);
+    }, DEPLOY_TEST_TIMEOUT_MS);
+
+    it('deploys more skills than the old hardcoded 4-addon set would produce', async () => {
+      expect(result.exitCode).toBe(0);
+
+      const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
+      if (!existsSync(skillsDir)) return; // guard for environments without write access
+
+      const deployed = await fs.readdir(skillsDir);
+      // Old behaviour only deployed aiwg-utils + ralph skills (~30 total)
+      // New behaviour deploys all addons, should be substantially more
+      expect(deployed.length).toBeGreaterThan(30);
+    });
+
+    it('does not deploy aiwg-dev skills', async () => {
+      const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
+      if (!existsSync(skillsDir)) return;
+
+      // aiwg-dev skills: validate-component, validate-addon, dev-doctor, link-check
+      const devSkills = ['validate-component', 'validate-addon', 'dev-doctor', 'link-check'];
+      const deployed = await fs.readdir(skillsDir);
+      for (const devSkill of devSkills) {
+        expect(deployed).not.toContain(devSkill);
+      }
+    });
+
+    it('deploys addons that were previously missing from the hardcoded list', async () => {
+      expect(result.exitCode).toBe(0);
+
+      const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
+      if (!existsSync(skillsDir)) return;
+
+      const deployed = await fs.readdir(skillsDir);
+
+      // These addons have skills and were NOT in the old VALID_ADDONS list
+      // They should now appear after legacy full `aiwg use all`
+      const previouslyMissing = [
+        'voice-apply',      // voice-framework
+        'curate',           // media-curator
+        'agent-loop',       // ralph (was hardcoded but let's verify)
+        'project-awareness', // aiwg-utils (was hardcoded but let's verify)
+      ];
+
+      for (const skill of previouslyMissing) {
+        expect(deployed).toContain(skill);
+      }
+    });
+
+    it('deploys agents alongside skills', async () => {
+      const agentsDir = path.join(projectDir, '.claude', 'agents');
+      if (!existsSync(agentsDir)) return;
+
+      const agents = await fs.readdir(agentsDir);
+      expect(agents.length).toBeGreaterThan(0);
+      expect(agents.some(a => a.endsWith('.md'))).toBe(true);
+    });
+
+    it('mirrors Claude setup skills as slash commands', async () => {
+      expect(result.exitCode).toBe(0);
+
+      const commandsDir = path.join(projectDir, '.claude', 'commands');
+      expect(existsSync(path.join(commandsDir, 'aiwg-setup-project.md'))).toBe(true);
+      expect(existsSync(path.join(commandsDir, 'aiwg-update-claude.md'))).toBe(true);
+      expect(existsSync(path.join(commandsDir, 'aiwg-update-agents-md.md'))).toBe(true);
+    });
+
+    it('mirrors Claude kernel self-maintenance skills as bootstrap slash commands', async () => {
+      // Kernel bootstrap functions are copied in as `/`-commands for direct
+      // access (not discovery-only). Supersedes the #1382 gate that kept these
+      // native-skill-only on Claude; the direct entry point is worth the
+      // skill+command redundancy that the standard operator set already ships.
+      expect(result.exitCode).toBe(0);
+
+      const commandsDir = path.join(projectDir, '.claude', 'commands');
+      const kernelBootstrapCommands = [
+        'aiwg-regenerate.md',
+        'aiwg-doctor.md',
+        'aiwg-refresh.md',
+        'aiwg-status.md',
+        'aiwg-help.md',
+        'aiwg-issue.md',
+        'aiwg-pr.md',
+        'use.md',
+        'steward.md',
+      ];
+
+      for (const file of kernelBootstrapCommands) {
+        expect(existsSync(path.join(commandsDir, file)), `${file} should be copied in as a Claude bootstrap command`).toBe(true);
+      }
+    });
+
   });
 
-  afterEach(async () => {
-    await cleanProject(projectDir);
-  });
+  describe('isolated provider deployments', () => {
+    let projectDir: string;
 
-  it('deploys to .claude/.aiwg/skills/ without errors', () => {
-    const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
-    expect(result.exitCode, `aiwg use all failed (exit ${result.exitCode}):\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
-    const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
-    expect(existsSync(skillsDir)).toBe(true);
-  });
+    beforeEach(async () => {
+      projectDir = await makeProject();
+    }, 70_000);
 
-  it('reports deployed and indexed skill counts in separate sections', () => {
-    const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
-    expect(result.exitCode, `aiwg use all failed (exit ${result.exitCode}):\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+    afterEach(async () => {
+      await cleanProject(projectDir);
+    });
 
-    expect(result.stdout).toMatch(/Installing complete AIWG surface/);
-    expect(result.stdout).toMatch(/Deployed to Claude Code \(claude\)[\s\S]*\bSkills \d+\b/);
-    expect(result.stdout).toMatch(/Indexed for discovery[\s\S]*\bskill \d+\b/);
-    expect(result.stdout).not.toMatch(/Discoverable skills\s+\d+ deployed/);
-  }, 60_000);
+    it('keeps Codex bulk deployment kernel-only by default', async () => {
+      const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-codex-home-'));
+      try {
+        const agentsDir = path.join(projectDir, '.codex', 'agents');
+        await fs.mkdir(agentsDir, { recursive: true });
+        await fs.writeFile(path.join(agentsDir, 'stale-aiwg.toml'), '# aiwg:managed v0 test\nname = "stale"\n');
+        await fs.writeFile(path.join(agentsDir, 'operator.toml'), 'name = "operator"\n');
+        const result = runAiwgWithEnv(
+          ['use', 'all', '--provider', 'codex', '--target', projectDir],
+          projectDir,
+          { HOME: homeDir, USERPROFILE: homeDir },
+        );
+        expect(result.exitCode, `aiwg use all --provider codex failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
 
-  it('deploys more skills than the old hardcoded 4-addon set would produce', async () => {
-    const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
-    expect(result.exitCode).toBe(0);
+        const regenerateSkill = path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'SKILL.md');
+        expect(existsSync(regenerateSkill), 'Codex should retain $aiwg-regenerate in .agents/skills after addon deploys').toBe(true);
+        const regenerateMetadata = await fs.readFile(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'agents', 'openai.yaml'), 'utf-8');
+        expect(regenerateMetadata).toContain('display_name: "AIWG Regenerate"');
+        expect(existsSync(path.join(projectDir, '.agents', 'skills', 'voice-apply', 'SKILL.md')), 'Codex default deploy should not copy standard skills into the native $ search path').toBe(false);
 
-    const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
-    if (!existsSync(skillsDir)) return; // guard for environments without write access
+        const skillDirs = await fs.readdir(path.join(projectDir, '.agents', 'skills'), { withFileTypes: true });
+        expect(skillDirs.filter(entry => entry.isDirectory()).length).toBeLessThan(100);
 
-    const deployed = await fs.readdir(skillsDir);
-    // Old behaviour only deployed aiwg-utils + ralph skills (~30 total)
-    // New behaviour deploys all addons, should be substantially more
-    expect(deployed.length).toBeGreaterThan(30);
-  });
+        const codexAgentsDir = path.join(projectDir, '.codex', 'agents');
+        const codexAgents = existsSync(codexAgentsDir)
+          ? (await fs.readdir(codexAgentsDir)).filter(name => name.endsWith('.toml'))
+          : [];
+        expect(codexAgents).toEqual(['operator.toml']);
 
-  it('does not deploy aiwg-dev skills', async () => {
-    runAiwg(fullUseAllArgs(projectDir), projectDir);
-    const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
-    if (!existsSync(skillsDir)) return;
+        const gitignore = await fs.readFile(path.join(projectDir, '.gitignore'), 'utf-8');
+        expect(gitignore).toContain('.codex/');
+        expect(gitignore).toContain('.agents/');
+        expect(result.stdout).toMatch(/Deployed to OpenAI Codex \(codex\)[\s\S]*\bSkills [1-9]\d*\b/);
+      } finally {
+        rmSync(homeDir, { recursive: true, force: true });
+      }
+    }, DEPLOY_TEST_TIMEOUT_MS);
 
-    // aiwg-dev skills: validate-component, validate-addon, dev-doctor, link-check
-    const devSkills = ['validate-component', 'validate-addon', 'dev-doctor', 'link-check'];
-    const deployed = await fs.readdir(skillsDir);
-    for (const devSkill of devSkills) {
-      expect(deployed).not.toContain(devSkill);
-    }
-  });
+    it('deploys Pi prompts and kernel skills for the default bulk install', async () => {
+      const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-pi-home-'));
+      try {
+        const result = runAiwgWithEnv(
+          ['use', 'all', '--provider', 'pi', '--target', projectDir],
+          projectDir,
+          { HOME: homeDir, USERPROFILE: homeDir },
+        );
+        expect(result.exitCode, `aiwg use all --provider pi failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+        expect(existsSync(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'SKILL.md'))).toBe(true);
+        expect(existsSync(path.join(projectDir, '.pi', 'prompts', 'address-issues.md'))).toBe(true);
+        expect(existsSync(path.join(projectDir, 'AGENTS.md'))).toBe(true);
+        expect(existsSync(path.join(projectDir, '.pi', 'settings.json'))).toBe(false);
+        expect(result.stdout).toMatch(/Deployed to Pi Coding Agent \(pi\)[\s\S]*\bCommands [1-9]\d*\b[\s\S]*\bSkills [1-9]\d*\b/);
+      } finally {
+        rmSync(homeDir, { recursive: true, force: true });
+      }
+    }, DEPLOY_TEST_TIMEOUT_MS);
 
-  it('deploys addons that were previously missing from the hardcoded list', async () => {
-    const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
-    expect(result.exitCode).toBe(0);
+    it('mirrors Pi user-scope resources through PI_CODING_AGENT_DIR', async () => {
+      const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-pi-user-home-'));
+      const agentDir = path.join(homeDir, 'custom-pi-agent');
+      try {
+        const rootAddonSkills = getAddonSkillDirs(REPO_ROOT).map((entry: string) => path.resolve(entry)).sort();
+        const directAddonSkills = (await getAllAddons(REPO_ROOT))
+          .flatMap(addon => collectMirrorSkillDirs(addonPath(REPO_ROOT, addon), 'sdlc', 'pi'))
+          .map((entry: string) => path.resolve(entry))
+          .sort();
+        expect(directAddonSkills).toEqual(rootAddonSkills);
+        const rootMirrorSkills = collectMirrorSkillDirs(REPO_ROOT, 'sdlc', 'pi')
+          .map((entry: string) => path.resolve(entry));
+        expect(rootMirrorSkills.slice(-rootAddonSkills.length).sort()).toEqual(rootAddonSkills);
 
-    const skillsDir = path.join(projectDir, '.claude', '.aiwg', 'skills');
-    if (!existsSync(skillsDir)) return;
+        const result = runAiwgWithEnv(
+          ['use', 'sdlc', '--provider', 'pi', '--target', projectDir, '--scope', 'user'],
+          projectDir,
+          { HOME: homeDir, USERPROFILE: homeDir, PI_CODING_AGENT_DIR: agentDir },
+        );
+        expect(result.exitCode, `Pi user-scope deployment failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+        expect(existsSync(path.join(agentDir, 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(true);
+        expect(existsSync(path.join(agentDir, 'prompts', 'address-issues.md'))).toBe(true);
+        const projectStatus = await fs.readFile(path.join(agentDir, 'prompts', 'project-status.md'), 'utf8');
+        expect(projectStatus).toContain('Cross-framework project status aggregator');
+        const sdlcAccelerate = await fs.readFile(path.join(agentDir, 'prompts', 'sdlc-accelerate.md'), 'utf8');
+        // The final standard-command mirror intentionally applies the selected
+        // framework after native skills. Preserve that existing winner while
+        // collecting addon-only wrappers such as project-status in one pass.
+        expect(sdlcAccelerate).toContain('You are an SDLC Pipeline Orchestrator');
+        expect(sdlcAccelerate).not.toContain('Weeks of SDLC ceremony compressed into hours');
+        const promptManifest = JSON.parse(await fs.readFile(path.join(agentDir, 'prompts', '.aiwg-manifest.json'), 'utf8'));
+        expect(promptManifest.managed['project-status.md']).toMatchObject({
+          source: 'bundled',
+          kind: 'skill-command',
+        });
+        expect(promptManifest.managed['project-status.md'].version).not.toBe('unknown');
+        expect(promptManifest.managed['sdlc-accelerate.md'].version).not.toBe('unknown');
+        expect(existsSync(path.join(homeDir, '.agents', 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(false);
+      } finally {
+        rmSync(homeDir, { recursive: true, force: true });
+      }
+    }, DEPLOY_TEST_TIMEOUT_MS);
 
-    const deployed = await fs.readdir(skillsDir);
+    it('keeps Claude bulk deployment kernel-only by default', async () => {
+      const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-claude-home-'));
+      try {
+        const agentsDir = path.join(projectDir, '.claude', 'agents');
+        await fs.mkdir(agentsDir, { recursive: true });
+        await fs.writeFile(path.join(agentsDir, 'stale-aiwg.md'), '<!-- aiwg:managed v0 test -->\n# stale\n');
+        await fs.writeFile(path.join(agentsDir, 'operator.md'), '# operator\n');
+        const result = runAiwgWithEnv(
+          ['use', 'all', '--provider', 'claude', '--target', projectDir],
+          projectDir,
+          { HOME: homeDir, USERPROFILE: homeDir },
+        );
+        expect(result.exitCode, `aiwg use all --provider claude failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+        expect(existsSync(path.join(projectDir, '.claude', 'skills', 'aiwg-utils-quickref', 'SKILL.md'))).toBe(true);
+        expect(existsSync(path.join(projectDir, '.claude', 'skills', 'voice-apply', 'SKILL.md'))).toBe(false);
+        const agents = existsSync(agentsDir)
+          ? (await fs.readdir(agentsDir)).filter(name => name.endsWith('.md'))
+          : [];
+        expect(agents).toEqual(['operator.md']);
+      } finally {
+        rmSync(homeDir, { recursive: true, force: true });
+      }
+    }, DEPLOY_TEST_TIMEOUT_MS);
 
-    // These addons have skills and were NOT in the old VALID_ADDONS list
-    // They should now appear after legacy full `aiwg use all`
-    const previouslyMissing = [
-      'voice-apply',      // voice-framework
-      'curate',           // media-curator
-      'agent-loop',       // ralph (was hardcoded but let's verify)
-      'project-awareness', // aiwg-utils (was hardcoded but let's verify)
-    ];
-
-    for (const skill of previouslyMissing) {
-      expect(deployed).toContain(skill);
-    }
-  });
-
-  it('deploys agents alongside skills', async () => {
-    runAiwg(fullUseAllArgs(projectDir), projectDir);
-    const agentsDir = path.join(projectDir, '.claude', 'agents');
-    if (!existsSync(agentsDir)) return;
-
-    const agents = await fs.readdir(agentsDir);
-    expect(agents.length).toBeGreaterThan(0);
-    expect(agents.some(a => a.endsWith('.md'))).toBe(true);
-  });
-
-  it('mirrors Claude setup skills as slash commands', async () => {
-    const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
-    expect(result.exitCode).toBe(0);
-
-    const commandsDir = path.join(projectDir, '.claude', 'commands');
-    expect(existsSync(path.join(commandsDir, 'aiwg-setup-project.md'))).toBe(true);
-    expect(existsSync(path.join(commandsDir, 'aiwg-update-claude.md'))).toBe(true);
-    expect(existsSync(path.join(commandsDir, 'aiwg-update-agents-md.md'))).toBe(true);
-  });
-
-  it('mirrors Claude kernel self-maintenance skills as bootstrap slash commands', async () => {
-    // Kernel bootstrap functions are copied in as `/`-commands for direct
-    // access (not discovery-only). Supersedes the #1382 gate that kept these
-    // native-skill-only on Claude; the direct entry point is worth the
-    // skill+command redundancy that the standard operator set already ships.
-    const result = runAiwg(fullUseAllArgs(projectDir), projectDir);
-    expect(result.exitCode).toBe(0);
-
-    const commandsDir = path.join(projectDir, '.claude', 'commands');
-    const kernelBootstrapCommands = [
-      'aiwg-regenerate.md',
-      'aiwg-doctor.md',
-      'aiwg-refresh.md',
-      'aiwg-status.md',
-      'aiwg-help.md',
-      'aiwg-issue.md',
-      'aiwg-pr.md',
-      'use.md',
-      'steward.md',
-    ];
-
-    for (const file of kernelBootstrapCommands) {
-      expect(existsSync(path.join(commandsDir, file)), `${file} should be copied in as a Claude bootstrap command`).toBe(true);
-    }
-  });
-
-  it('keeps Codex bulk deployment kernel-only by default', async () => {
-    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-codex-home-'));
-    try {
+    it('keeps managed bulk artifacts intact during a kernel-only dry run', async () => {
       const agentsDir = path.join(projectDir, '.codex', 'agents');
       await fs.mkdir(agentsDir, { recursive: true });
-      await fs.writeFile(path.join(agentsDir, 'stale-aiwg.toml'), '# aiwg:managed v0 test\nname = "stale"\n');
-      await fs.writeFile(path.join(agentsDir, 'operator.toml'), 'name = "operator"\n');
+      const staleAgent = path.join(agentsDir, 'stale-aiwg.toml');
+      await fs.writeFile(staleAgent, '# aiwg:managed v0 test\nname = "stale"\n');
+
       const result = runAiwgWithEnv(
-        ['use', 'all', '--provider', 'codex', '--target', projectDir],
+        ['use', 'all', '--provider', 'codex', '--target', projectDir, '--dry-run'],
         projectDir,
-        { HOME: homeDir, USERPROFILE: homeDir },
+        {},
       );
-      expect(result.exitCode, `aiwg use all --provider codex failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(result.exitCode, result.stderr || result.stdout).toBe(0);
+      expect(existsSync(staleAgent)).toBe(true);
+    }, 60_000);
 
-      const regenerateSkill = path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'SKILL.md');
-      expect(existsSync(regenerateSkill), 'Codex should retain $aiwg-regenerate in .agents/skills after addon deploys').toBe(true);
-      const regenerateMetadata = await fs.readFile(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'agents', 'openai.yaml'), 'utf-8');
-      expect(regenerateMetadata).toContain('display_name: "AIWG Regenerate"');
-      expect(existsSync(path.join(projectDir, '.agents', 'skills', 'voice-apply', 'SKILL.md')), 'Codex default deploy should not copy standard skills into the native $ search path').toBe(false);
+    it('deploys explicit testing-quality skills to the Codex native skill surface', async () => {
+      const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-testing-quality-codex-home-'));
+      try {
+        const result = runAiwgWithEnv(
+          ['use', 'testing-quality', '--provider', 'codex', '--target', projectDir],
+          projectDir,
+          { HOME: homeDir, USERPROFILE: homeDir },
+        );
+        expect(result.exitCode, `aiwg use testing-quality --provider codex failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
 
-      const skillDirs = await fs.readdir(path.join(projectDir, '.agents', 'skills'), { withFileTypes: true });
-      expect(skillDirs.filter(entry => entry.isDirectory()).length).toBeLessThan(100);
-
-      const codexAgentsDir = path.join(projectDir, '.codex', 'agents');
-      const codexAgents = existsSync(codexAgentsDir)
-        ? (await fs.readdir(codexAgentsDir)).filter(name => name.endsWith('.toml'))
-        : [];
-      expect(codexAgents).toEqual(['operator.toml']);
-
-      const gitignore = await fs.readFile(path.join(projectDir, '.gitignore'), 'utf-8');
-      expect(gitignore).toContain('.codex/');
-      expect(gitignore).toContain('.agents/');
-      expect(result.stdout).toMatch(/Deployed to OpenAI Codex \(codex\)[\s\S]*\bSkills [1-9]\d*\b/);
-    } finally {
-      rmSync(homeDir, { recursive: true, force: true });
-    }
-  }, 210_000);
-
-  it('deploys Pi prompts and kernel skills for the default bulk install', async () => {
-    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-pi-home-'));
-    try {
-      const result = runAiwgWithEnv(
-        ['use', 'all', '--provider', 'pi', '--target', projectDir],
-        projectDir,
-        { HOME: homeDir, USERPROFILE: homeDir },
-      );
-      expect(result.exitCode, `aiwg use all --provider pi failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
-      expect(existsSync(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'SKILL.md'))).toBe(true);
-      expect(existsSync(path.join(projectDir, '.pi', 'prompts', 'address-issues.md'))).toBe(true);
-      expect(existsSync(path.join(projectDir, 'AGENTS.md'))).toBe(true);
-      expect(existsSync(path.join(projectDir, '.pi', 'settings.json'))).toBe(false);
-      expect(result.stdout).toMatch(/Deployed to Pi Coding Agent \(pi\)[\s\S]*\bCommands [1-9]\d*\b[\s\S]*\bSkills [1-9]\d*\b/);
-    } finally {
-      rmSync(homeDir, { recursive: true, force: true });
-    }
-  }, 60_000);
-
-  it('mirrors Pi user-scope resources through PI_CODING_AGENT_DIR', async () => {
-    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-pi-user-home-'));
-    const agentDir = path.join(homeDir, 'custom-pi-agent');
-    try {
-      const result = runAiwgWithEnv(
-        ['use', 'sdlc', '--provider', 'pi', '--target', projectDir, '--scope', 'user'],
-        projectDir,
-        { HOME: homeDir, USERPROFILE: homeDir, PI_CODING_AGENT_DIR: agentDir },
-      );
-      expect(result.exitCode, `Pi user-scope deployment failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
-      expect(existsSync(path.join(agentDir, 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(true);
-      expect(existsSync(path.join(agentDir, 'prompts', 'address-issues.md'))).toBe(true);
-      expect(existsSync(path.join(homeDir, '.agents', 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(false);
-    } finally {
-      rmSync(homeDir, { recursive: true, force: true });
-    }
-  }, 60_000);
-
-  it('keeps Claude bulk deployment kernel-only by default', async () => {
-    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-claude-home-'));
-    try {
-      const agentsDir = path.join(projectDir, '.claude', 'agents');
-      await fs.mkdir(agentsDir, { recursive: true });
-      await fs.writeFile(path.join(agentsDir, 'stale-aiwg.md'), '<!-- aiwg:managed v0 test -->\n# stale\n');
-      await fs.writeFile(path.join(agentsDir, 'operator.md'), '# operator\n');
-      const result = runAiwgWithEnv(
-        ['use', 'all', '--provider', 'claude', '--target', projectDir],
-        projectDir,
-        { HOME: homeDir, USERPROFILE: homeDir },
-      );
-      expect(result.exitCode, `aiwg use all --provider claude failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
-      expect(existsSync(path.join(projectDir, '.claude', 'skills', 'aiwg-utils-quickref', 'SKILL.md'))).toBe(true);
-      expect(existsSync(path.join(projectDir, '.claude', 'skills', 'voice-apply', 'SKILL.md'))).toBe(false);
-      const agents = existsSync(agentsDir)
-        ? (await fs.readdir(agentsDir)).filter(name => name.endsWith('.md'))
-        : [];
-      expect(agents).toEqual(['operator.md']);
-    } finally {
-      rmSync(homeDir, { recursive: true, force: true });
-    }
-  }, 60_000);
-
-  it('keeps managed bulk artifacts intact during a kernel-only dry run', async () => {
-    const agentsDir = path.join(projectDir, '.codex', 'agents');
-    await fs.mkdir(agentsDir, { recursive: true });
-    const staleAgent = path.join(agentsDir, 'stale-aiwg.toml');
-    await fs.writeFile(staleAgent, '# aiwg:managed v0 test\nname = "stale"\n');
-
-    const result = runAiwgWithEnv(
-      ['use', 'all', '--provider', 'codex', '--target', projectDir, '--dry-run'],
-      projectDir,
-      {},
-    );
-    expect(result.exitCode, result.stderr || result.stdout).toBe(0);
-    expect(existsSync(staleAgent)).toBe(true);
-  }, 60_000);
-
-  it('deploys explicit testing-quality skills to the Codex native skill surface', async () => {
-    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-testing-quality-codex-home-'));
-    try {
-      const result = runAiwgWithEnv(
-        ['use', 'testing-quality', '--provider', 'codex', '--target', projectDir],
-        projectDir,
-        { HOME: homeDir, USERPROFILE: homeDir },
-      );
-      expect(result.exitCode, `aiwg use testing-quality --provider codex failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
-
-      for (const skill of TESTING_QUALITY_SKILLS) {
-        expect(
-          existsSync(path.join(projectDir, '.agents', 'skills', skill, 'SKILL.md')),
-          `${skill} should be deployed to .agents/skills for Codex when testing-quality is explicitly installed`,
-        ).toBe(true);
+        for (const skill of TESTING_QUALITY_SKILLS) {
+          expect(
+            existsSync(path.join(projectDir, '.agents', 'skills', skill, 'SKILL.md')),
+            `${skill} should be deployed to .agents/skills for Codex when testing-quality is explicitly installed`,
+          ).toBe(true);
+        }
+      } finally {
+        rmSync(homeDir, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(homeDir, { recursive: true, force: true });
-    }
-  }, 30_000);
+    }, DEPLOY_TEST_TIMEOUT_MS);
 
-  // One bounded CLI child per case; each provider gets an isolated project and
-  // a distinct failure identity. Leave time for child shutdown and assertions.
-  it.each(['claude', 'codex'])('writes complete RULES-ONDEMAND indexes for %s after real aiwg use all (#1784)', async (provider) => {
-    const result = runAiwg(['use', 'all', '--provider', provider, '--target', projectDir], projectDir);
-    expect(result.exitCode, `aiwg use all --provider ${provider} failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+    // One bounded CLI child per case; each provider gets an isolated project and
+    // a distinct failure identity. Leave time for child shutdown and assertions.
+    it.each(['claude', 'codex'])('writes complete RULES-ONDEMAND indexes for %s after real aiwg use all (#1784)', async (provider) => {
+      const result = runAiwg(['use', 'all', '--provider', provider, '--target', projectDir], projectDir);
+      expect(result.exitCode, `aiwg use all --provider ${provider} failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
 
-    const rulesDir = provider === 'claude'
-      ? path.join(projectDir, '.claude', 'rules')
-      : path.join(projectDir, '.codex', 'rules');
-    const body = await fs.readFile(path.join(rulesDir, 'RULES-ONDEMAND.md'), 'utf8');
-    const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
+      const rulesDir = provider === 'claude'
+        ? path.join(projectDir, '.claude', 'rules')
+        : path.join(projectDir, '.codex', 'rules');
+      const onDemandPath = path.join(rulesDir, 'RULES-ONDEMAND.md');
+      // With no untagged fallback rules left (#3463), no legacy index is written.
+      if (EXPECTED_ON_DEMAND_RULE_NAMES.length === 0) {
+        expect(existsSync(onDemandPath)).toBe(false);
+        return;
+      }
+      const body = await fs.readFile(onDemandPath, 'utf8');
+      const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
 
-    // Every MEDIUM/LOW rule is listed. Claude additionally lists the HIGH rules
-    // the inline budget moved on demand (#2562), under their own heading, so the
-    // index is a superset there rather than an exact match.
-    expect(actual).toEqual(expect.arrayContaining(EXPECTED_ON_DEMAND_RULE_NAMES));
-    expect(actual).toEqual(expect.arrayContaining(ISSUE_1784_MISSING_EXAMPLES));
-    const budgetDemoted = actual.filter((name) => !EXPECTED_ON_DEMAND_RULE_NAMES.includes(name));
-    if (provider === 'claude') {
-      const [, demotedSection = ''] = body.split('## Binding rules moved on demand to fit the inline budget');
-      for (const name of budgetDemoted) expect(demotedSection, `${name} must be listed as budget-demoted`).toContain(`\`${name}\``);
-    } else {
-      expect(budgetDemoted).toEqual([]);
-    }
-  }, 210_000);
+      // ADR: only untagged medium/low fallback rules retain the legacy index.
+      // Tagged contracts keep their activation; budgets never demote them here.
+      expect(actual).toEqual(EXPECTED_ON_DEMAND_RULE_NAMES);
+      const migrated = ['addons', 'frameworks', 'extensions'].flatMap(kind =>
+        sourceRules(REPO_ROOT, kind as 'addons' | 'frameworks' | 'extensions'))
+        .filter(rule => !rule.structural && rule.data.activation !== undefined);
+      for (const rule of migrated) expect(actual).not.toContain(rule.name);
+      expect(body).not.toContain('Binding rules moved on demand to fit the inline budget');
+    }, DEPLOY_TEST_TIMEOUT_MS);
+  });
 });
 
 // ---------------------------------------------------------------------------

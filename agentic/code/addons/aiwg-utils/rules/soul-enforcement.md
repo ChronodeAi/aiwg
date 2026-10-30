@@ -1,5 +1,17 @@
 ---
 enforcement: medium
+activation: summary
+summary: Read and apply the selected SOUL identity before generating content; preserve factual accuracy, follow per-agent overrides, and honor stricter completion standards.
+bound_to:
+  skills:
+    - soul-apply
+    - soul-enable
+    - soul-create
+    - soul-blend
+    - soul-enhance
+    - soul-validate
+    - soul-to-voice
+    - voice-to-soul
 ---
 
 # Soul Enforcement

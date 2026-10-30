@@ -47,11 +47,38 @@ describe('Fortemi shard conformance workflow', () => {
     )
   })
 
+  it('qualifies candidate reader changes in the existing WASM shard lane', () => {
+    expect(workflow).toContain("'src/artifacts/fortemi-shard-contract/**'")
+    expect(workflow).toContain("'src/api/index.ts'")
+    expect(workflow).toContain('npx vitest run --config config/vitest.wasm.config.js test/unit/artifacts/fortemi-shard-export.test.ts')
+  })
+
   it('uses run-scoped resources and always removes them', () => {
     expect(workflow).toContain('DB_IMAGE="aiwg-fortemi-testdb:${GITHUB_RUN_ID}"')
     expect(workflow).toContain('DB_CONTAINER="aiwg-fortemi-${GITHUB_RUN_ID}"')
     expect(workflow).toContain('if: always()')
     expect(workflow).toContain('docker rm -f "$DB_CONTAINER"')
     expect(workflow).toContain('docker image rm -f "$DB_IMAGE"')
+  })
+
+  it('adds the session source, fixture, verifier and API harness triggers', () => {
+    for (const path of ['src/sessions/**', 'src/cli/handlers/sessions.ts',
+      'test/fixtures/sessions/**', 'tools/ci/verify-aiwg-fortemi-session-receipt.mjs',
+      'tools/ci/fortemi-session-fixture.mjs', 'tools/ci/fortemi-session-api-test.rs']) {
+      expect(workflow).toContain(`'${path}'`)
+    }
+    expect(workflow).not.toContain('pull_request:')
+  })
+
+  it('checks sessions against the same consumer only after the existing artifact checks', () => {
+    const artifact = workflow.indexOf('run: node tools/ci/verify-aiwg-fortemi-shard-receipt.mjs --server-checkout')
+    const prerequisites = workflow.indexOf('- name: Prepare session shard producer')
+    const session = workflow.indexOf('node tools/ci/verify-aiwg-fortemi-session-receipt.mjs --server-checkout /tmp/aiwg-fortemi-consumer')
+    expect(artifact).toBeGreaterThan(0)
+    expect(prerequisites).toBeGreaterThan(artifact)
+    expect(session).toBeGreaterThan(prerequisites)
+    expect(workflow.indexOf('- name: Remove isolated database')).toBeGreaterThan(session)
+    expect(workflow).toContain('better-sqlite3@12.8.0')
+    expect(workflow).toContain('npm run build:cli')
   })
 })

@@ -14,7 +14,7 @@ platforms: [all]
 >
 > ```bash
 > aiwg discover "<capability>"
-> aiwg show skill <name>
+> aiwg show skill <name> --body
 > ```
 >
 > Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](../../../addons/aiwg-utils/rules/skill-discovery.md).
@@ -23,6 +23,15 @@ platforms: [all]
 # Agent Loop Skill
 
 You detect when users want iterative autonomous task execution and route to an internal, in-session loop by default. External daemon loops are opt-in and require an explicit request.
+
+## HITL authorization checkpoints
+
+Before any confirmation below, read and apply
+[agent-loop authorization checkpoints](../../docs/hitl-authorization.md).
+Call `aiwg config authorization check --action-file "$ACTION_FILE" --target "$TARGET_REPO"`
+for host-classified effects. Only `auto-authorized` with a signed receipt skips
+that workflow prompt; retain existing prompts/refusals otherwise. Platform
+prompts are never bypassed. Limits, regression and threat overrides still require review.
 
 ## Loop Taxonomy
 

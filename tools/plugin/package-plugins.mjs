@@ -41,7 +41,7 @@ const PLUGIN_CONFIGS = {
       skills: 'agentic/code/frameworks/sdlc-complete/skills'
     },
     extraCopy: [
-      { from: 'tools/security/threat-assessment.mjs', to: 'tools/security/threat-assessment.mjs' },
+      ...['threat-assessment.mjs', 'threat-assessment'].map(name => ({ from: `tools/security/${name}`, to: `tools/security/${name}` })),
       { from: 'agentic/code/frameworks/sdlc-complete/flows/flow-architecture-evolution.playbook.yaml', to: 'flows/flow-architecture-evolution.playbook.yaml' },
       { from: 'agentic/code/frameworks/sdlc-complete/flows/flow-release.playbook.yaml', to: 'flows/flow-release.playbook.yaml' }
     ],
@@ -227,7 +227,6 @@ Writing quality validation and AI pattern detection.
 - Discord: https://discord.gg/BuAusFMxdA
 `
   },
-
   'utils': {
     name: 'utils',
     displayName: 'AIWG Utilities',
@@ -239,7 +238,9 @@ Writing quality validation and AI pattern detection.
     },
     extraCopy: [
       { from: 'agentic/code/addons/aiwg-utils/rules/skill-discovery.md', to: 'rules/skill-discovery.md' },
-      { from: 'agentic/code/addons/aiwg-utils/rules/cli-secondary.md', to: 'rules/cli-secondary.md' }
+      { from: 'agentic/code/addons/aiwg-utils/rules/skill-discovery-guidance.md', to: 'rules/skill-discovery-guidance.md' },
+      { from: 'agentic/code/addons/aiwg-utils/rules/cli-secondary.md', to: 'rules/cli-secondary.md' },
+      { from: 'agentic/code/addons/aiwg-utils/templates/subagent-brief.md', to: 'templates/subagent-brief.md' }
     ],
     readme: `# AIWG Utilities
 

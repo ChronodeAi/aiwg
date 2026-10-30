@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 import { acquireDirectoryLock } from '../../src/artifacts/prebuilt-build-lock.js';
 
 // Clean-install evidence for the decision-engine addon (#2641): pack the
@@ -73,7 +74,10 @@ describe('decision-engine clean install from the packed tarball', () => {
     const cleanEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       !key.toLowerCase().startsWith('npm_config_') && key !== 'AIWG_ROOT' && key !== 'NODE_OPTIONS'));
 
-    const releasePackLock = await acquireDirectoryLock(path.join(ROOT, 'prebuilt', 'fortemi-core', '.framework-build.lock'));
+    const releasePackLock = await acquireDirectoryLock(
+      path.join(ROOT, 'prebuilt', 'fortemi-core', '.framework-build.lock'),
+      { reclaimDeadOwner: true },
+    );
     let pack: SpawnSyncReturns<string>;
     try {
       pack = run(NPM, ['pack', '--ignore-scripts', '--json', '--pack-destination', tempRoot], { cwd: ROOT, env: cleanEnv, timeout: 120_000 });
@@ -268,8 +272,22 @@ describe('decision-engine clean install from the packed tarball', () => {
     const script = path.join(consumer, SKILL, 'scripts', 'decision-evaluate.mjs');
     expect(existsSync(script)).toBe(true);
     expect(existsSync(path.join(consumer, SKILL, 'scripts', 'runtime-root.mjs'))).toBe(true);
-    // The stale-artifact prune must keep a named install's own rule (#2862).
-    expect(existsSync(path.join(consumer, '.claude', 'rules', 'decision-offload.md'))).toBe(true);
+    // ADR: a named install retains its bound contract through native invocation
+    // and show, while keeping that body outside Claude's recursive startup tree.
+    const ruleFile = 'agentic/code/addons/decision-engine/rules/decision-offload.md';
+    const ruleSource = await readFile(path.join(installRoot, ruleFile), 'utf8');
+    const rule = parse(ruleSource.match(/^---\n([\s\S]*?)\n---/)![1]);
+    const ruleName = rule.name || path.basename(ruleFile, '.md');
+    expect(rule.activation).toBe('bound');
+    expect(rule.bound_to.skills).toContain('decision-evaluate');
+    expect(existsSync(path.join(consumer, '.claude', 'rules', `${ruleName}.md`))).toBe(false);
+    const definition = await readFile(path.join(consumer, SKILL, 'SKILL.md'), 'utf8');
+    expect(definition).toContain(`aiwg show rule ${ruleName}`);
+    expect(definition).toContain(rule.summary);
+    const shown = JSON.parse(ok(aiwg(['show', 'skill', 'decision-evaluate', '--json', '--bound-rule-bodies'])).stdout);
+    expect(shown.bound_rules).toContainEqual(expect.objectContaining({
+      name: ruleName, activation: rule.activation, summary: rule.summary, content: ruleSource,
+    }));
 
     const request = path.join(consumer, EXAMPLES, 'dispatcher-request-llm.json');
     const disabled = dispatch(script, request, consumer);

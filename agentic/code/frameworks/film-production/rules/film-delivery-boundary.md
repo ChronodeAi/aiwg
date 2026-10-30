@@ -3,6 +3,12 @@ id: film-delivery-boundary
 name: Film Delivery Boundary
 description: Deliver verified film files and editable handoffs without implying publication or unsupported completion.
 enforcement: high
+activation: bound
+summary: Deliver verified film files and editable handoffs without implying publication or unsupported completion.
+bound_to:
+  agents: [film-producer, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-delivery, film-edit-conform, film-review-gate]
+  flows: [film-finish, film-deliver, film-resume, film-revise-with-impact]
 ---
 
 # Film Delivery Boundary

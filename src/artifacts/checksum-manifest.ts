@@ -36,6 +36,17 @@ export interface ChecksumManifest {
   version: 1;
   generated: string;
   entries: Record<string, ManifestEntry>;
+  /** A successful build ties these inputs to the unchanged metadata file. */
+  receipt?: {
+    indexVersion: string;
+    extractorVersion: string;
+    buildConfigHash: string;
+    sourceRoot: string;
+    metadataSignature: string;
+    /** Framework-only projection identity; absent older receipts must reconcile. */
+    relations?: { revision: number; signature: string };
+    entriesDigest: string;
+  };
 }
 
 const MANIFEST_FILENAME = 'checksum-manifest.json';
@@ -83,6 +94,7 @@ export function writeManifest(indexDir: string, manifest: ChecksumManifest): voi
     version: 1,
     generated: new Date().toISOString(),
     entries: manifest.entries,
+    ...(manifest.receipt ? { receipt: manifest.receipt } : {}),
   };
   fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
   fs.renameSync(tmpPath, manifestPath);
@@ -125,8 +137,20 @@ export interface ManifestStats {
   statSkipped: number;
   /** Files read and checksum verified as unchanged */
   checksumSkipped: number;
-  /** Files that actually changed and were re-indexed */
+  /** Artifacts whose content was parsed and metadata re-extracted (new or changed). */
   reindexed: number;
   /** Files removed from manifest (deleted from disk) */
   pruned: number;
+}
+
+/** Format change-detection diagnostics from the same counters returned to callers. */
+export function formatManifestStats(stats: ManifestStats): string[] {
+  if (stats.checked === 0) return [];
+  const messages = [
+    `  Change detection: ${stats.checked} checked, ${stats.statSkipped} skipped via stat, ${stats.checked - stats.statSkipped} content-read, ${stats.reindexed} re-indexed`,
+  ];
+  if (stats.pruned > 0) {
+    messages.push(`  Pruned ${stats.pruned} stale manifest entries (files no longer on disk)`);
+  }
+  return messages;
 }

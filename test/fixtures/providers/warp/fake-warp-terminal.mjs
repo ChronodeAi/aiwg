@@ -17,6 +17,7 @@
  * AIWG_FAKE_WORKER_CONFIG ({ scenario, recordPath, knownModels, ... });
  * without it the success scenario runs and nothing is recorded.
  */
+import path from 'node:path';
 import { readFileSync, writeFileSync, writeSync } from 'node:fs';
 
 const config = process.env.AIWG_FAKE_WORKER_CONFIG
@@ -112,7 +113,12 @@ if (config.simulateAuthGate) {
   fail('you are not logged in - please log in with `warp-terminal login` to continue.');
 }
 
-record({ outputFormat, model, cwd, skill, noSnapshot });
+let skillContent;
+if (config.requireSkillFile) {
+  try { skillContent = readFileSync(path.join(cwd, '.agents', 'skills', skill, 'SKILL.md'), 'utf8'); }
+  catch { fail(`skill not found: ${skill}`); }
+}
+record({ outputFormat, model, cwd, skill, noSnapshot, ...(config.requireSkillFile ? { skillContent } : {}) });
 
 switch (scenario) {
   case 'success':

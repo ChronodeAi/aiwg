@@ -27,12 +27,30 @@
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync, renameSync, lstatSync, rmSync } from 'node:fs';
+import { lstat } from 'node:fs/promises';
+import { importImpl } from '../_resolve-impl.mjs';
 import os from 'node:os';
 import { resolve as resolvePath, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
+
+const { executorTokensEqual } = await importImpl(import.meta.url, 'serve/executor-token.mjs');
+const { readPrivateValueFile, resolveSensitiveInput } = await importImpl(import.meta.url, 'auth/sensitive-input.js');
+
+function validateTokenDirectory(tokenPath) {
+  if (process.platform === 'win32') throw new Error('Executor token cache requires native ACL validation on Windows.');
+  let directory;
+  try { directory = lstatSync(dirname(tokenPath)); }
+  catch (error) { if (error.code === 'ENOENT') return; throw new Error('Executor token cache directory cannot be inspected.'); }
+  if (!directory.isDirectory() || directory.isSymbolicLink()
+    || (typeof process.getuid === 'function' && directory.uid !== process.getuid())
+    || (directory.mode & 0o077) !== 0) {
+    throw new Error('Executor token cache directory must be an owned, private directory (chmod 700), not a symlink.');
+  }
+}
 
 // ── HITL detector patterns (pluggable via addHitlPattern) ────────────────────
 
@@ -90,6 +108,8 @@ export class ExecutorShim extends EventEmitter {
    * @param {string} opts.wsBase              WS base URL as seen by aiwg-serve (e.g. ws://127.0.0.1:8200)
    * @param {string} opts.aiwgServeUrl        Registration target URL (e.g. http://127.0.0.1:7337)
    * @param {string[]} [opts.hitlPatterns]    Additional HITL regex patterns
+   * @param {string} [opts.tokenPath]        Private token cache for restart authentication
+   * @param {string} [opts.token]            Existing token, e.g. when migrating an older identity
    */
   constructor(opts) {
     super();
@@ -136,7 +156,9 @@ export class ExecutorShim extends EventEmitter {
      * Token issued by aiwg-serve on register. Stored for reuse.
      * @type {string|null}
      */
-    this._token = null;
+    this._token = opts.token ?? null;
+    this.tokenPath = opts.tokenPath;
+
 
     /**
      * Per-mission stdout buffer used for HITL pattern detection.
@@ -164,6 +186,22 @@ export class ExecutorShim extends EventEmitter {
    * Resolves with the issued token.
    */
   async register(retryCount = 0) {
+    if (this.tokenPath) validateTokenDirectory(this.tokenPath);
+    if (this.tokenPath && !this._token) {
+      let present = true;
+      try { await lstat(this.tokenPath); }
+      catch (error) { if (error.code === 'ENOENT') present = false; else throw new Error('Executor token cache cannot be inspected.'); }
+      if (present) {
+        const raw = await readPrivateValueFile(this.tokenPath, 'Executor token cache');
+        let saved;
+        try { saved = JSON.parse(raw); }
+        catch { throw new Error('Executor token cache contains invalid JSON.'); }
+        if (saved.executor_id === this.executorId && saved.serve_url === this.aiwgServeUrl
+          && typeof saved.token === 'string' && saved.token) {
+          this._token = await resolveSensitiveInput({ env: 'CACHED_EXECUTOR_TOKEN', prefix: 'token' }, { readEnv: () => saved.token });
+        }
+      }
+    }
     const payload = {
       executor_id:          this.executorId,
       name:                 this.name,
@@ -182,29 +220,42 @@ export class ExecutorShim extends EventEmitter {
       ],
     };
 
+    let registered = false;
     try {
       const res = await fetch(`${this.aiwgServeUrl}/api/v1/executors/register`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(this._token ? { Authorization: `Bearer ${this._token}` } : {}) },
         body:    JSON.stringify(payload),
       });
 
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`register HTTP ${res.status}: ${text}`);
+        throw new Error(`register HTTP ${res.status}`);
       }
 
-      const body = await res.json();
-      this._token = body.token;
-      this.emit('registered', { executorId: this.executorId, token: this._token });
+      registered = true;
+      let body;
+      try { body = await res.json(); }
+      catch { throw new Error('Executor registration returned invalid JSON.'); }
+      this._token = await resolveSensitiveInput({ env: 'ISSUED_EXECUTOR_TOKEN', prefix: 'token' }, { readEnv: () => body.token });
+      if (this.tokenPath) {
+        mkdirSync(dirname(this.tokenPath), { recursive: true, mode: 0o700 });
+        validateTokenDirectory(this.tokenPath);
+        const tmp = `${this.tokenPath}.${randomUUID()}.tmp`;
+        try {
+          writeFileSync(tmp, JSON.stringify({ executor_id: this.executorId, serve_url: this.aiwgServeUrl, token: this._token }),
+            { mode: 0o600, flag: 'wx' });
+          renameSync(tmp, this.tokenPath);
+        } finally { rmSync(tmp, { force: true }); }
+      }
+      this.emit('registered', { executorId: this.executorId });
       return this._token;
     } catch (err) {
-      if (retryCount < 8) {
+      if (!registered && retryCount < 8) {
         const delay = Math.min(30_000, 250 * (2 ** retryCount));
         await new Promise(r => setTimeout(r, delay));
         return this.register(retryCount + 1);
       }
-      throw err;
+      throw new Error(this._token ? String(err.message).split(this._token).join('[REDACTED]') : String(err.message));
     }
   }
 
@@ -684,7 +735,7 @@ export async function startExecutorServer(shim, opts) {
   function checkBearer(req) {
     const auth = req.header('Authorization') ?? '';
     const t = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    return t === token;
+    return executorTokensEqual(token, t);
   }
 
   // ── Hono app ───────────────────────────────────────────────────────────────
@@ -842,7 +893,7 @@ export async function startExecutorServer(shim, opts) {
       const executorIdParam = match[1];
       const tkParam         = url.searchParams.get('token') ?? '';
 
-      if (executorIdParam !== shim.executorId || tkParam !== token) {
+      if (executorIdParam !== shim.executorId || !executorTokensEqual(token, tkParam)) {
         socket.destroy();
         return;
       }

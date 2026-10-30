@@ -1,0 +1,1076 @@
+{
+  "issue": 2945,
+  "lane": "secops",
+  "disposition_authority": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+  "scope": "Only 21 assigned rules, their existing generated plugin copy, and lane-owned test/UAT files; no model calls.",
+  "activation_counts": {
+    "kernel": 2,
+    "summary": 6,
+    "bound": 9,
+    "paths": 4,
+    "on-demand": 0
+  },
+  "rules": [
+    {
+      "name": "evidence-integrity",
+      "source": "agentic/code/frameworks/forensics-complete/rules/evidence-integrity.md",
+      "activation": "bound",
+      "enforcement": "critical",
+      "summary": "Hash evidence at collection, verify before analysis and reporting, preserve originals, and record timestamped custody transfers.",
+      "summary_codepoints": 128,
+      "bound_to": {
+        "agents": [
+          "cloud-analyst",
+          "container-analyst",
+          "forensic-acquisition-agent",
+          "forensics-orchestrator",
+          "ioc-analyst",
+          "log-analyst",
+          "memory-analyst",
+          "network-analyst",
+          "persistence-hunter",
+          "recon-agent",
+          "reporting-agent",
+          "timeline-builder",
+          "triage-agent"
+        ],
+        "skills": [
+          "cloud-forensics",
+          "container-forensics",
+          "evidence-preservation",
+          "forensics-acquire",
+          "forensics-hunt",
+          "forensics-investigate",
+          "forensics-ioc",
+          "forensics-profile",
+          "forensics-report",
+          "forensics-status",
+          "forensics-timeline",
+          "forensics-triage",
+          "ioc-extraction",
+          "linux-forensics",
+          "log-analysis",
+          "memory-forensics",
+          "sigma-hunting",
+          "supply-chain-forensics",
+          "target-profiling"
+        ]
+      },
+      "binding_pair_count": 32
+    },
+    {
+      "name": "non-destructive",
+      "source": "agentic/code/frameworks/forensics-complete/rules/non-destructive.md",
+      "activation": "bound",
+      "enforcement": "critical",
+      "summary": "Keep evidence sources read-only, write only to the investigation workspace, and obtain documented authorization before containment or any destructive exception.",
+      "summary_codepoints": 160,
+      "bound_to": {
+        "agents": [
+          "cloud-analyst",
+          "container-analyst",
+          "forensic-acquisition-agent",
+          "forensics-orchestrator",
+          "ioc-analyst",
+          "log-analyst",
+          "memory-analyst",
+          "network-analyst",
+          "persistence-hunter",
+          "recon-agent",
+          "reporting-agent",
+          "timeline-builder",
+          "triage-agent"
+        ],
+        "skills": [
+          "cloud-forensics",
+          "container-forensics",
+          "evidence-preservation",
+          "forensics-acquire",
+          "forensics-hunt",
+          "forensics-investigate",
+          "forensics-ioc",
+          "forensics-profile",
+          "forensics-report",
+          "forensics-status",
+          "forensics-timeline",
+          "forensics-triage",
+          "ioc-extraction",
+          "linux-forensics",
+          "log-analysis",
+          "memory-forensics",
+          "sigma-hunting",
+          "supply-chain-forensics",
+          "target-profiling"
+        ]
+      },
+      "binding_pair_count": 32
+    },
+    {
+      "name": "red-flag-escalation",
+      "source": "agentic/code/frameworks/forensics-complete/rules/red-flag-escalation.md",
+      "activation": "bound",
+      "enforcement": "critical",
+      "summary": "Pause forensic analysis on any defined red flag, log the finding, alert the operator, and await explicit instructions without remediation.",
+      "summary_codepoints": 138,
+      "bound_to": {
+        "agents": [
+          "cloud-analyst",
+          "container-analyst",
+          "forensic-acquisition-agent",
+          "forensics-orchestrator",
+          "ioc-analyst",
+          "log-analyst",
+          "memory-analyst",
+          "network-analyst",
+          "persistence-hunter",
+          "recon-agent",
+          "reporting-agent",
+          "timeline-builder",
+          "triage-agent"
+        ],
+        "skills": [
+          "cloud-forensics",
+          "container-forensics",
+          "evidence-preservation",
+          "forensics-acquire",
+          "forensics-hunt",
+          "forensics-investigate",
+          "forensics-ioc",
+          "forensics-profile",
+          "forensics-report",
+          "forensics-status",
+          "forensics-timeline",
+          "forensics-triage",
+          "ioc-extraction",
+          "linux-forensics",
+          "log-analysis",
+          "memory-forensics",
+          "sigma-hunting",
+          "supply-chain-forensics",
+          "target-profiling"
+        ]
+      },
+      "binding_pair_count": 32
+    },
+    {
+      "name": "volatility-order",
+      "source": "agentic/code/frameworks/forensics-complete/rules/volatility-order.md",
+      "activation": "bound",
+      "enforcement": "high",
+      "summary": "Capture volatile evidence before disk scans or imaging; follow the collection levels, document skipped levels, and timestamp every collection step.",
+      "summary_codepoints": 147,
+      "bound_to": {
+        "agents": [
+          "triage-agent",
+          "memory-analyst",
+          "network-analyst",
+          "forensic-acquisition-agent",
+          "forensics-orchestrator",
+          "recon-agent",
+          "cloud-analyst",
+          "container-analyst"
+        ],
+        "skills": [
+          "forensics-triage",
+          "forensics-acquire",
+          "forensics-investigate",
+          "forensics-profile",
+          "target-profiling",
+          "memory-forensics",
+          "linux-forensics",
+          "cloud-forensics",
+          "container-forensics",
+          "evidence-preservation"
+        ]
+      },
+      "binding_pair_count": 18
+    },
+    {
+      "name": "ops-cross-repo",
+      "source": "agentic/code/frameworks/ops-complete/rules/ops-cross-repo.md",
+      "activation": "summary",
+      "enforcement": "high",
+      "summary": "Place ops changes in the owning repository, qualify cross-repo references, declare dependencies, assess host/service impact, and gate cross-repo disclosure.",
+      "summary_codepoints": 156,
+      "bound_to": {
+        "agents": [
+          "backup-verifier",
+          "cert-lifecycle-monitor",
+          "dr-planner",
+          "identity-auditor",
+          "network-auditor",
+          "ops-deployment-manager",
+          "ops-inventory",
+          "ops-runbook-executor",
+          "pki-operator",
+          "secret-operator",
+          "stream-health-monitor",
+          "sys-host-profiler"
+        ],
+        "skills": [
+          "ops-audit-trail",
+          "ops-verify",
+          "dev-builder-audit",
+          "dev-ci-builder",
+          "dev-pipeline-audit",
+          "dev-release-coordinate",
+          "it-asset-sync",
+          "it-deployment-lifecycle",
+          "it-dr-test",
+          "it-identity-audit",
+          "it-network-state",
+          "it-provision",
+          "net-connectivity-test",
+          "net-dns-check",
+          "net-vlan-audit",
+          "repo-maintainer",
+          "sec-access-snapshot",
+          "sec-cert-scan",
+          "sec-luks-verify",
+          "stream-deploy",
+          "stream-health",
+          "sys-cert-check",
+          "sys-fleet-inventory",
+          "sys-host-audit"
+        ]
+      },
+      "binding_pair_count": 36
+    },
+    {
+      "name": "ops-documentation",
+      "source": "agentic/code/frameworks/ops-complete/rules/ops-documentation.md",
+      "activation": "bound",
+      "enforcement": "high",
+      "summary": "Write executable, classified ops documents with the required eight sections, explicit commands, expected output, verification, and a successful destination gate.",
+      "summary_codepoints": 161,
+      "bound_to": {
+        "agents": [
+          "backup-verifier",
+          "cert-lifecycle-monitor",
+          "dr-planner",
+          "identity-auditor",
+          "network-auditor",
+          "ops-deployment-manager",
+          "ops-inventory",
+          "ops-runbook-executor",
+          "pki-operator",
+          "secret-operator",
+          "stream-health-monitor",
+          "sys-host-profiler"
+        ],
+        "skills": [
+          "ops-audit-trail",
+          "ops-verify",
+          "dev-builder-audit",
+          "dev-ci-builder",
+          "dev-pipeline-audit",
+          "dev-release-coordinate",
+          "it-asset-sync",
+          "it-deployment-lifecycle",
+          "it-dr-test",
+          "it-identity-audit",
+          "it-network-state",
+          "it-provision",
+          "net-connectivity-test",
+          "net-dns-check",
+          "net-vlan-audit",
+          "repo-maintainer",
+          "sec-access-snapshot",
+          "sec-cert-scan",
+          "sec-luks-verify",
+          "stream-deploy",
+          "stream-health",
+          "sys-cert-check",
+          "sys-fleet-inventory",
+          "sys-host-audit"
+        ]
+      },
+      "binding_pair_count": 36
+    },
+    {
+      "name": "ops-information-governance",
+      "source": "agentic/code/frameworks/ops-complete/rules/ops-information-governance.md",
+      "activation": "kernel",
+      "enforcement": "critical",
+      "summary": "Classify, minimize, redact, authorize the named sink, and attach retention metadata before any operational payload reaches a response or persistent destination.",
+      "summary_codepoints": 160,
+      "binding_pair_count": 0
+    },
+    {
+      "name": "ops-issue-tracking",
+      "source": "agentic/code/frameworks/ops-complete/rules/ops-issue-tracking.md",
+      "activation": "bound",
+      "enforcement": "medium",
+      "summary": "Use standard ops labels, phased issues, qualified dependencies, commit links, checkpoint updates, and sink-gated sanitized tracker content.",
+      "summary_codepoints": 139,
+      "bound_to": {
+        "agents": [
+          "backup-verifier",
+          "cert-lifecycle-monitor",
+          "dr-planner",
+          "identity-auditor",
+          "network-auditor",
+          "ops-deployment-manager",
+          "ops-inventory",
+          "ops-runbook-executor",
+          "pki-operator",
+          "secret-operator",
+          "stream-health-monitor",
+          "sys-host-profiler"
+        ],
+        "skills": [
+          "ops-audit-trail",
+          "ops-verify",
+          "dev-builder-audit",
+          "dev-ci-builder",
+          "dev-pipeline-audit",
+          "dev-release-coordinate",
+          "it-asset-sync",
+          "it-deployment-lifecycle",
+          "it-dr-test",
+          "it-identity-audit",
+          "it-network-state",
+          "it-provision",
+          "net-connectivity-test",
+          "net-dns-check",
+          "net-vlan-audit",
+          "repo-maintainer",
+          "sec-access-snapshot",
+          "sec-cert-scan",
+          "sec-luks-verify",
+          "stream-deploy",
+          "stream-health",
+          "sys-cert-check",
+          "sys-fleet-inventory",
+          "sys-host-audit"
+        ]
+      },
+      "binding_pair_count": 36
+    },
+    {
+      "name": "ops-safety",
+      "source": "agentic/code/frameworks/ops-complete/rules/ops-safety.md",
+      "activation": "kernel",
+      "enforcement": "critical",
+      "summary": "Assess blast radius before commands; require human approval for destructive or cross-host changes, dry-run high-risk operations, and sanitize collected output.",
+      "summary_codepoints": 159,
+      "binding_pair_count": 0
+    },
+    {
+      "name": "api-abi-stability",
+      "source": "agentic/code/frameworks/security-engineering/rules/api-abi-stability.md",
+      "activation": "bound",
+      "enforcement": "high",
+      "summary": "Preserve declared stable API/ABI contracts, use compatible release versions, and document deprecations for two minor releases before removal.",
+      "summary_codepoints": 141,
+      "bound_to": {
+        "agents": [
+          "architecture-designer",
+          "code-reviewer",
+          "deployment-manager",
+          "software-implementer"
+        ],
+        "skills": [
+          "deprecation-policy",
+          "flow-release"
+        ],
+        "flows": [
+          "flow-release"
+        ]
+      },
+      "binding_pair_count": 7
+    },
+    {
+      "name": "banned-apis",
+      "source": "agentic/code/frameworks/security-engineering/rules/banned-apis.md",
+      "activation": "paths",
+      "enforcement": "high",
+      "summary": "Apply the project language/path banlist, use approved replacements, and record justified AIWG-allow exceptions before accepting forbidden API calls.",
+      "summary_codepoints": 148,
+      "bound_to": {
+        "agents": [
+          "applied-cryptographer",
+          "code-reviewer",
+          "security-auditor",
+          "software-implementer"
+        ],
+        "skills": [
+          "banned-api-audit"
+        ]
+      },
+      "paths": [
+        "**/*",
+        ".aiwg/security/banned-apis.yaml"
+      ],
+      "binding_pair_count": 5
+    },
+    {
+      "name": "ci-action-pinning",
+      "source": "agentic/code/frameworks/security-engineering/rules/ci-action-pinning.md",
+      "activation": "paths",
+      "enforcement": "high",
+      "summary": "Pin CI actions to full commit SHAs and images to versioned SHA-256 digests; retain version comments and update the reviewed pin manifest together.",
+      "summary_codepoints": 146,
+      "bound_to": {
+        "agents": [
+          "build-engineer",
+          "devops-engineer",
+          "security-auditor",
+          "secure-bootstrap-reviewer"
+        ],
+        "skills": [
+          "ci-workflow-audit",
+          "supply-chain-trust",
+          "supply-chain-hardening-quickstart",
+          "dev-ci-builder",
+          "dev-pipeline-audit"
+        ]
+      },
+      "paths": [
+        ".github/workflows/**",
+        ".gitea/workflows/**",
+        ".gitlab-ci.yml",
+        ".gitlab/ci/**",
+        ".circleci/**",
+        ".buildkite/**",
+        "azure-pipelines*.yml",
+        "Jenkinsfile",
+        "ci/digests.txt"
+      ],
+      "binding_pair_count": 9
+    },
+    {
+      "name": "committer-2fa-required",
+      "source": "agentic/code/frameworks/security-engineering/rules/committer-2fa-required.md",
+      "activation": "bound",
+      "enforcement": "high",
+      "summary": "Require platform-enforced strong 2FA for every committer with write access; prefer hardware keys and store recovery credentials outside the repository.",
+      "summary_codepoints": 151,
+      "bound_to": {
+        "agents": [
+          "security-auditor",
+          "deployment-manager",
+          "secure-bootstrap-reviewer"
+        ],
+        "skills": [
+          "committer-2fa-audit",
+          "supply-chain-trust",
+          "supply-chain-hardening-quickstart"
+        ]
+      },
+      "binding_pair_count": 6
+    },
+    {
+      "name": "crypto-flag-verification",
+      "source": "agentic/code/frameworks/security-engineering/rules/crypto-flag-verification.md",
+      "activation": "summary",
+      "enforcement": "high",
+      "summary": "Specify and verify crypto CLI mode, KDF, and cost parameters explicitly; use authenticated encryption, protect key input, and reject silent defaults.",
+      "summary_codepoints": 149,
+      "bound_to": {
+        "agents": [
+          "applied-cryptographer",
+          "code-reviewer",
+          "security-auditor",
+          "software-implementer"
+        ],
+        "skills": [
+          "crypto-primitive-selection",
+          "auth-factor-design",
+          "chain-of-trust-design",
+          "secret-handling-runtime"
+        ]
+      },
+      "binding_pair_count": 8
+    },
+    {
+      "name": "dependency-source-policy",
+      "source": "agentic/code/frameworks/security-engineering/rules/dependency-source-policy.md",
+      "activation": "paths",
+      "enforcement": "high",
+      "summary": "Use registry dependency sources in manifests and transitive lock entries; require current documented exceptions and block exotic pnpm subdependencies.",
+      "summary_codepoints": 150,
+      "bound_to": {
+        "agents": [
+          "security-auditor",
+          "secure-bootstrap-reviewer",
+          "build-engineer",
+          "devops-engineer",
+          "code-reviewer"
+        ],
+        "skills": [
+          "npm-supply-chain-audit",
+          "supply-chain-trust",
+          "supply-chain-hardening-quickstart",
+          "npm-release-age-gate",
+          "pnpm-release-age-gate",
+          "yarn-release-age-gate",
+          "bun-release-age-gate"
+        ]
+      },
+      "paths": [
+        "**/package.json",
+        "**/package-lock.json",
+        "**/npm-shrinkwrap.json",
+        "**/pnpm-lock.yaml",
+        "**/pnpm-workspace.yaml",
+        "**/yarn.lock",
+        "**/bun.lock",
+        "**/bun.lockb",
+        "**/.npmrc",
+        ".aiwg/security/dep-source-allowlist.yaml"
+      ],
+      "binding_pair_count": 12
+    },
+    {
+      "name": "no-adhoc-kdf",
+      "source": "agentic/code/frameworks/security-engineering/rules/no-adhoc-kdf.md",
+      "activation": "summary",
+      "enforcement": "high",
+      "summary": "Use established KDFs matched to input entropy: HKDF for high-entropy secrets and Argon2id or appropriately costed PBKDF2 for passwords; never invent derivation.",
+      "summary_codepoints": 160,
+      "bound_to": {
+        "agents": [
+          "applied-cryptographer",
+          "code-reviewer",
+          "security-auditor",
+          "software-implementer"
+        ],
+        "skills": [
+          "crypto-primitive-selection",
+          "auth-factor-design",
+          "chain-of-trust-design",
+          "secret-handling-runtime"
+        ]
+      },
+      "binding_pair_count": 8
+    },
+    {
+      "name": "no-binary-blobs",
+      "source": "agentic/code/frameworks/security-engineering/rules/no-binary-blobs.md",
+      "activation": "bound",
+      "enforcement": "medium",
+      "summary": "Keep committed binaries out of source repositories unless documented fixture, asset, attestation, or governed vendoring exceptions apply.",
+      "summary_codepoints": 137,
+      "bound_to": {
+        "agents": [
+          "code-reviewer",
+          "security-auditor",
+          "deployment-manager"
+        ],
+        "skills": [
+          "binary-blob-audit",
+          "supply-chain-trust"
+        ]
+      },
+      "binding_pair_count": 5
+    },
+    {
+      "name": "no-confusable-unicode",
+      "source": "agentic/code/frameworks/security-engineering/rules/no-confusable-unicode.md",
+      "activation": "summary",
+      "enforcement": "high",
+      "summary": "Reject unallowlisted bidi controls, zero-width characters, mixed-script identifiers, and confusable dependency names in source and release or review text.",
+      "summary_codepoints": 154,
+      "bound_to": {
+        "agents": [
+          "code-reviewer",
+          "security-auditor",
+          "deployment-manager",
+          "software-implementer"
+        ],
+        "skills": [
+          "confusable-unicode-audit",
+          "security-report",
+          "flow-release"
+        ],
+        "flows": [
+          "flow-release"
+        ]
+      },
+      "binding_pair_count": 8
+    },
+    {
+      "name": "no-key-reuse-across-purposes",
+      "source": "agentic/code/frameworks/security-engineering/rules/no-key-reuse-across-purposes.md",
+      "activation": "summary",
+      "enforcement": "high",
+      "summary": "Use independent cryptographic keys for distinct purposes, derived with HKDF-Expand and unique application- and version-specific domain labels.",
+      "summary_codepoints": 142,
+      "bound_to": {
+        "agents": [
+          "applied-cryptographer",
+          "code-reviewer",
+          "security-auditor",
+          "software-implementer"
+        ],
+        "skills": [
+          "crypto-primitive-selection",
+          "auth-factor-design",
+          "chain-of-trust-design",
+          "secret-handling-runtime"
+        ]
+      },
+      "binding_pair_count": 8
+    },
+    {
+      "name": "no-unauthenticated-encryption",
+      "source": "agentic/code/frameworks/security-engineering/rules/no-unauthenticated-encryption.md",
+      "activation": "summary",
+      "enforcement": "high",
+      "summary": "Use authenticated encryption; legacy unauthenticated modes require a separate MAC with an independent key, verified before decryption or padding processing.",
+      "summary_codepoints": 156,
+      "bound_to": {
+        "agents": [
+          "applied-cryptographer",
+          "code-reviewer",
+          "security-auditor",
+          "software-implementer"
+        ],
+        "skills": [
+          "crypto-primitive-selection",
+          "auth-factor-design",
+          "chain-of-trust-design",
+          "secret-handling-runtime"
+        ]
+      },
+      "binding_pair_count": 8
+    },
+    {
+      "name": "strict-toolchain",
+      "source": "agentic/code/frameworks/security-engineering/rules/strict-toolchain.md",
+      "activation": "paths",
+      "enforcement": "high",
+      "summary": "Define language-specific strict compiler, lint, and typecheck floors in CI; fail new warnings and keep sanitizers or fuzzing as additional coverage.",
+      "summary_codepoints": 148,
+      "bound_to": {
+        "agents": [
+          "build-engineer",
+          "test-engineer",
+          "code-reviewer",
+          "security-auditor"
+        ],
+        "skills": [
+          "strict-toolchain-audit",
+          "sanitizer-in-ci",
+          "fuzzing-in-ci",
+          "ci-workflow-audit",
+          "dev-ci-builder"
+        ]
+      },
+      "paths": [
+        "**/tsconfig*.json",
+        "**/Cargo.toml",
+        "**/clippy.toml",
+        "**/.clippy.toml",
+        "**/go.mod",
+        "**/.golangci.*",
+        "**/pyproject.toml",
+        "**/mypy.ini",
+        "**/.ruff.toml",
+        "**/ruff.toml",
+        "**/Makefile",
+        "**/CMakeLists.txt",
+        "**/meson.build",
+        "**/package.json",
+        "**/eslint.config.*",
+        ".github/workflows/**",
+        ".gitea/workflows/**",
+        ".gitlab-ci.yml"
+      ],
+      "binding_pair_count": 9
+    }
+  ],
+  "critical_decisions": [
+    {
+      "rule": "evidence-integrity",
+      "enforcement": "critical",
+      "activation": "bound",
+      "reason": "Evidence integrity governs forensic collection, analysis, and reporting; every indexed forensic agent and evidence workflow receives it before handling evidence."
+    },
+    {
+      "rule": "non-destructive",
+      "enforcement": "critical",
+      "activation": "bound",
+      "reason": "The prohibition applies to evidence systems during investigation; bindings cover every forensic agent and evidence workflow before source access."
+    },
+    {
+      "rule": "red-flag-escalation",
+      "enforcement": "critical",
+      "activation": "bound",
+      "reason": "The eight red flags govern forensic analysis rather than unrelated turns; all forensic agents and evidence workflows receive the escalation contract."
+    },
+    {
+      "rule": "ops-information-governance",
+      "enforcement": "critical",
+      "activation": "kernel",
+      "reason": "Retain CRITICAL kernel fallback: any agent can disclose collected operational data in its first response or write before selecting an ops artifact."
+    },
+    {
+      "rule": "ops-safety",
+      "enforcement": "critical",
+      "activation": "kernel",
+      "reason": "Retain CRITICAL kernel fallback: any agent can issue a destructive or cross-host command before choosing a specialized operations workflow."
+    }
+  ],
+  "artifact_gaps": [],
+  "kernel_compaction": {
+    "reason": "Retain both universal pre-workflow CRITICAL guards within the Hermes hard cap while preserving the complete imperative requirements.",
+    "rules": [
+      "ops-safety",
+      "ops-information-governance"
+    ],
+    "before_bytes": 15316,
+    "after_bytes": 9816,
+    "removed": "Illustrative shell snippets, repeated warning templates, and duplicated rationale; command categories, approval fields, blast-radius gates, redaction, classification and lifecycle requirements remain."
+  },
+  "gates": {
+    "U2": {
+      "passed": true,
+      "tagged_rules": 21,
+      "total_lane_rules": 21,
+      "summary_max_codepoints": 161,
+      "lint": "pass; unrelated corpus rules still emit migration warnings"
+    },
+    "U3": {
+      "passed": true,
+      "binding_pairs": 315,
+      "distinct_artifacts": 101,
+      "frameworks": [
+        "forensics-complete",
+        "ops-complete",
+        "security-engineering"
+      ],
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "provider_framework_fixtures": 18,
+      "delivered_pair_checks": 1890,
+      "checks": "Every declared binding, exactly one managed block, summary and full-rule pointer, outside startup listings; full retained kernel bodies and summary entries verified."
+    },
+    "U4": {
+      "passed": true,
+      "cli_bound_rule_pair_checks": 315,
+      "distinct_cli_artifact_envelopes": 101,
+      "index": "Framework index force-built in isolated HOME before CLI JSON lookups."
+    },
+    "U5": {
+      "status": "not run; conductor on titan",
+      "schema_validated": true,
+      "probe_file": "test/uat/rule-binding/wave5-secops-probes.yaml",
+      "rules": 21,
+      "probes": 63,
+      "moved_critical_high_rules": 17,
+      "required_moved_rule_probes": 51,
+      "note": "Added probes for all 21 lane rules to satisfy the unchanged schema minimum; kernel and MEDIUM rules receive additional coverage. The base probes.yaml is unchanged. Merge base and lane probe records for the existing runner REQUIRED_RULES check.",
+      "rollback": "Set each failing rule to activation: kernel and remove bound_to/paths as appropriate."
+    },
+    "U6": {
+      "passed": true,
+      "scoped_rules_in_top_three": 19,
+      "index": "Framework index force-built in a separate isolated HOME before discover."
+    },
+    "U7": {
+      "status": "not run; conductor on titan",
+      "negative_probes_added": 21
+    },
+    "U8": {
+      "status": "not run; model dispatch/headroom reserved for conductor"
+    },
+    "U9": {
+      "provider_framework_fixtures_passed": 18,
+      "codex_agents_md_below_32768": true,
+      "hermes_kernel_bodies_complete": true,
+      "existing_fixture_status": "one existing forensic empty-directory scaffold fixture fails",
+      "passed": false,
+      "reason": "All 18 lane provider/framework fixtures and all three fresh CLI deploys pass; full existing-fixture acceptance remains blocked by the independently reproduced empty-directory promotion defect.",
+      "fresh_claude_deploy_exit_codes": {
+        "forensics": 0,
+        "ops": 0,
+        "security-engineering": 0
+      }
+    }
+  },
+  "real_deploy": [
+    {
+      "framework": "forensics",
+      "provider": "claude",
+      "exit_code": 0,
+      "root": "/var/tmp/aiwg-secops-forensics-V3xnbo",
+      "project": "/var/tmp/aiwg-secops-forensics-V3xnbo/project",
+      "home": "/var/tmp/aiwg-secops-forensics-V3xnbo/home",
+      "aiwg_config": "/var/tmp/aiwg-secops-forensics-V3xnbo/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "git_initialization": "Standard empty repository metadata written directly; no git command",
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops/bin/aiwg.mjs",
+        "use",
+        "forensics",
+        "--provider",
+        "claude"
+      ],
+      "log": "/var/tmp/aiwg-secops-VJOPaf/deploy-forensics.log"
+    },
+    {
+      "framework": "ops",
+      "provider": "claude",
+      "exit_code": 0,
+      "root": "/var/tmp/aiwg-secops-ops-cKk6BI",
+      "project": "/var/tmp/aiwg-secops-ops-cKk6BI/project",
+      "home": "/var/tmp/aiwg-secops-ops-cKk6BI/home",
+      "aiwg_config": "/var/tmp/aiwg-secops-ops-cKk6BI/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "git_initialization": "Standard empty repository metadata written directly; no git command",
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops/bin/aiwg.mjs",
+        "use",
+        "ops",
+        "--provider",
+        "claude"
+      ],
+      "log": "/var/tmp/aiwg-secops-VJOPaf/deploy-ops.log"
+    },
+    {
+      "framework": "security-engineering",
+      "provider": "claude",
+      "exit_code": 0,
+      "root": "/var/tmp/aiwg-secops-security-engineering-EWVFqo",
+      "project": "/var/tmp/aiwg-secops-security-engineering-EWVFqo/project",
+      "home": "/var/tmp/aiwg-secops-security-engineering-EWVFqo/home",
+      "aiwg_config": "/var/tmp/aiwg-secops-security-engineering-EWVFqo/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "git_initialization": "Standard empty repository metadata written directly; no git command",
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops/bin/aiwg.mjs",
+        "use",
+        "security-engineering",
+        "--provider",
+        "claude"
+      ],
+      "log": "/var/tmp/aiwg-secops-VJOPaf/deploy-security-engineering.log"
+    }
+  ],
+  "validation": {
+    "build_cli": "pass (initial build and final rebuild)",
+    "typecheck": "pass",
+    "package_plugins": "pass",
+    "plugin_copies": "pass",
+    "rule_activation_lint": "pass (isolated HOME/config)",
+    "rule_triggers": "pass",
+    "unit_and_framework_tests": {
+      "distinct_tests": 394,
+      "passed": 393,
+      "failed": 1,
+      "failures": [
+        {
+          "name": "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops/test/integration/forensics-complete.test.ts:43:Deployment Scaffold aiwg use forensics creates the framework-scoped DFIR workspace scaffold",
+          "file": "/home/roctinam/dev/jmagly/aiwg-wt/w5-secops/test/integration/forensics-complete.test.ts",
+          "status": "failed"
+        }
+      ],
+      "reports": [
+        "/var/tmp/aiwg-secops-final-tests.json",
+        "/var/tmp/aiwg-secops-VJOPaf/fixture-recheck.json",
+        "/var/tmp/aiwg-secops-provider-final.json"
+      ],
+      "new_lane_test": {
+        "passed": 22,
+        "provider_framework_cases": 18,
+        "latest_focused_recheck": "20 passed, 2 previously passing CLI/discovery tests deselected after broadening banlist paths to cover arbitrary languages."
+      }
+    },
+    "orchestration_conformance": {
+      "passed": 932,
+      "failed": 0,
+      "files": 36,
+      "config": "config/vitest.config.js",
+      "maxWorkers": 4,
+      "note": "Vitest API overrides only include/exclude to admit orchestrationConformanceFiles; all provider transports use offline fixtures."
+    },
+    "ci_lints": [
+      {
+        "name": "typecheck",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/typecheck.log"
+      },
+      {
+        "name": "lint:dep-sources",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-dep-sources.log"
+      },
+      {
+        "name": "lint:eval-imports",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-eval-imports.log"
+      },
+      {
+        "name": "lint:package-license-boundary",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-package-license-boundary.log",
+        "retry_log": "/var/tmp/aiwg-secops-VJOPaf/lint-package-license-boundary.log",
+        "initial_failure": "Shared /tmp tmpfs filled; successful retry used TMPDIR=/var/tmp."
+      },
+      {
+        "name": "lint:agent-sizes",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-agent-sizes.log"
+      },
+      {
+        "name": "lint:test-registration",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-test-registration.log"
+      },
+      {
+        "name": "lint:test-process-timeouts",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-test-process-timeouts.log"
+      },
+      {
+        "name": "lint:orchestration-packs",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-orchestration-packs.log"
+      },
+      {
+        "name": "lint:schemas",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-schemas.log"
+      },
+      {
+        "name": "lint:ops-templates",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-ops-templates.log"
+      },
+      {
+        "name": "lint:mission-inventory",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-mission-inventory.log"
+      },
+      {
+        "name": "lint:mission-contract",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-mission-contract.log"
+      },
+      {
+        "name": "lint:vault-migration",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-vault-migration.log"
+      },
+      {
+        "name": "lint:session-fixtures",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-session-fixtures.log"
+      },
+      {
+        "name": "lint:plugin-copies",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-plugin-copies.log"
+      },
+      {
+        "name": "lint:rule-triggers",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-rule-triggers.log"
+      },
+      {
+        "name": "lint:rule-activation",
+        "exit_code": 0,
+        "log": "/tmp/aiwg-secops-1Pz0wt/lint-rule-activation.log"
+      }
+    ],
+    "omitted_ci_lints": [
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Requires registry network access, prohibited by task."
+      },
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Invokes git ls-files, prohibited by task; performed filesystem hashes against a pre-edit snapshot instead."
+      },
+      {
+        "script": "lint:affected-packages",
+        "reason": "Conditional CI gate requires an external CSV feed not supplied; no network permitted."
+      }
+    ],
+    "filesystem_scope_audit": {
+      "changed_assigned_rules": 21,
+      "regenerated_existing_plugin_copies": 1,
+      "new_lane_test_and_uat_files": 4,
+      "outside_assignment_changes": 0,
+      "deleted_existing_files": 0,
+      "generated_lint_artifacts": "Moved to system-temp evidence directory; none retained outside lane assignment."
+    }
+  },
+  "existing_scaffold_defect": {
+    "test": "test/integration/forensics-complete.test.ts:438",
+    "observed": "CLI exits 0; empty case directories are absent after staging promotion.",
+    "control": {
+      "source_has_rules": false,
+      "direct": {
+        "profiles": true,
+        "plans": true,
+        "triage": true,
+        "evidence": true,
+        "findings": true,
+        "timelines": true,
+        "iocs": true,
+        "reports": true,
+        "sigma": true,
+        "chain-of-custody.md": true
+      },
+      "staged": {
+        "profiles": false,
+        "plans": false,
+        "triage": false,
+        "evidence": false,
+        "findings": false,
+        "timelines": false,
+        "iocs": false,
+        "reports": false,
+        "sigma": false,
+        "chain-of-custody.md": true
+      }
+    },
+    "cause": "tools/agents/providers/rule-delivery.mjs promotes files but not empty directories. A source containing only the unmodified forensic manifest and custody template, with zero rule files, reproduces the defect.",
+    "scope": "Deployer and existing fixture are outside this lane assignment and were not edited."
+  },
+  "constraints": "Writes confined to worktree and system temp; no direct git commands, network acquisitions, installs, tracker writes, subagents, or model calls. Exception: the broader test/unit/ops/registry.test.ts suite internally initialized/configured disposable temporary Git repositories; this violated the no-git limit and was not repeated. Vitest runs were serial within this lane with nice -n 19, base config and maxWorkers=4.",
+  "evidence": {
+    "temporary_logs": "/var/tmp/aiwg-secops-VJOPaf",
+    "first_attempt_logs": "/tmp/aiwg-secops-1Pz0wt",
+    "source_changes": "/tmp/aiwg-secops-changes.json"
+  }
+}

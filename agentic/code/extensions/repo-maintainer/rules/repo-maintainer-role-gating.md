@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Verify the operator role, configured tracker authority, and required tier before repository maintenance writes.
 enforcement: high
 ---
 

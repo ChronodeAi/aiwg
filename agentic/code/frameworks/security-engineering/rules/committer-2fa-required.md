@@ -2,8 +2,28 @@
 enforcement: high
 id: committer-2fa-required
 severity: HIGH
-applies_to: [all-agents, security-auditor, release-manager]
-tags: [source-control, 2fa, mfa, committer-governance]
+applies_to:
+  - all-agents
+  - security-auditor
+  - release-manager
+tags:
+  - source-control
+  - 2fa
+  - mfa
+  - committer-governance
+activation: bound
+summary: Require platform-enforced strong 2FA for every committer with write access; prefer hardware keys and store recovery credentials outside the repository.
+bound_to:
+  agents:
+    - security-auditor
+    - deployment-manager
+    - secure-bootstrap-reviewer
+  skills:
+    - committer-2fa-audit
+    - supply-chain-trust
+    - supply-chain-hardening-quickstart
+triggers:
+  - require two factor authentication for repository committers
 ---
 
 # Committer 2FA Required

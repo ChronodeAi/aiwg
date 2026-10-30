@@ -1,4 +1,8 @@
 ---
+activation: bound
+summary: "Apply mention-only group participation and restrict replies to the configured business domain; confirm expensive work."
+bound_to:
+  agents: [fleet-business-bot]
 name: quiet-business-bot
 version: 1.0.0
 description: Strict business-domain variant of quiet-bot for Quickbooksbot-style deployments.

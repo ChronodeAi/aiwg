@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { ArtifactIndex, MetadataEntry, OperationalDiscoveryType } from './types.js';
-import { OPERATIONAL_DISCOVERY_TYPES } from './types.js';
+import { getGraphIndexDir, OPERATIONAL_DISCOVERY_TYPES } from './types.js';
+import { getFrameworkIndexBaseDir } from './framework-index-paths.js';
 import { loadGraphIndexFile } from './index-reader.js';
 import { loadFortemiCoreExport, loadFortemiCoreMetadataEntries, scoreStaticRecord } from './fortemi-core-query-adapter.js';
 import { discoverCapability } from './query-engine.js';
@@ -206,8 +207,9 @@ export function calculateDiscoveryMetrics(records: DiscoveryRelevanceQuery[], re
   };
 }
 
-function indexBytes(backend: DiscoveryEvalBackend): number {
-  const root = path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share'), 'aiwg', 'index', ...(backend === 'local' ? ['framework'] : ['fortemi-core', 'framework']));
+function indexBytes(cwd: string, backend: DiscoveryEvalBackend): number {
+  const root = backend === 'local' ? getGraphIndexDir(cwd, 'framework')
+    : path.join(getFrameworkIndexBaseDir(cwd), 'fortemi-core', 'framework');
   let total = 0;
   const visit = (target: string): void => {
     if (!fs.existsSync(target)) return;
@@ -271,7 +273,7 @@ export async function evaluateDiscovery(options: {
     configuration: { backend: options.backend, strategy: options.strategy, limit, graph: 'framework' },
     hardware: { platform: os.platform(), arch: os.arch(), cpu_model: cpus[0]?.model ?? 'unknown', logical_cpus: cpus.length, total_memory_bytes: os.totalmem(), node: process.version },
     metrics,
-    performance: { p50_latency_ms: round(percentile(latencies, 0.5), 3), p95_latency_ms: round(percentile(latencies, 0.95), 3), index_bytes: indexBytes(options.backend), peak_resident_memory_bytes: peakRss },
+    performance: { p50_latency_ms: round(percentile(latencies, 0.5), 3), p95_latency_ms: round(percentile(latencies, 0.95), 3), index_bytes: indexBytes(options.cwd, options.backend), peak_resident_memory_bytes: peakRss },
     ...(parity ? { parity } : {}),
     adoption_gate: {
       baseline: 'local:lexical', no_per_type_hit_at_3_regression: null, aggregate_mrr_improvement: null,

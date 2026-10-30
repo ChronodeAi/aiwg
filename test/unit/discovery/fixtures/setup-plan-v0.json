@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 0,
+  "id": "setup-demo",
+  "inventoryId": "inventory-demo",
+  "createdAt": "2026-10-24T12:00:00.000Z",
+  "answers": {
+    "provider": {
+      "value": "codex",
+      "source": "explicit-flag",
+      "answeredAt": "2026-10-24T12:00:00.000Z"
+    },
+    "apiKey": {
+      "value": {
+        "kind": "credential-ref",
+        "source": "env",
+        "name": "OPENAI_API_KEY"
+      },
+      "source": "interview",
+      "answeredAt": "2026-10-24T12:00:00.000Z"
+    }
+  },
+  "recommendations": [
+    {
+      "questionId": "scope",
+      "value": "project",
+      "reason": "Keep this workspace selection local."
+    }
+  ],
+  "unresolvedChoices": [
+    {
+      "questionId": "scope",
+      "options": [
+        {
+          "label": "Project",
+          "value": "project"
+        },
+        {
+          "label": "User",
+          "value": "user"
+        }
+      ],
+      "default": "project",
+      "whyItMatters": "Controls which workspaces receive the configuration."
+    }
+  ],
+  "actions": [
+    {
+      "id": "configure",
+      "workspace": "/example/project",
+      "provider": "codex",
+      "scope": "project",
+      "kind": "configure-provider",
+      "dependsOn": [
+        {
+          "kind": "path",
+          "workspace": "/example/project",
+          "path": "/example/project/package.json"
+        },
+        {
+          "kind": "tool",
+          "executable": "codex",
+          "field": "version"
+        }
+      ]
+    },
+    {
+      "id": "verify",
+      "workspace": "/example/project",
+      "provider": "codex",
+      "scope": "project",
+      "kind": "verify-provider",
+      "dependsOn": [
+        {
+          "kind": "project",
+          "root": "/example/project",
+          "field": "layout"
+        }
+      ]
+    }
+  ],
+  "inventory": {
+    "projects": [
+      {
+        "root": "/example/project",
+        "sources": [
+          "workspace"
+        ],
+        "vcs": "git",
+        "layout": "project",
+        "packageManifest": "/example/project/package.json",
+        "workspacePatterns": [],
+        "packageRoots": [],
+        "aiwg": {
+          "directory": false,
+          "configFile": null,
+          "contextFile": null
+        },
+        "providerFiles": []
+      }
+    ],
+    "tools": [
+      {
+        "executable": "codex",
+        "path": "/example/bin/codex",
+        "installed": "yes",
+        "configured": "no",
+        "authenticated": "unknown",
+        "qualified": "unknown",
+        "version": "1.0.0",
+        "evidence": []
+      }
+    ],
+    "diagnostics": [],
+    "limits": {
+      "maxDepth": 4,
+      "maxEntries": 20000,
+      "timeBudgetMs": 2000,
+      "maxFileBytes": 262144
+    },
+    "stats": {
+      "entriesInspected": 5,
+      "elapsedMs": 1,
+      "truncated": false
+    }
+  }
+}

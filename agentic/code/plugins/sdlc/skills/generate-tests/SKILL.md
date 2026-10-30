@@ -80,6 +80,6 @@ I'll adapt to your project's testing framework (Jest, Vitest, Cypress, etc.) and
 ## References
 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/research-before-decision.md — Examine existing test patterns before generating new tests; match project conventions
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Never skip test cases or weaken assertions to make coverage targets easier to hit
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Never skip test cases or weaken assertions to make coverage targets easier to hit
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md — Execute generated tests before returning; retry on failure with root cause analysis
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/security-gate/SKILL.md — Security gate may require test evidence before approving a release

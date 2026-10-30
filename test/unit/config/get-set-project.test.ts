@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import Ajv from 'ajv';
 
 import { main } from '../../../src/config/cli.js';
 import { EXIT_CODES } from '../../../src/cli/errors.js';
@@ -41,6 +42,123 @@ describe('aiwg config get|set --project (#1006)', () => {
   afterEach(() => {
     consoleSpy?.mockRestore();
     rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('warns after semantic parallelism changes with all provider refresh targets', async () => {
+    const { emptyConfig, writeAiwgConfig } = await import('../../../src/config/aiwg-config.js');
+    const cfg = emptyConfig(['claude', 'codex']);
+    cfg.installed = { example: { version: '1', source: 'bundled', installedAt: '2026-01-01', deployedTo: {
+      hermes: { agents: 0, commands: 0, skills: 0, rules: 0 },
+      codex: { agents: 0, commands: 0, skills: 0, rules: 0 },
+    } } };
+    await writeAiwgConfig(tmp, cfg);
+    const warning = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', '10', '--target', tmp]);
+      expect(logs.at(-1)).toBe('Set --project parallelism.max_parallel_subagents = 10');
+      expect(readConfig(tmp)).toMatchObject({ parallelism: { max_parallel_subagents: 10 } });
+      const text = String(warning.mock.calls[0][0]);
+      expect(text).toContain(`project root ${tmp}`);
+      expect(text).toContain("primary provider 'claude' (providers[0])");
+      expect(text.match(/aiwg regenerate --workspace --provider \w+ --dry-run/g)).toEqual([
+        'aiwg regenerate --workspace --provider claude --dry-run',
+        'aiwg regenerate --workspace --provider codex --dry-run',
+        'aiwg regenerate --workspace --provider hermes --dry-run',
+      ]);
+      expect(text).toContain('aiwg workspace-context doctor');
+      warning.mockClear();
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', '10', '--target', tmp]);
+      await main(['set', '--project', 'setup.worker_dispatch_offer', 'declined', '--target', tmp]);
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', 'invalid', '--target', tmp]).catch(() => {});
+      await main(['set', '--project', 'parallelism.worker_dispatch', 'true', '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['reset', '--project', 'parallelism.max_parallel_subagents', '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['reset', '--project', 'parallelism', '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['set', '--project', 'parallelism', JSON.stringify({ max_parallel_subagents: 7 }), '--target', tmp]);
+      expect(warning).toHaveBeenCalledTimes(1);
+      warning.mockClear();
+      await main(['set', '--project', 'parallelism', JSON.stringify({ max_parallel_subagents: 7 }), '--target', tmp]);
+      await main(['set', '--project', 'parallelism.max_parallel_subagents', 'not-an-integer', '--target', tmp]).catch(() => {});
+      expect(warning).not.toHaveBeenCalled();
+      await expect(main(['reset', '--project', 'parallelism.invalid', '--target', tmp])).rejects.toThrow();
+      expect(warning).not.toHaveBeenCalled();
+    } finally { warning.mockRestore(); }
+  });
+
+  it('validates savings weights through config set, the loader, and the JSON schema', async () => {
+    const { readAiwgConfig } = await import('../../../src/config/aiwg-config.js');
+    const schema = JSON.parse(readFileSync(join(process.cwd(), 'vscode-extension/schemas/aiwg.config.v1.json'), 'utf8'));
+    const validate = new Ajv({ strict: false }).compile(schema.properties.decision);
+    for (const [key, value] of [
+      ['cost.llm_per_mtok', '12.5'], ['cost.jev_per_mtok', '0.1'],
+      ['cost.jev_input_per_mtok', '0.042'], ['cost.jev_output_per_mtok', '0'],
+      ['cost.source', 'typesafe-docs'], ['cost.checked_at', '2026-10-23'], ['cost.jev_model', 'jev-1.13.0'],
+      ['savings.caller_model_class', 'standard'], ['savings.reasoning_tokens', '512'], ['savings.output_tokens', '64'],
+    ]) await main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp]);
+    const decision = (await readAiwgConfig(tmp))!.decision!;
+    expect(decision.ask).toMatchObject({ cost: { llm_per_mtok: 12.5, jev_per_mtok: 0.1 },
+      savings: { caller_model_class: 'standard', reasoning_tokens: 512, output_tokens: 64 } });
+    expect(validate(decision)).toBe(true);
+    const before = readConfig(tmp);
+    for (const [key, value] of [
+      ['cost.jev_input_per_mtok', '-1'], ['cost.jev_output_per_mtok', 'NaN'],
+      ['cost.source', 'guess'], ['cost.checked_at', '2026-02-30'], ['cost.jev_model', 'jev-latest'],
+      ['cost.llm_per_mtok', '-1'], ['cost.jev_per_mtok', 'Infinity'], ['cost.jev_per_mtok', ''],
+      ['savings.reasoning_tokens', '1.5'], ['savings.output_tokens', '-1'], ['savings.output_tokens', '1000001'],
+      ['savings.reasoning_tokens', ''],
+      ['savings.caller_model_class', 'imaginary'], ['cost.typo', '1'],
+    ]) {
+      await expect(main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp])).rejects.toThrow();
+      expect(readConfig(tmp)).toEqual(before);
+    }
+    for (const ask of [
+      { cost: { llm_per_mtok: -1 } }, { cost: { jev_input_per_mtok: -1 } },
+      { cost: { jev_output_per_mtok: '0' } }, { cost: { source: 'guess' } },
+      { cost: { checked_at: 'today' } }, { cost: { jev_model: 'jev-latest' } }, { cost: [] }, { savings: { reasoning_tokens: 1.5 } },
+      { savings: { caller_model_class: 'imaginary' } }, { savings: { output_tokens: 1000001 } },
+    ]) {
+      expect(validate({ ask })).toBe(false);
+      writeFileSync(join(tmp, '.aiwg', 'aiwg.config'), JSON.stringify({ decision: { ask } }));
+      await expect(readAiwgConfig(tmp)).rejects.toThrow(/decision.ask/);
+    }
+  });
+
+  it('sets agreement probabilities as numbers and rejects invalid values without changing config', async () => {
+    for (const [key, value] of [['min_agreement', '0.9'], ['agreement_confidence_floor', '0.55']]) {
+      await main(['set', '--project', `decision.ask.${key}`, value!, '--target', tmp]);
+    }
+    expect(readConfig(tmp)).toMatchObject({ decision: { ask: { min_agreement: 0.9, agreement_confidence_floor: 0.55 } } });
+    const before = readFileSync(join(tmp, '.aiwg/aiwg.config'), 'utf8');
+    for (const key of ['min_agreement', 'agreement_confidence_floor']) {
+      for (const value of ['-0.1', '1.1', 'NaN', 'Infinity', 'true', '', ' ']) {
+        await expect(main(['set', '--project', `decision.ask.${key}`, value, '--target', tmp])).rejects.toThrow(/probability from 0 to 1/);
+        expect(readFileSync(join(tmp, '.aiwg/aiwg.config'), 'utf8')).toBe(before);
+      }
+    }
+    for (const value of ['0', '1']) {
+      await main(['set', '--project', 'decision.ask.min_agreement', value, '--target', tmp]);
+      expect(readConfig(tmp)).toMatchObject({ decision: { ask: { min_agreement: Number(value) } } });
+    }
+  });
+
+  it('validates agreement keys in the editor schema without enabling them by default', () => {
+    const schema = JSON.parse(readFileSync('vscode-extension/schemas/aiwg.config.v1.json', 'utf8'));
+    const ask = schema.properties.decision.properties.ask;
+    const validate = new Ajv().compile(ask);
+    expect(validate({})).toBe(true);
+    expect(ask.properties.min_agreement.default).toBeUndefined();
+    expect(ask.properties.agreement_confidence_floor.default).toBe(0.55);
+    for (const value of [0, 0.55, 0.9, 1]) {
+      expect(validate({ min_agreement: value, agreement_confidence_floor: value })).toBe(true);
+    }
+    for (const key of ['min_agreement', 'agreement_confidence_floor']) {
+      for (const value of [-0.1, 1.1, '0.9', null, true]) expect(validate({ [key]: value })).toBe(false);
+    }
   });
 
   describe('validate --project (#1789)', () => {

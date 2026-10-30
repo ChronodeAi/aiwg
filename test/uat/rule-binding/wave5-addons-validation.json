@@ -1,0 +1,1398 @@
+{
+  "issue": 2945,
+  "lane": "addons",
+  "status": "offline validation completed with failures requiring integration follow-up",
+  "scope": "Resume existing 20-rule migration. Reviewed every source against the ADR; tagging retained. Only this lane validation report was added during resume; package regeneration produced identical bytes.",
+  "disposition_authority": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+  "activation_counts": {
+    "kernel": 0,
+    "summary": 3,
+    "bound": 14,
+    "paths": 3,
+    "on-demand": 0
+  },
+  "critical_review": {
+    "critical_rules": [],
+    "critical_count": 0,
+    "reason": "No assigned source declares enforcement: critical or Enforcement Level: CRITICAL.",
+    "block_rules": [
+      {
+        "rule": "agentic/code/addons/civic-action/rules/civic-safety.md",
+        "enforcement": "block",
+        "activation": "bound",
+        "reason": "BLOCK civic restrictions govern every indexed civic workflow and role before acquisition or action."
+      },
+      {
+        "rule": "agentic/code/addons/civic-action/rules/publication-human-review.md",
+        "enforcement": "block",
+        "activation": "bound",
+        "reason": "BLOCK publication gates are delivered to all civic workflows and roles before external actions."
+      },
+      {
+        "rule": "agentic/code/addons/civic-action/rules/source-and-claim-integrity.md",
+        "enforcement": "block",
+        "activation": "bound",
+        "reason": "BLOCK claim integrity applies to civic evidence processing and publication across all civic artifacts."
+      },
+      {
+        "rule": "agentic/code/addons/network-analysis/rules/network-analysis-safety.md",
+        "enforcement": "block",
+        "activation": "bound",
+        "reason": "BLOCK capture and disclosure safety is scoped to the indexed network-capture analysis skill."
+      }
+    ],
+    "kernel_fallbacks": []
+  },
+  "rules": [
+    {
+      "rule": "agentic/code/addons/agentic-installer/rules/installer-authoring.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "Installer authoring requirements are delivered before manifest generation or validation.",
+      "summary": "Author deterministic setup manifests with script-first steps, shared libraries, clear verification, logical units, and recovery procedures.",
+      "summary_characters": 139,
+      "bound_to": {
+        "skills": [
+          "setup-generate",
+          "setup-validate"
+        ],
+        "agents": [
+          "installer-agent"
+        ]
+      },
+      "source_sha256": "83d6c4318df1976efd86caf38d805c9d52abc5d08a1491d581e2a9bd678a84a0"
+    },
+    {
+      "rule": "agentic/code/addons/agentic-installer/rules/installer-safety.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "Installer safety applies to setup authoring and execution entry points.",
+      "summary": "Validate setup manifests and collect parameters before execution; show planned steps, confirm destructive actions, and keep secrets out of manifests and scripts.",
+      "summary_characters": 161,
+      "bound_to": {
+        "skills": [
+          "setup-generate",
+          "setup-run",
+          "setup-validate",
+          "cockpit-headless-deploy"
+        ],
+        "agents": [
+          "installer-agent"
+        ]
+      },
+      "source_sha256": "50c6d743fd61922e2fca3dfe493c6f4ef2eac27b12c4ac30c4a53e66da9cc313"
+    },
+    {
+      "rule": "agentic/code/addons/browser-control/rules/browser-control-safety.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "Browser-specific safety is available before browser driver and lifecycle operations.",
+      "summary": "Authorize browser origins and sensitive actions, protect tokens and storage, log sanitized activity, and clean up browser subprocesses.",
+      "summary_characters": 135,
+      "bound_to": {
+        "skills": [
+          "browser-setup",
+          "browser-doctor",
+          "browser-reset"
+        ],
+        "agents": [
+          "browser-driver"
+        ]
+      },
+      "source_sha256": "382d6792af70386c56d0506fbc90352789b26ebe8e38c1010d4725c54746ff63"
+    },
+    {
+      "rule": "agentic/code/addons/civic-action/rules/civic-safety.md",
+      "enforcement": "block",
+      "activation": "bound",
+      "reason": "BLOCK civic restrictions govern every indexed civic workflow and role before acquisition or action.",
+      "summary": "Fail closed on unresolved civic access or consent; prohibit covert recording, bypass, targeting, threats, and impersonation; minimize personal data.",
+      "summary_characters": 148,
+      "bound_to": {
+        "skills": [
+          "civic-newsroom-plan",
+          "civic-publish-gate",
+          "editorial-correction-review",
+          "local-resource-index",
+          "public-meeting-reconcile",
+          "public-records-plan",
+          "public-technology-review",
+          "source-compliance-gate"
+        ],
+        "agents": [
+          "citation-editor",
+          "civic-newsroom-operator",
+          "correction-editor",
+          "news-caster"
+        ]
+      },
+      "source_sha256": "05acbdc641fc105443a73cdec476d9f4e8d3721951cae564d3429ff7a548babf"
+    },
+    {
+      "rule": "agentic/code/addons/civic-action/rules/publication-human-review.md",
+      "enforcement": "block",
+      "activation": "bound",
+      "reason": "BLOCK publication gates are delivered to all civic workflows and roles before external actions.",
+      "summary": "Require an independent named human to approve the exact artifact hash before civic publication or external action; retain the review record and blocking findings.",
+      "summary_characters": 162,
+      "bound_to": {
+        "skills": [
+          "civic-newsroom-plan",
+          "civic-publish-gate",
+          "editorial-correction-review",
+          "local-resource-index",
+          "public-meeting-reconcile",
+          "public-records-plan",
+          "public-technology-review",
+          "source-compliance-gate"
+        ],
+        "agents": [
+          "citation-editor",
+          "civic-newsroom-operator",
+          "correction-editor",
+          "news-caster"
+        ]
+      },
+      "source_sha256": "395bed5884b45131c14d339fbf123d2ae7033a310960183f9b4c8778fb0af9a4"
+    },
+    {
+      "rule": "agentic/code/addons/civic-action/rules/source-and-claim-integrity.md",
+      "enforcement": "block",
+      "activation": "bound",
+      "reason": "BLOCK claim integrity applies to civic evidence processing and publication across all civic artifacts.",
+      "summary": "Link each material civic claim to a source and selector, separate evidence dimensions, preserve uncertainty, and append corrections without rewriting history.",
+      "summary_characters": 158,
+      "bound_to": {
+        "skills": [
+          "civic-newsroom-plan",
+          "civic-publish-gate",
+          "editorial-correction-review",
+          "local-resource-index",
+          "public-meeting-reconcile",
+          "public-records-plan",
+          "public-technology-review",
+          "source-compliance-gate"
+        ],
+        "agents": [
+          "citation-editor",
+          "civic-newsroom-operator",
+          "correction-editor",
+          "news-caster"
+        ]
+      },
+      "source_sha256": "7ae4c49aa8ce30d15be6ef040a37f18359ea957ca6a55c9b69736bbf4b16a9f2"
+    },
+    {
+      "rule": "agentic/code/addons/color-palette/rules/color-output-format.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "reason": "Color presentation details belong to palette generation, trends, and accessibility work.",
+      "summary": "Display colors with lowercase six-digit HEX, swatches, and descriptive names; order palettes consistently and label contrast ratios and accessibility results.",
+      "summary_characters": 158,
+      "bound_to": {
+        "skills": [
+          "color-palette",
+          "color-trends",
+          "color-accessibility"
+        ]
+      },
+      "source_sha256": "466f71a1b786a2dd6df5eb6509fa0fc3afda48370a76eb7dda48134c871ffdc8"
+    },
+    {
+      "rule": "agentic/code/addons/context-curator/rules/distractor-filter.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "reason": "A startup relevance reminder precedes context selection; detailed classification binds to the curator.",
+      "summary": "Classify context against the task time, entity, and operation scope; use relevant sections first and exclude distractors.",
+      "summary_characters": 121,
+      "bound_to": {
+        "agents": [
+          "context-curator"
+        ]
+      },
+      "source_sha256": "2147cc45ee514807d24d7f588b75107a7332fec4027c5fa4fd8fbca1412c83e0"
+    },
+    {
+      "rule": "agentic/code/addons/context-curator/rules/scoped-reasoning.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "reason": "A startup scope reminder constrains initial reasoning; detailed recovery binds to the curator.",
+      "summary": "Keep reasoning and output within the stated task boundaries; remove off-scope material and obtain scope clarification before expanding work.",
+      "summary_characters": 140,
+      "bound_to": {
+        "agents": [
+          "context-curator"
+        ]
+      },
+      "source_sha256": "efb3abab2bddaa8b17fc4cb91bdd1f6d64f630a08a6d9390a08fb9f27f2d58f4"
+    },
+    {
+      "rule": "agentic/code/addons/daemon/rules/daemon-interaction.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "Daemon interaction policy is role-specific and explicitly excludes ordinary interactive sessions.",
+      "summary": "Use concise concierge responses in daemon sessions, absorb technical errors, honor remembered constraints, and confirm destructive operations.",
+      "summary_characters": 142,
+      "bound_to": {
+        "skills": [
+          "daemon-status"
+        ],
+        "agents": [
+          "concierge"
+        ]
+      },
+      "source_sha256": "de9697ca2b843496e534314cfcf8e72a9bf39e0ad61639e97aae8279032fd6d4"
+    },
+    {
+      "rule": "agentic/code/addons/dataset-intelligence/rules/dataset-safety.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "reason": "Preserve existing dataset path coverage and bind every dataset workflow and review role.",
+      "summary": "Delegate dataset execution to the shared service; require digest-scoped approval, protect credentials, distinguish canonical and derived data, and preserve checkpoints.",
+      "summary_characters": 168,
+      "bound_to": {
+        "skills": [
+          "dataset-capability-recommend",
+          "dataset-export",
+          "dataset-ingest",
+          "dataset-intake",
+          "dataset-intelligence",
+          "dataset-plan-review",
+          "dataset-retire",
+          "dataset-source-assess",
+          "dataset-trace",
+          "dataset-verify"
+        ],
+        "agents": [
+          "dataset-policy-reviewer",
+          "dataset-provenance-reviewer",
+          "dataset-source-architect",
+          "dataset-steward"
+        ]
+      },
+      "paths": [
+        "agentic/code/addons/dataset-intelligence/**",
+        "schemas/dataset/**",
+        "src/dataset/**",
+        ".aiwg/**"
+      ],
+      "source_sha256": "0886bd53f744996d746ca4a0c6d5de23cd05a1d6732f4efd0e604fa1a1941b57"
+    },
+    {
+      "rule": "agentic/code/addons/network-analysis/rules/network-analysis-safety.md",
+      "enforcement": "block",
+      "activation": "bound",
+      "reason": "BLOCK capture and disclosure safety is scoped to the indexed network-capture analysis skill.",
+      "summary": "Require bounded capture authority and separate disclosure approval; analyze immutable captures with trusted isolated tools and exclude secrets and payloads by default.",
+      "summary_characters": 167,
+      "bound_to": {
+        "skills": [
+          "analyze-network-capture"
+        ]
+      },
+      "source_sha256": "f4b9f6ac405b535430883789f73671eb419c06618fa13daee7ed726fc558b181"
+    },
+    {
+      "rule": "agentic/code/addons/prose-integration/rules/prose-bridge.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "reason": "Prose integration and contract mapping are needed only when choosing or running Prose.",
+      "summary": "Use Prose only for suitable declarative contracts; map inputs and outputs explicitly, select a capable model, and preserve formal outputs in AIWG artifact paths.",
+      "summary_characters": 161,
+      "bound_to": {
+        "skills": [
+          "forme-manifest",
+          "prose-detect",
+          "prose-install",
+          "prose-reader",
+          "prose-run",
+          "prose-setup",
+          "prose-validate"
+        ]
+      },
+      "source_sha256": "0b48926c2b2e0d2a356e60e6df0b23fcd1b611beee439b25cac3a748e6797ed2"
+    },
+    {
+      "rule": "agentic/code/addons/prose-integration/rules/prose-resolution.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "Every Prose entry point can load the resolution protocol before operating.",
+      "summary": "Resolve PROSE_ROOT through prose-detect before Prose work, validate both specification files, revalidate cached paths, and obtain approval before installation.",
+      "summary_characters": 159,
+      "bound_to": {
+        "skills": [
+          "forme-manifest",
+          "prose-detect",
+          "prose-install",
+          "prose-reader",
+          "prose-run",
+          "prose-setup",
+          "prose-validate"
+        ]
+      },
+      "source_sha256": "f352063dc450c1eb54e1ff5a07750fbcd39df65d2e4cd23b9c4f0bd88a2a22e0"
+    },
+    {
+      "rule": "agentic/code/addons/rlm/rules/rlm-context-management.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "The ADR scopes RLM details to recursive-context skills and the RLM agent.",
+      "summary": "Filter and read large context selectively; bound recursive calls by budget and concurrency caps, reconcile findings, and checkpoint long-running RLM work.",
+      "summary_characters": 154,
+      "bound_to": {
+        "skills": [
+          "chunk",
+          "fanout",
+          "rlm-batch",
+          "rlm-mode",
+          "rlm-prep",
+          "rlm-query",
+          "rlm-search",
+          "rlm-status"
+        ],
+        "agents": [
+          "rlm-agent"
+        ]
+      },
+      "source_sha256": "c1e4fbd5ef521155ee973075c8ad8f7da72d5c755cc51da69cf30f15880945d2"
+    },
+    {
+      "rule": "agentic/code/addons/schema-governance/rules/schema-first.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "reason": "The ADR selects paths; retain existing data-contract globs and bind schema authoring and review.",
+      "summary": "Define governed schemas for persistent or exchanged structured data; record authority, ownership, compatibility, fixtures, and projection evidence or a reviewed opt-out.",
+      "summary_characters": 169,
+      "bound_to": {
+        "skills": [
+          "schema-author",
+          "schema-evolve",
+          "schema-intake",
+          "schema-onboard",
+          "schema-review"
+        ],
+        "agents": [
+          "schema-architect",
+          "schema-reviewer",
+          "schema-steward"
+        ]
+      },
+      "paths": [
+        "src/**",
+        "schemas/**",
+        "agentic/code/**",
+        ".aiwg/requirements/**",
+        ".aiwg/architecture/**"
+      ],
+      "source_sha256": "a42fc1e3e499d43a1f57ed3d351100efb95a235b650738e2ad8d47a1eb41acf0"
+    },
+    {
+      "rule": "agentic/code/addons/testing-quality/rules/test-conformance-evidence.md",
+      "enforcement": "unclassified",
+      "activation": "bound",
+      "reason": "The ADR binds detailed evidence requirements to conformance audits, normalization, and platform research.",
+      "summary": "Separate test evidence units, require current source and runner evidence, preserve unknown and failing states, and verify negative controls without weakening tests.",
+      "summary_characters": 164,
+      "bound_to": {
+        "skills": [
+          "test-conformance",
+          "test-normalize",
+          "test-platform-research"
+        ],
+        "agents": [
+          "conformance-steward",
+          "test-normalization-engineer",
+          "test-oracle-reviewer"
+        ]
+      },
+      "source_sha256": "96a0da0b7478a8679580061aff46ce4352ddee9d922289912b4a091f48cc85e1"
+    },
+    {
+      "rule": "agentic/code/addons/twelve-factor/rules/twelve-factor-evidence.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "reason": "The ADR scopes factor evidence to Twelve-Factor design, audits, and their reviewer.",
+      "summary": "Tie every factor finding to reproducible evidence or mark it missing; use explicit statuses, attach remediation to gaps, and separate observations from recommendations.",
+      "summary_characters": 168,
+      "bound_to": {
+        "skills": [
+          "twelve-factor-audit",
+          "twelve-factor-design"
+        ],
+        "agents": [
+          "twelve-factor-reviewer"
+        ]
+      },
+      "source_sha256": "21ae4e734b847c873fea84ebb1e38bcdc38ed338d74755958375cfdf9680c401"
+    },
+    {
+      "rule": "agentic/code/addons/verbalized-sampling/rules/diversity-awareness.md",
+      "enforcement": "medium",
+      "activation": "summary",
+      "reason": "A startup reminder detects variety needs before skill selection; detailed tuning binds to the unambiguous diversity-tuning skill.",
+      "summary": "Consider Verbalized Sampling for requested alternatives or creative variety; honor autoApply preferences and avoid it for single-answer or speed-focused tasks.",
+      "summary_characters": 159,
+      "bound_to": {
+        "skills": [
+          "diversity-tuning"
+        ]
+      },
+      "source_sha256": "0e7e72d2f55114655f9caeba3b0f9e4c95fbdfb6b90d56b7b3ae3ed43ff9773b"
+    },
+    {
+      "rule": "agentic/code/addons/voice-framework/rules/voice-framework.md",
+      "enforcement": "medium",
+      "activation": "paths",
+      "reason": "Preserve existing writing-path triggers and bind voice selection, analysis, and application.",
+      "summary": "Apply the audience-appropriate voice using project, user, then built-in profile precedence; write precisely with concrete examples and varied structure.",
+      "summary_characters": 152,
+      "bound_to": {
+        "skills": [
+          "output-mode-guide",
+          "voice-analyze",
+          "voice-apply",
+          "voice-blend",
+          "voice-create"
+        ]
+      },
+      "paths": [
+        "**/*.md",
+        "**/*.txt",
+        "docs/**",
+        "content/**",
+        "agentic/code/addons/voice-framework/**"
+      ],
+      "source_sha256": "aa7564e26dc66143df813a5acbe489167d3418af1a701557b9e6bd7810ff76c6"
+    }
+  ],
+  "gates": {
+    "U1": {
+      "status": "Not measured by this lane; no whole-profile byte savings or release budget claim."
+    },
+    "U2": {
+      "lane_rules": 20,
+      "explicit_activation": 20,
+      "all_summaries_authored": true,
+      "activation_lint_exit_code": 0,
+      "remaining_out_of_lane_warnings": 110,
+      "whole_corpus_coverage": false
+    },
+    "U3": {
+      "passed": true,
+      "declared_rule_artifact_pairs": 116,
+      "distinct_artifacts": 81,
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "test": "test/unit/providers/wave5-addons-rule-bindings.test.ts"
+    },
+    "U4": {
+      "passed": true,
+      "method": "Actual worktree CLI show --json for every distinct bound artifact after an isolated framework-index build."
+    },
+    "U5": {
+      "status": "Authored and schema-validated; model compliance not run, conductor on titan.",
+      "file": "test/uat/rule-binding/wave5-addons-probes.yaml",
+      "rules": 14,
+      "positive_probes": 28,
+      "negative_probes": 14,
+      "coverage": {
+        "high": 9,
+        "block": 4,
+        "unclassified": 1
+      },
+      "schema": "test/uat/rule-binding/probes.schema.json",
+      "validation": "Each lane rule against shared definitions/rule; base suite plus lane against unmodified full schema (its minItems:21 applies to the complete suite)."
+    },
+    "U6": {
+      "passed": true,
+      "rules": 20,
+      "method": "Each rule in top-three CLI discovery results, with framework index force-built in isolated HOME before discover."
+    },
+    "U7": {
+      "status": "14 negative probes authored; model execution deferred to conductor."
+    },
+    "U8": {
+      "status": "Model subagent headroom dispatch not run under the no-model-calls restriction."
+    },
+    "U9": {
+      "lane_six_provider_delivery_fixtures_passed": true,
+      "codex_agents_md_under_32768": true,
+      "real_claude_deploys_passed": 15,
+      "existing_suite_failures": 15,
+      "all_existing_fixtures_green": false
+    }
+  },
+  "validation": {
+    "typecheck": {
+      "exit_code": 0,
+      "command": "nice -n 19 env NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck",
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/typecheck.log"
+    },
+    "build_cli": {
+      "exit_code": 0,
+      "command": "nice -n 19 env NODE_OPTIONS=--max-old-space-size=4096 npm run build:cli",
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/build-cli.log"
+    },
+    "package_plugins": {
+      "exit_code": 0,
+      "command": "nice -n 19 npm run package-plugins",
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/package-plugins.log",
+      "regeneration": {
+        "kept_assigned_rule_copies": [],
+        "restored_unrelated": []
+      }
+    },
+    "test_execution": {
+      "config": "config/vitest.config.js",
+      "maxWorkers": 4,
+      "nice": 19,
+      "typecheck_and_vitest_never_overlapped": true,
+      "one_vitest_at_a_time": true,
+      "heavy_wave_files_serial": true,
+      "home_and_xdg_isolated_in_completed_runs": true,
+      "initial_interrupted_run_side_effect": "A fixture rebuilt the default framework index under /home/roctinam/.local/share/aiwg/index/framework before HOME isolation; prior bytes were unavailable for rollback. All completed reruns use temporary HOME/XDG.",
+      "interrupted_attempts": [
+        "First wider fixture run stopped to isolate HOME/channel after Civic Codex failed against default state. Civic passes in the isolated completed run.",
+        "Second wider run stopped to limit simultaneous index-reading child processes; final complete run disables file parallelism."
+      ],
+      "suites": [
+        {
+          "report": "/tmp/aiwg-w5-addons-resume-evidence/wave5-tests.json",
+          "files": 1,
+          "passed": 10,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        },
+        {
+          "report": "/tmp/aiwg-w5-addons-resume-evidence/focused-tests.json",
+          "files": 3,
+          "passed": 60,
+          "failed": 4,
+          "skipped": 0,
+          "failures": [
+            {
+              "file": "test/unit/providers/rule-activation-deployment.test.ts",
+              "test": "activation-selected provider deployment (#2939) preserves the untagged SDLC/Claude tier-fallback snapshot, including restored demotions",
+              "message": "AssertionError: expected { 'RULES-INDEX.md': { …(2) }, …(46) } to deeply equal { 'RULES-INDEX.md': { …(2) }, …(46) }"
+            },
+            {
+              "file": "test/unit/providers/rule-tier-deployment.test.ts",
+              "test": "rule tier deployment (#1673) deploy enumerators on real source getAddonRuleFiles yields only always-on (no medium/low) rules",
+              "message": "AssertionError: expected [ Array(1) ] to deeply equal []"
+            },
+            {
+              "file": "test/unit/providers/rule-tier-deployment.test.ts",
+              "test": "rule tier deployment (#1673) deploy enumerators on real source listOnDemandRuleFiles stays complete when called from bundled addon or extension sources (#1784)",
+              "message": "AssertionError: expected [ 'activity-log', …(35) ] to deeply equal ArrayContaining{…}"
+            },
+            {
+              "file": "test/unit/providers/rule-tier-deployment.test.ts",
+              "test": "on-demand index propagation (#1675) end-to-end RULES-ONDEMAND.md emission keeps the complete index after an aiwg-use-all-style addon pass (#1784)",
+              "message": "AssertionError: expected [ 'activity-log', …(35) ] to deeply equal ArrayContaining{…}"
+            }
+          ]
+        },
+        {
+          "report": "/tmp/aiwg-w5-addons-resume-evidence/neighbors-serial-tests.json",
+          "files": 12,
+          "passed": 149,
+          "failed": 11,
+          "skipped": 0,
+          "failures": [
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance keeps the full Codex kernel catalog useful and below its startup listing cap",
+              "message": "AssertionError: expected 53 to be 26 // Object.is equality"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance claude deploys every canonical kernel skill and no standard skills",
+              "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance codex deploys every canonical kernel skill and no standard skills",
+              "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance cursor deploys every canonical kernel skill and no standard skills",
+              "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance warp deploys every canonical kernel skill and no standard skills",
+              "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance hermes deploys every canonical kernel skill and no standard skills",
+              "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance repeat deploy prunes stale managed skills while preserving operator-owned skills",
+              "message": "AssertionError: expected true to be false // Object.is equality"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance claude repairs a full-copy deployment while preserving operator-owned skills",
+              "message": "AssertionError: expected true to be false // Object.is equality"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance codex repairs a full-copy deployment while preserving operator-owned skills",
+              "message": "AssertionError: expected true to be false // Object.is equality"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance cursor repairs a full-copy deployment while preserving operator-owned skills",
+              "message": "AssertionError: expected true to be false // Object.is equality"
+            },
+            {
+              "file": "test/integration/kernel-deployment-conformance.test.ts",
+              "test": "kernel deployment conformance warp repairs a full-copy deployment while preserving operator-owned skills",
+              "message": "AssertionError: expected true to be false // Object.is equality"
+            }
+          ]
+        },
+        {
+          "report": "/tmp/aiwg-w5-addons-resume-evidence/orchestration-tests.json",
+          "files": 36,
+          "passed": 932,
+          "failed": 0,
+          "skipped": 0,
+          "failures": []
+        }
+      ],
+      "totals": {
+        "passed": 1151,
+        "failed": 15,
+        "files": 52
+      }
+    },
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-dep-sources.log"
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-eval-imports.log"
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-package-license-boundary.log"
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-agent-sizes.log"
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-test-registration.log"
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-test-process-timeouts.log"
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-orchestration-packs.log"
+      },
+      {
+        "script": "lint:rule-activation",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-rule-activation.log"
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-schemas.log"
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-ops-templates.log"
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-mission-inventory.log"
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-mission-contract.log"
+      },
+      {
+        "script": "lint:plugin-copies",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-plugin-copies.log"
+      },
+      {
+        "script": "lint:rule-triggers",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-rule-triggers.log"
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-vault-migration.log"
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0,
+        "signal": null,
+        "log": "/tmp/aiwg-w5-addons-resume-evidence/lint-session-fixtures.log"
+      }
+    ],
+    "ci_lints_not_run": [
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Invokes git ls-files; user prohibits git operations."
+      },
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Requires registry network access; user prohibits network."
+      },
+      {
+        "script": "lint:affected-packages",
+        "reason": "No in-scope offline affected-package CSV supplied; external source access excluded."
+      }
+    ],
+    "orchestration_lane": {
+      "config": "config/vitest.config.js",
+      "include": "orchestrationConformanceFiles from config/test-lanes.mjs",
+      "note": "Vitest API overrides only include/exclude to admit the separately owned offline orchestration lane.",
+      "runner": "/tmp/aiwg-w5-addons-resume-evidence/orchestration.mjs"
+    }
+  },
+  "real_deploys": [
+    {
+      "addon": "agentic-installer",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-agentic-installer-TG41mk/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-agentic-installer-TG41mk/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-agentic-installer-TG41mk/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "agentic-installer",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-agentic-installer.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "browser-control",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-browser-control-24Jmbp/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-browser-control-24Jmbp/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-browser-control-24Jmbp/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "browser-control",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-browser-control.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "civic-action",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-civic-action-Au5hv5/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-civic-action-Au5hv5/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-civic-action-Au5hv5/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "civic-action",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-civic-action.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "color-palette",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-color-palette-Xpavlp/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-color-palette-Xpavlp/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-color-palette-Xpavlp/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "color-palette",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-color-palette.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "context-curator",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-context-curator-autgET/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-context-curator-autgET/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-context-curator-autgET/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "context-curator",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-context-curator.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "daemon",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-daemon-hgA5EH/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-daemon-hgA5EH/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-daemon-hgA5EH/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "daemon",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-daemon.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "dataset-intelligence",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-dataset-intelligence-1ij1f6/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-dataset-intelligence-1ij1f6/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-dataset-intelligence-1ij1f6/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "dataset-intelligence",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-dataset-intelligence.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "network-analysis",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-network-analysis-X0fpTe/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-network-analysis-X0fpTe/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-network-analysis-X0fpTe/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "network-analysis",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-network-analysis.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "prose-integration",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-prose-integration-jKxILg/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-prose-integration-jKxILg/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-prose-integration-jKxILg/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "prose-integration",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-prose-integration.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "rlm",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-rlm-gUZNwZ/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-rlm-gUZNwZ/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-rlm-gUZNwZ/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "rlm",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-rlm.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "schema-governance",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-schema-governance-q9WVMd/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-schema-governance-q9WVMd/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-schema-governance-q9WVMd/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "schema-governance",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-schema-governance.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "testing-quality",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-testing-quality-CymwtC/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-testing-quality-CymwtC/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-testing-quality-CymwtC/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "testing-quality",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-testing-quality.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "twelve-factor",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-twelve-factor-Txcugq/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-twelve-factor-Txcugq/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-twelve-factor-Txcugq/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "twelve-factor",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-twelve-factor.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "verbalized-sampling",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-verbalized-sampling-f4h9xb/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-verbalized-sampling-f4h9xb/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-verbalized-sampling-f4h9xb/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "verbalized-sampling",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-verbalized-sampling.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    },
+    {
+      "addon": "voice-framework",
+      "provider": "claude",
+      "exit_code": 0,
+      "signal": null,
+      "project": "/tmp/aiwg-w5-addons-resume-evidence/deploy-voice-framework-3Daa9d/project",
+      "home": "/tmp/aiwg-w5-addons-resume-evidence/deploy-voice-framework-3Daa9d/home",
+      "aiwg_config": "/tmp/aiwg-w5-addons-resume-evidence/deploy-voice-framework-3Daa9d/config",
+      "channel": {
+        "channel": "edge",
+        "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons",
+        "devMode": true,
+        "checkOnStartup": false
+      },
+      "aiwg_home_unset": true,
+      "command": [
+        "env",
+        "-u",
+        "AIWG_HOME",
+        "/home/roctinam/.nvm/versions/node/v24.12.0/bin/node",
+        "/home/roctinam/dev/jmagly/aiwg-wt/w5-addons/bin/aiwg.mjs",
+        "use",
+        "voice-framework",
+        "--provider",
+        "claude"
+      ],
+      "log": "/tmp/aiwg-w5-addons-resume-evidence/deploy-voice-framework.log",
+      "git_initialization": "Empty .git layout written directly; no git command",
+      "fixture_removed": true
+    }
+  ],
+  "integration_follow_up": {
+    "files_outside_lane_left_untouched": true,
+    "failures": [
+      {
+        "file": "test/unit/providers/rule-activation-deployment.test.ts",
+        "test": "activation-selected provider deployment (#2939) preserves the untagged SDLC/Claude tier-fallback snapshot, including restored demotions",
+        "message": "AssertionError: expected { 'RULES-INDEX.md': { …(2) }, …(46) } to deeply equal { 'RULES-INDEX.md': { …(2) }, …(46) }"
+      },
+      {
+        "file": "test/unit/providers/rule-tier-deployment.test.ts",
+        "test": "rule tier deployment (#1673) deploy enumerators on real source getAddonRuleFiles yields only always-on (no medium/low) rules",
+        "message": "AssertionError: expected [ Array(1) ] to deeply equal []"
+      },
+      {
+        "file": "test/unit/providers/rule-tier-deployment.test.ts",
+        "test": "rule tier deployment (#1673) deploy enumerators on real source listOnDemandRuleFiles stays complete when called from bundled addon or extension sources (#1784)",
+        "message": "AssertionError: expected [ 'activity-log', …(35) ] to deeply equal ArrayContaining{…}"
+      },
+      {
+        "file": "test/unit/providers/rule-tier-deployment.test.ts",
+        "test": "on-demand index propagation (#1675) end-to-end RULES-ONDEMAND.md emission keeps the complete index after an aiwg-use-all-style addon pass (#1784)",
+        "message": "AssertionError: expected [ 'activity-log', …(35) ] to deeply equal ArrayContaining{…}"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance keeps the full Codex kernel catalog useful and below its startup listing cap",
+        "message": "AssertionError: expected 53 to be 26 // Object.is equality"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance claude deploys every canonical kernel skill and no standard skills",
+        "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance codex deploys every canonical kernel skill and no standard skills",
+        "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance cursor deploys every canonical kernel skill and no standard skills",
+        "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance warp deploys every canonical kernel skill and no standard skills",
+        "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance hermes deploys every canonical kernel skill and no standard skills",
+        "message": "AssertionError: expected [ 'aiwg-doctor', 'aiwg-help', …(51) ] to deeply equal [ 'aiwg-doctor', 'aiwg-help', …(24) ]"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance repeat deploy prunes stale managed skills while preserving operator-owned skills",
+        "message": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance claude repairs a full-copy deployment while preserving operator-owned skills",
+        "message": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance codex repairs a full-copy deployment while preserving operator-owned skills",
+        "message": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance cursor repairs a full-copy deployment while preserving operator-owned skills",
+        "message": "AssertionError: expected true to be false // Object.is equality"
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "test": "kernel deployment conformance warp repairs a full-copy deployment while preserving operator-owned skills",
+        "message": "AssertionError: expected true to be false // Object.is equality"
+      }
+    ],
+    "required_fixture_updates": [
+      {
+        "file": "test/unit/providers/rule-activation-deployment.test.ts",
+        "reason": "Untagged snapshot normalization strips schema-first paths which existed before migration. Preserving its original paths reproduces the frozen snapshot exactly, including 807 bytes and SHA256 d2427587736e739e3611c39efb6544d78bbe18577a79d77cba5002479968a0d4.",
+        "diagnostic": {
+          "diagnostic": "Restore schema-first pre-existing paths after the existing fixture strips migration metadata; no source or test changes",
+          "exact_snapshot_match": true,
+          "differences": [],
+          "schema_first": {
+            "bytes": 807,
+            "sha256": "d2427587736e739e3611c39efb6544d78bbe18577a79d77cba5002479968a0d4"
+          },
+          "expected_schema_first": {
+            "bytes": 807,
+            "sha256": "d2427587736e739e3611c39efb6544d78bbe18577a79d77cba5002479968a0d4"
+          }
+        }
+      },
+      {
+        "file": "test/integration/kernel-deployment-conformance.test.ts",
+        "reason": "The fixture expects exactly 26 kernel skills. Current full deployments include all 26 plus 27 projected flow definitions. This addon lane declares no flow bindings; flow projection belongs to the inherited delivery implementation/Wave 3.",
+        "diagnostic": {
+          "exit_code": 0,
+          "expected_count": 26,
+          "actual_count": 53,
+          "missing": [],
+          "extra": [
+            "flow-agentloop-lfd-controls",
+            "flow-architecture-evolution",
+            "flow-change-control",
+            "flow-compliance-validation",
+            "flow-concept-to-inception",
+            "flow-construction-to-transition",
+            "flow-cross-team-sync",
+            "flow-delivery-track",
+            "flow-deploy-to-production",
+            "flow-discovery-track",
+            "flow-elaboration-to-construction",
+            "flow-gate-check",
+            "flow-guided-implementation",
+            "flow-handoff-checklist",
+            "flow-hypercare-monitoring",
+            "flow-inception-to-elaboration",
+            "flow-incident-response",
+            "flow-iteration-dual-track",
+            "flow-knowledge-transfer",
+            "flow-performance-optimization",
+            "flow-release",
+            "flow-requirements-evolution",
+            "flow-retrospective-cycle",
+            "flow-risk-management-cycle",
+            "flow-security-review-cycle",
+            "flow-team-onboarding",
+            "flow-test-strategy-execution"
+          ],
+          "log": "/tmp/aiwg-w5-addons-resume-evidence/kernel-diagnostic.log"
+        }
+      },
+      {
+        "file": "test/unit/providers/rule-tier-deployment.test.ts",
+        "reason": "Three assertions assume tier-only delivery: MEDIUM voice-framework must be excluded and voice-framework/prose-bridge/scoped-reasoning must stay on-demand. ADR paths/bound/summary delivery deliberately replaces those assumptions."
+      }
+    ],
+    "no_assertions_weakened_or_snapshots_rewritten": true,
+    "model_probes": "Conductor must execute U5/U7 on titan and evaluate per-rule rollback; no models invoked in this lane."
+  },
+  "evidence_root": "/tmp/aiwg-w5-addons-resume-evidence"
+}

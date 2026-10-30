@@ -36,12 +36,11 @@ const _require = createRequire(import.meta.url);
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import os from 'os';
-import { discoverAddons, getFrameworksForMode, normalizeDeploymentMode, skillMatchesProvider, isKernelSkill } from '../agents/providers/base.mjs';
+import { discoverAddons, deploySkillDir, getFrameworksForMode, normalizeDeploymentMode, isKernelSkill } from '../agents/providers/base.mjs';
 
-const CODEX_SKILLS_DIR = path.join(os.homedir(), '.codex', 'skills');
-const MAX_NAME_LENGTH = 100;
-const MAX_DESCRIPTION_LENGTH = 500;
+import { stripWrappingQuotes, transformToCodexSkill } from './codex-skill-transform.mjs';
 const LEGACY_RENAMED_SKILLS = new Set(['aiwg-mcp']);
 
 /** Codex's built-in startup skill-listing cap, in characters (see doctor). */
@@ -104,11 +103,10 @@ export function planCodexListingBudget(planned, kernelDir, cap) {
   return { demoted, before, after: projected, cap };
 }
 
-function parseArgs() {
-  const args = process.argv.slice(2);
+function parseArgs(args, homeDir) {
   const cfg = {
     source: null,
-    target: CODEX_SKILLS_DIR,
+    target: path.join(homeDir, '.codex', 'skills'),
     mode: 'all',
     dryRun: false,
     force: false,
@@ -147,68 +145,6 @@ function ensureDir(d) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
-function stripWrappingQuotes(value) {
-  const trimmed = String(value ?? '').trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function yamlDoubleQuoted(value) {
-  return String(value ?? '')
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\r?\n/g, ' ')
-    .trim();
-}
-
-function codexDisplayName(skillName) {
-  const acronyms = new Map([
-    ['aiwg', 'AIWG'],
-    ['dfir', 'DFIR'],
-    ['sdlc', 'SDLC'],
-    ['mcp', 'MCP'],
-    ['pr', 'PR'],
-  ]);
-
-  return String(skillName)
-    .split('-')
-    .filter(Boolean)
-    .map((part) => acronyms.get(part.toLowerCase()) || part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-function codexOpenAiMetadata(skill) {
-  return `interface:
-  display_name: "${yamlDoubleQuoted(codexDisplayName(skill.name))}"
-  short_description: "${yamlDoubleQuoted(skill.description)}"
-`;
-}
-
-function resolveSkillModelPolicy(frontmatter) {
-  const block = frontmatter.match(/^commandHint:\s*\n((?:[ \t]+[^\n]*\n?)*)/m)?.[1] || '';
-  const hint = {};
-  for (const line of block.split('\n')) {
-    const match = line.trim().match(/^(model|modelRole|modelTier|modelEffort|modelRationale):\s*(.+)$/);
-    if (match) hint[match[1]] = stripWrappingQuotes(match[2]);
-  }
-  const legacy = String(hint.model || '').toLowerCase();
-  const role = hint.modelRole || (legacy === 'opus' ? 'reasoning'
-    : legacy === 'haiku' ? 'efficiency' : legacy ? 'coding' : null);
-  if (!role) return null;
-  return {
-    role,
-    tier: hint.modelTier || (role === 'reasoning' ? 'premium'
-      : role === 'efficiency' ? 'economy' : 'standard'),
-    effort: hint.modelEffort,
-    rationale: hint.modelRationale,
-  };
-}
-
 /**
  * Find skill directories containing SKILL.md
  */
@@ -231,187 +167,12 @@ function findSkillDirs(baseDir) {
 }
 
 /**
- * Parse AIWG SKILL.md - handles both frontmatter and non-frontmatter formats
- */
-function parseSkillContent(content, skillName) {
-  // Try YAML frontmatter format first
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (fmMatch) {
-    const [, frontmatter, body] = fmMatch;
-    const metadata = {};
-
-    // Parse YAML-like frontmatter
-    for (const line of frontmatter.split('\n')) {
-      const colonIdx = line.indexOf(':');
-      if (colonIdx > 0) {
-        const key = line.slice(0, colonIdx).trim();
-        const value = line.slice(colonIdx + 1).trim();
-        metadata[key] = stripWrappingQuotes(value);
-      }
-    }
-
-    return { metadata, body, modelPolicy: resolveSkillModelPolicy(frontmatter) };
-  }
-
-  // Fallback: Parse non-frontmatter format (# skill-name header)
-  const lines = content.split('\n');
-  let name = skillName;
-  let description = '';
-  let bodyStartIdx = 0;
-
-  // Look for # header as name
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.startsWith('# ')) {
-      name = line.slice(2).trim();
-      bodyStartIdx = i + 1;
-      break;
-    }
-  }
-
-  // Look for first paragraph as description (skip empty lines)
-  for (let i = bodyStartIdx; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (
-      line &&
-      !line.endsWith(':') &&
-      !line.startsWith('#') &&
-      !line.startsWith('-') &&
-      !line.startsWith('|')
-    ) {
-      description = line;
-      break;
-    }
-  }
-
-  // If description is too short, try next paragraph
-  if (description.length < 20) {
-    for (let i = bodyStartIdx; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.startsWith('## ') && line.toLowerCase().includes('purpose')) {
-        // Look for content after ## Purpose
-        for (let j = i + 1; j < lines.length && j < i + 10; j++) {
-          const purposeLine = lines[j].trim();
-          if (purposeLine && !purposeLine.startsWith('#') && !purposeLine.startsWith('-')) {
-            description = purposeLine;
-            break;
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  return {
-    metadata: { name, description },
-    body: content
-  };
-}
-
-/**
- * Transform AIWG skill to Codex format
- */
-function transformToCodexSkill(skillDir) {
-  const skillPath = path.join(skillDir, 'SKILL.md');
-  const skillName = path.basename(skillDir);
-  const content = fs.readFileSync(skillPath, 'utf8');
-
-  // Platform filtering: skip skills with explicit restrictions that exclude codex.
-  // Skills using platforms: [all] (the standard token) always pass this check.
-  if (!skillMatchesProvider(content, 'codex')) {
-    return null;
-  }
-
-  const parsed = parseSkillContent(content, skillName);
-
-  if (!parsed) {
-    console.warn(`Warning: Could not parse ${skillPath}`);
-    return null;
-  }
-
-  const { metadata, body, modelPolicy } = parsed;
-
-  // Validate and truncate
-  const name = (metadata.name || path.basename(skillDir)).slice(0, MAX_NAME_LENGTH);
-  let description = metadata.description || '';
-
-  // Codex REQUIRES a non-empty description — it rejects SKILL.md files that
-  // lack one. Fail loudly rather than silently writing `description: ""`
-  // (the exact regression this guard defends against).
-  if (!description || !String(description).trim()) {
-    console.error(
-      `ERROR: Skill '${name}' has empty/missing description in source ${skillPath}`
-    );
-    console.error(
-      `       Codex rejects SKILL.md files without a description field.`
-    );
-    console.error(
-      `       Fix the source file: add a non-empty 'description:' to the frontmatter.`
-    );
-    return null;
-  }
-
-  // Truncate description to 500 chars, ending at word boundary
-  if (description.length > MAX_DESCRIPTION_LENGTH) {
-    description = description.slice(0, MAX_DESCRIPTION_LENGTH - 3);
-    const lastSpace = description.lastIndexOf(' ');
-    if (lastSpace > MAX_DESCRIPTION_LENGTH - 50) {
-      description = description.slice(0, lastSpace);
-    }
-    description += '...';
-  }
-
-  // Final guard: never emit `description: ""` under any circumstance.
-  const quotedDescription = yamlDoubleQuoted(description);
-  if (!quotedDescription || !quotedDescription.trim()) {
-    console.error(
-      `ERROR: Skill '${name}' description collapsed to empty after normalization (source: ${skillPath})`
-    );
-    return null;
-  }
-
-  // Build Codex skill format — include platforms: [codex] so deployed skills are self-describing
-  const codexContent = `---
-name: "${yamlDoubleQuoted(name)}"
-description: "${quotedDescription}"
-platforms: [codex]
----
-
-${modelPolicy
-    ? `<!-- aiwg:model-policy role=${modelPolicy.role} tier=${modelPolicy.tier}${modelPolicy.effort ? ` effort=${modelPolicy.effort}` : ''} outcome=unsupported${modelPolicy.rationale ? ` rationale=${yamlDoubleQuoted(modelPolicy.rationale)}` : ''} -->\n\n`
-    : ''}${body.trim()}
-`;
-
-  return {
-    name,
-    description,
-    content: codexContent,
-    metadataContent: codexOpenAiMetadata({ name, description }),
-    sourcePath: skillPath,
-    modelPolicy,
-  };
-}
-
-/**
  * Deploy skill to Codex skills directory
  */
 function deploySkill(skill, targetDir, opts) {
   const { force = false, dryRun = false } = opts;
   const skillDir = path.join(targetDir, skill.name);
-  const destPath = path.join(skillDir, 'SKILL.md');
   const metadataPath = path.join(skillDir, 'agents', 'openai.yaml');
-
-  // Check if skill already exists
-  if (fs.existsSync(destPath)) {
-    const existingContent = fs.readFileSync(destPath, 'utf8');
-    const existingMetadata = fs.existsSync(metadataPath)
-      ? fs.readFileSync(metadataPath, 'utf8')
-      : null;
-    if (existingContent === skill.content && existingMetadata === skill.metadataContent && !force) {
-      console.log(`  skip (unchanged): ${skill.name}`);
-      return { action: 'skip', reason: 'unchanged' };
-    }
-  }
 
   if (dryRun) {
     console.log(`  [dry-run] deploy: ${skill.name}`);
@@ -423,16 +184,14 @@ function deploySkill(skill, targetDir, opts) {
     return { action: 'deploy', reason: 'dry-run' };
   }
 
-  // Create skill directory and write SKILL.md
-  ensureDir(skillDir);
-  fs.writeFileSync(destPath, skill.content, 'utf8');
+  // Use the same whole-folder copier and ownership receipt as other providers.
+  const deployed = deploySkillDir(path.dirname(skill.sourcePath), targetDir, {
+    force, dryRun, provider: 'codex', skillName: skill.name,
+    transformSkillMd: () => skill.content,
+  });
+  if (deployed === false) return { action: 'skip', reason: 'ownership' };
   ensureDir(path.dirname(metadataPath));
   fs.writeFileSync(metadataPath, skill.metadataContent, 'utf8');
-  // Drop a marker file so future deploys can identify AIWG-managed
-  // skills regardless of frontmatter format (Codex strips `namespace:`
-  // during transform, so the SKILL.md alone isn't a reliable signal).
-  // Cleanup keys off this presence.
-  fs.writeFileSync(path.join(skillDir, '.aiwg-managed'), 'aiwg\n', 'utf8');
   console.log(`  deployed: ${skill.name}`);
 
   return { action: 'deploy', reason: 'success' };
@@ -478,8 +237,8 @@ function isFullAiwgSourceRoot(srcRoot) {
     fs.existsSync(path.join(srcRoot, 'agentic', 'code', 'extensions'));
 }
 
-(async function main() {
-  const cfg = parseArgs();
+export async function main(args = process.argv.slice(2), internal = {}) {
+  const cfg = parseArgs(args, internal.homeDir || os.homedir());
   const { source, target, mode, dryRun, force } = cfg;
 
   // Resolve source directory
@@ -694,4 +453,9 @@ function isFullAiwgSourceRoot(srcRoot) {
   if (!dryRun && totalDeployed > 0) {
     console.log(`\nRestart Codex to load new skills.`);
   }
-})();
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await main(); }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
+}

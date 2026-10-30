@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Ajv from 'ajv';
+import Ajv2020 from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import { validateFlowGraph } from './validator.mjs';
 
 const RESOURCE_KEYS = ['activations', 'tokens', 'costUsd', 'timeMs'];
 
-// This runtime has no worker-value validation/accounting handshake yet (05 §5.1).
-// Reject these bindings before validation can clone them or an adapter can launch.
+// Legacy adapters cannot consume worker values without the managed handshake.
 const MISSION_WORKER_SCHEMA_ID = 'https://aiwg.io/schemas/mission.aiwg.io/v1';
 const MISSION_WORKER_DEFINITIONS = new Set([
   'workerArtifact',
@@ -214,18 +219,205 @@ function defaultPredicate(predicate, context) {
   }
 }
 
-function usageOf(result) {
-  const usage = result?.usage ?? {};
-  return {
-    tokens: Number(usage.tokens ?? 0),
-    costUsd: Number(usage.costUsd ?? 0),
-    timeMs: Number(usage.timeMs ?? 0),
+const FLOW_WORKER_FEATURES = [
+  'worker-dispatch.v1', 'worker-policy-origins.v1', 'worker-admission-fencing.v1',
+  'worker-claims.v1', 'worker-activation.v1', 'worker-health.v1', 'worker-flow-values.v1',
+];
+let bundledSchemas;
+const managedInvokers = new WeakSet();
+
+function loadBundledSchemas() {
+  if (bundledSchemas) return bundledSchemas;
+  let root = path.dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    try {
+      const name = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name;
+      if (name === 'aiwg' || name === '@aiwg/cli') break;
+    } catch { /* source and installed packages have different depths */ }
+    const parent = path.dirname(root);
+    if (parent === root) throw new FlowGraphRuntimeError('OG_CONTRACT_UNSUPPORTED', 'Cannot locate bundled Flow schema owners.');
+    root = parent;
+  }
+  const files = [
+    'schemas/mission-v1.schema.json',
+    'schemas/models/model-catalog.v1.schema.json',
+    'schemas/models/model-policy.v1.schema.json',
+    'schemas/models/model-config-compatibility.v1.schema.json',
+    'schemas/models/provider-model-capabilities.v1.schema.json',
+    'vscode-extension/schemas/aiwg.config.v1.json',
+    'agentic/code/addons/composition-engine/schemas/flow-graph.schema.json',
+  ];
+  bundledSchemas = files.map((file) => JSON.parse(fs.readFileSync(path.join(root, file), 'utf8')));
+  return bundledSchemas;
+}
+
+/** Trusted adapter registration metadata, using the existing Mission handshake. */
+export function flowWorkerConsumerSupport() {
+  const mission = loadBundledSchemas().find((schema) => schema.$id === MISSION_WORKER_SCHEMA_ID);
+  const definitions = Object.fromEntries([...MISSION_WORKER_DEFINITIONS].map((name) => [name, mission.$defs[name]]));
+  return { revision: 1, bundleDigest: digest(definitions), features: [...FLOW_WORKER_FEATURES], lossless: true };
+}
+
+/** Bind the graph evaluator to the existing project's managed execution owner. */
+export function createManagedCompositionAdapter({ scheduler, prepareNode, invokeNode, allowanceFromOwner, ...adapter }) {
+  if (!scheduler || typeof prepareNode !== 'function' || typeof invokeNode !== 'function' || typeof allowanceFromOwner !== 'function') {
+    throw new FlowGraphRuntimeError('OG_CONTRACT_UNSUPPORTED', 'Managed Flow requires the shared admission and qualified execution owner.');
+  }
+  async function invokeManagedNode(request) {
+    const prepared = await prepareNode(clone(request));
+    const proposed = prepared?.admission;
+    if (!proposed?.managed || !request.runResources) throw new FlowGraphRuntimeError('OG_CONTRACT_UNSUPPORTED', 'Managed Flow requires a qualified admission request and parent ceilings.');
+    const allowance = {
+      ...proposed.allowance,
+      ...allowanceFromOwner(request.runId, proposed.allowance?.taskId ?? request.node.id, { kind: 'flow', ceilings: request.runResources }),
+    };
+    if (!allowance.previousRequestId) {
+      const previous = Object.values(scheduler.snapshot().records)
+        .filter((record) => record.requestId !== proposed.requestId && record.allowance?.runId === allowance.runId && record.allowance?.taskId === allowance.taskId)
+        .sort((left, right) => (right.accounting?.attemptNumber ?? 0) - (left.accounting?.attemptNumber ?? 0))[0];
+      if (previous) allowance.previousRequestId = previous.requestId;
+    }
+    const admission = scheduler.submit({ ...proposed, allowance });
+    if (admission.state !== 'admitted') throw Object.assign(new FlowGraphRuntimeError('MANAGED_ADMISSION_BLOCKED', `Flow node '${request.node.id}' is ${admission.state}: ${admission.reason}`), { usage: { tokens: 0, costUsd: 0, timeMs: 0 } });
+    const generation = admission.leaseGeneration;
+    let claimed = false;
+    let execution;
+    let observedUsage;
+    let finalized = false;
+    function settle(source) {
+      const evidence = source?.managedEvidence;
+      if (!evidence?.health || !evidence?.usage) return false;
+      scheduler.acceptFinal(admission.requestId, generation, evidence.health, evidence.usage);
+      const record = scheduler.settle(admission.requestId, generation, evidence.health, evidence.usage, evidence.failure, execution);
+      finalized = record.state === 'settled';
+      return finalized;
+    }
+    try {
+      if (prepared.brief && (prepared.brief.lease?.reservationId !== admission.requestId
+        || prepared.brief.lease?.generation !== generation || prepared.brief.lease?.authorityRef !== 'project')) {
+        scheduler.disconnect(admission.requestId, generation);
+        throw new FlowGraphRuntimeError('MANAGED_ADMISSION_MISMATCH', 'Prepared Flow brief does not match its current shared admission lease.');
+      }
+      scheduler.claimLaunch(admission.requestId, generation);
+      claimed = true;
+      const raw = await invokeNode(clone(request), {
+        admission: clone(admission), prepared,
+        bindExecution(identity) {
+          scheduler.bindExecution(admission.requestId, generation, identity);
+          execution = clone(identity);
+        },
+        renew: () => scheduler.renew(admission.requestId, generation),
+        observeHealth: (health) => scheduler.observeHealth(admission.requestId, generation, health),
+        cancel: () => scheduler.cancel(admission.requestId, generation),
+      });
+      observedUsage = raw?.usage;
+      if (!settle(raw)) throw Object.assign(new FlowGraphRuntimeError('MANAGED_EXECUTION_UNCERTAIN', 'Managed Flow cannot deliver outputs without current-generation termination proof.'), { usage: raw?.usage });
+      if (raw.managedEvidence.health.state !== 'completed') throw Object.assign(new FlowGraphRuntimeError('MANAGED_EXECUTION_FAILED', 'Managed worker did not complete.'), { usage: raw?.usage });
+      const { managedEvidence, ...result } = raw;
+      return { ...result, managedAdmission: { requestId: admission.requestId, generation, state: 'settled', worker: clone(admission.managed) } };
+    } catch (error) {
+      if (observedUsage !== undefined && error && typeof error === 'object' && error.usage === undefined) error.usage = clone(observedUsage);
+      if (!finalized && claimed) {
+        try { settle(error); } catch {
+          // Invalid final evidence cannot replace the execution failure or its usage.
+        }
+        if (!finalized) {
+          try { scheduler.disconnect(admission.requestId, generation); } catch {
+            // A stale owner cannot mutate the current lease or deliver outputs.
+          }
+        }
+      }
+      throw error;
+    }
+  }
+  managedInvokers.add(invokeManagedNode);
+  return { ...adapter, workerMode: 'managed', workerConsumer: flowWorkerConsumerSupport(), invokeNode: invokeManagedNode };
+}
+
+function managedValueValidator(consumer) {
+  const support = flowWorkerConsumerSupport();
+  if (consumer?.revision !== support.revision || consumer?.bundleDigest !== support.bundleDigest
+    || consumer?.lossless !== true || !Array.isArray(consumer?.features)
+    || support.features.some((feature) => !consumer.features.includes(feature))) {
+    throw new FlowGraphRuntimeError('OG_CONTRACT_UNSUPPORTED', 'Managed Flow requires the current lossless worker schema bundle and worker-flow-values.v1 adapter.');
+  }
+  const engines = {
+    draft7: addFormats(new Ajv({ strict: false, allErrors: true })),
+    draft2020: addFormats(new Ajv2020({ strict: false, allErrors: true })),
   };
+  const dialect = (schema) => schema.$schema?.includes('2020-12') ? 'draft2020' : 'draft7';
+  const owners = new Map(loadBundledSchemas().map((schema) => [schema.$id, schema]));
+  for (const schema of owners.values()) engines[dialect(schema)].addSchema(schema);
+  // A reference to another dialect delegates to that owner's validator.
+  // The surrounding schema keeps its own dialect and sibling semantics.
+  const bridgeKeyword = 'aiwgBundledSchemaReference';
+  for (const engine of Object.values(engines)) engine.addKeyword({
+    keyword: bridgeKeyword,
+    schemaType: 'string',
+    errors: true,
+    compile(reference) {
+      const owner = owners.get(reference.split('#')[0]);
+      if (!owner) throw new Error('Only bundled schema references are supported.');
+      return engines[dialect(owner)].getSchema(reference);
+    },
+  });
+  function bridge(schema, selected, base = 'https://aiwg.invalid/flow-value') {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+    const result = { ...schema };
+    if (Object.hasOwn(schema, bridgeKeyword)) throw new Error('Reserved schema keyword.');
+    if (schema.$id) base = new URL(schema.$id, base).href;
+    if (schema.$ref) {
+      const reference = new URL(schema.$ref, base).href;
+      const owner = owners.get(reference.split('#')[0]);
+      if (owner && dialect(owner) !== selected) {
+        delete result.$ref;
+        result[bridgeKeyword] = reference;
+      }
+    }
+    for (const key of ['$defs', 'definitions', 'properties', 'patternProperties', 'dependentSchemas', 'dependencies']) {
+      if (schema[key]) result[key] = Object.fromEntries(Object.entries(schema[key]).map(([name, child]) => [name, bridge(child, selected, base)]));
+    }
+    for (const key of ['allOf', 'anyOf', 'oneOf', 'prefixItems']) if (Array.isArray(schema[key])) result[key] = schema[key].map((child) => bridge(child, selected, base));
+    for (const key of ['items', 'additionalItems', 'additionalProperties', 'unevaluatedItems', 'unevaluatedProperties', 'contains', 'propertyNames', 'not', 'if', 'then', 'else']) {
+      if (Object.hasOwn(schema, key)) result[key] = Array.isArray(schema[key]) ? schema[key].map((child) => bridge(child, selected, base)) : bridge(schema[key], selected, base);
+    }
+    return result;
+  }
+  const validators = new Map();
+  function compile(schema) {
+    if (validators.has(schema)) return validators.get(schema);
+    let selected = dialect(schema);
+    if (!schema.$schema && schema.$ref) {
+      const owner = owners.get(schema.$ref.split('#')[0]);
+      if (owner) selected = dialect(owner);
+    }
+    try {
+      const validate = engines[selected].compile(bridge(schema, selected));
+      validators.set(schema, validate);
+      return validate;
+    } catch (error) {
+      throw new FlowGraphRuntimeError('FLOW_SCHEMA_UNRESOLVED', 'Typed Flow schemas must resolve offline from bundled owners in their declared dialect.', { reason: error.message });
+    }
+  }
+  return {
+    compile,
+    check(schema, value, code, binding) {
+      const validate = compile(schema);
+      if (!validate(value)) throw new FlowGraphRuntimeError(code, `Invalid typed Flow value '${binding}'.`, { errors: clone(validate.errors) });
+    },
+  };
+}
+
+function usageOf(result, managed = false) {
+  const usage = result?.usage ?? {};
+  return Object.fromEntries(['tokens', 'costUsd', 'timeMs'].map((key) => [
+    key, managed && (usage[key] === undefined || usage[key] === null) ? null : Number(usage[key] ?? 0),
+  ]));
 }
 
 function assertUsage(usage) {
   for (const [key, value] of Object.entries(usage)) {
-    if (!Number.isFinite(value) || value < 0) throw new Error(`Adapter usage.${key} must be a non-negative number.`);
+    if (value !== null && (!Number.isFinite(value) || value < 0)) throw new Error(`Adapter usage.${key} must be a non-negative number.`);
   }
 }
 
@@ -287,9 +479,7 @@ function emptyUsage() {
 
 function addUsage(target, usage) {
   target.runs += 1;
-  target.tokens += usage.tokens;
-  target.costUsd += usage.costUsd;
-  target.timeMs += usage.timeMs;
+  for (const key of ['tokens', 'costUsd', 'timeMs']) target[key] = target[key] === null || usage[key] === null ? null : target[key] + usage[key];
 }
 
 export class FlowGraphRuntimeError extends Error {
@@ -307,7 +497,10 @@ export class FlowGraphRuntimeError extends Error {
  * module deliberately does not create a competing mission ledger.
  */
 export async function executeFlowGraph(manifest, options = {}) {
-  assertNoWorkerFlow(manifest, options.resumeFrom);
+  const managed = options.workerMode === 'managed';
+  const values = managed ? managedValueValidator(options.workerConsumer) : undefined;
+  if (managed && !managedInvokers.has(options.invokeNode)) throw new FlowGraphRuntimeError('OG_CONTRACT_UNSUPPORTED', 'Managed Flow requires an adapter bound to the shared execution owner.');
+  if (!managed) assertNoWorkerFlow(manifest, options.resumeFrom);
   const validation = validateFlowGraph(manifest, options.validation);
   if (!validation.valid) {
     throw new FlowGraphRuntimeError('FLOW_GRAPH_INVALID', 'FlowGraph validation failed.', {
@@ -342,16 +535,34 @@ export async function executeFlowGraph(manifest, options = {}) {
   const realized = {
     activations: Number(resume.realized?.activations ?? 0),
     nodeRuns: Number(resume.realized?.nodeRuns ?? 0),
-    tokens: Number(resume.realized?.tokens ?? 0),
-    costUsd: Number(resume.realized?.costUsd ?? 0),
-    timeMs: Number(resume.realized?.timeMs ?? 0),
+    tokens: managed && resume.realized?.tokens === null ? null : Number(resume.realized?.tokens ?? 0),
+    costUsd: managed && resume.realized?.costUsd === null ? null : Number(resume.realized?.costUsd ?? 0),
+    timeMs: managed && resume.realized?.timeMs === null ? null : Number(resume.realized?.timeMs ?? 0),
     maxConcurrency: Number(resume.realized?.maxConcurrency ?? 0),
     retries: Number(resume.realized?.retries ?? 0),
   };
   const joinState = clone(resume.joins) ?? {};
   const evidence = clone(resume.evidence) ?? { nodes: {}, branches: {}, sideEffects: {}, joins: {} };
+  const accounting = managed ? clone(resume.accounting) ?? {
+    attempts: {},
+    pending: {},
+    known: Object.fromEntries(['tokens', 'costUsd', 'timeMs'].map((key) => [key, realized[key] ?? 0])),
+    reserved: Object.fromEntries(['tokens', 'costUsd', 'timeMs'].map((key) => [key, realized[key] === null ? manifest.spec.ceilings[key] : 0])),
+  } : undefined;
+  if (managed) {
+    for (const field of stateFields.values()) values.check(field.schema, state[field.name], 'INVALID_TYPED_STATE', field.name);
+    for (const node of nodes.values()) {
+      for (const binding of [...node.inputs, ...node.outputs]) values.compile(binding.schema);
+      for (const binding of node.inputs) if (Object.hasOwn(binding, 'value')) values.check(binding.schema, binding.value, 'INVALID_TYPED_INPUT', `${node.id}.${binding.name}`);
+      if (results[node.id]) for (const binding of node.outputs) values.check(binding.schema, results[node.id].outputs?.[binding.name], 'INVALID_TYPED_OUTPUT', `${node.id}.${binding.name}`);
+    }
+    values.compile(manifest.spec.output.schema);
+  }
+  if (managed) accounting.pending ??= {};
   let sequence = events.length;
-  let terminal;
+  let terminal = managed && Object.keys(accounting.pending).length
+    ? { code: 'MANAGED_RECONCILIATION_REQUIRED', reason: 'Managed Flow checkpoint has an invocation awaiting owner reconciliation.' }
+    : undefined;
 
   async function emit(type, payload = {}) {
     const event = { sequence: ++sequence, type, graphId, runId, ...clone(payload) };
@@ -377,6 +588,7 @@ export async function executeFlowGraph(manifest, options = {}) {
       reactivatedNodes: [...reactivatedNodes].sort(),
       joins: clone(joinState),
       realized: clone(realized),
+      ...(managed ? { accounting: clone(accounting) } : {}),
       evidence: clone(evidence),
       events: clone(events),
     };
@@ -433,14 +645,62 @@ export async function executeFlowGraph(manifest, options = {}) {
     }
   }
 
+  function validateInputs(node, inputs) {
+    if (!managed) return assertNoWorkerValues(inputs);
+    for (const binding of node.inputs) values.check(binding.schema, inputs[binding.name], 'INVALID_TYPED_INPUT', `${node.id}.${binding.name}`);
+  }
+
+  function requestedResources(node) {
+    const requested = clone(node.ceilings ?? manifest.spec.ceilings);
+    if (managed) for (const key of ['tokens', 'costUsd', 'timeMs']) {
+      const remaining = manifest.spec.ceilings[key] - accounting.known[key] - accounting.reserved[key];
+      if (remaining <= 0) throw new FlowGraphRuntimeError('RESOURCE_CEILING_EXHAUSTED', `Managed Flow has no remaining ${key} allowance.`);
+      requested[key] = Math.min(requested[key], remaining);
+    }
+    return requested;
+  }
+
+  async function chargeAttempt(node, invocationId, source, requested) {
+    if (accounting.attempts[invocationId]) return accounting.attempts[invocationId].usage;
+    let usage = usageOf(source, true);
+    try { assertUsage(usage); } catch { usage = { tokens: null, costUsd: null, timeMs: null }; }
+    const reserved = {};
+    for (const key of ['tokens', 'costUsd', 'timeMs']) {
+      reserved[key] = usage[key] === null ? requested[key] : 0;
+      accounting.known[key] += usage[key] ?? 0;
+      accounting.reserved[key] += reserved[key];
+      realized[key] = realized[key] === null || usage[key] === null ? null : realized[key] + usage[key];
+    }
+    accounting.attempts[invocationId] = { nodeId: node.id, usage, reserved };
+    realized.nodeRuns += 1;
+    const nodeUsage = evidence.nodes[node.id]?.resources ?? emptyUsage();
+    addUsage(nodeUsage, usage);
+    evidence.nodes[node.id] = { ...(evidence.nodes[node.id] ?? {}), resources: nodeUsage };
+    const branchId = node.track ?? 'default';
+    const branchUsage = evidence.branches[branchId] ?? emptyUsage();
+    addUsage(branchUsage, usage);
+    evidence.branches[branchId] = branchUsage;
+    await persist();
+    return usage;
+  }
+
+  function checkChargedCeilings(node, usage, requested) {
+    for (const key of ['tokens', 'costUsd', 'timeMs']) if (usage[key] !== null && usage[key] > requested[key]) {
+      throw new FlowGraphRuntimeError('RESOURCE_CEILING_WOULD_EXCEED', `Node '${node.id}' exceeded its ${key} allowance.`);
+    }
+  }
+
   function applyOutputs(node, outputs) {
+    if (managed) for (const binding of node.outputs) values.check(binding.schema, outputs[binding.name], 'INVALID_TYPED_OUTPUT', `${node.id}.${binding.name}`);
     for (const binding of node.outputs) {
       if (!Object.prototype.hasOwnProperty.call(outputs, binding.name)) {
         throw new FlowGraphRuntimeError('MISSING_TYPED_OUTPUT', `Node '${node.id}' did not return output '${binding.name}'.`);
       }
       if (binding.state) {
         const field = stateFields.get(binding.state);
-        state[binding.state] = reduceValue(state[binding.state], outputs[binding.name], field.reducer);
+        const reduced = reduceValue(state[binding.state], outputs[binding.name], field.reducer);
+        if (managed) values.check(field.schema, reduced, 'INVALID_TYPED_STATE', binding.state);
+        state[binding.state] = reduced;
       }
     }
   }
@@ -448,7 +708,7 @@ export async function executeFlowGraph(manifest, options = {}) {
   async function invoke(node, activationTick, iteration = 1) {
     enforceAuthority(node);
     const inputs = inputsFor(node);
-    assertNoWorkerValues(inputs);
+    validateInputs(node, inputs);
     const inputSnapshot = clone(inputs);
     const nodeRunId = `${runId}:${node.id}:${activationTick}:${iteration}`;
     const invocationKey = node.idempotencyKey
@@ -486,7 +746,13 @@ export async function executeFlowGraph(manifest, options = {}) {
         invocationKey,
         inputDigest: digest(inputSnapshot),
       });
+      let requested;
       try {
+        requested = requestedResources(node);
+        if (managed) {
+          accounting.pending[`${nodeRunId}:${attempt}`] = { nodeId: node.id, requestedResources: clone(requested) };
+          await persist();
+        }
         const raw = await options.invokeNode({
           graphId,
           runId,
@@ -499,13 +765,15 @@ export async function executeFlowGraph(manifest, options = {}) {
           invocationKey,
           inputs: inputSnapshot,
           state: clone(state),
-          requestedResources: clone(node.ceilings ?? manifest.spec.ceilings),
+          requestedResources: requested,
+          ...(managed ? { runResources: clone(manifest.spec.ceilings), invocationId: `${nodeRunId}:${attempt}` } : {}),
         });
-        assertNoWorkerResult(raw);
+        if (!managed) assertNoWorkerResult(raw);
         const outputs = clone(raw?.outputs ?? {});
-        const usage = usageOf(raw);
+        const usage = managed ? await chargeAttempt(node, `${nodeRunId}:${attempt}`, raw, requested) : usageOf(raw);
         assertUsage(usage);
-        for (const key of ['tokens', 'costUsd', 'timeMs']) {
+        if (managed) checkChargedCeilings(node, usage, requested);
+        if (!managed) for (const key of ['tokens', 'costUsd', 'timeMs']) {
           const graphCeiling = manifest.spec.ceilings[key];
           const nodeCeiling = node.ceilings?.[key] ?? graphCeiling;
           if (usage[key] > nodeCeiling || realized[key] + usage[key] > graphCeiling) {
@@ -517,19 +785,21 @@ export async function executeFlowGraph(manifest, options = {}) {
           }
         }
         applyOutputs(node, outputs);
-        realized.nodeRuns += 1;
-        realized.tokens += usage.tokens;
-        realized.costUsd += usage.costUsd;
-        realized.timeMs += usage.timeMs;
-        const nodeUsage = evidence.nodes[node.id]?.resources ?? emptyUsage();
-        addUsage(nodeUsage, usage);
-        const branchId = node.track ?? 'default';
-        const branchUsage = evidence.branches[branchId] ?? emptyUsage();
-        addUsage(branchUsage, usage);
-        evidence.branches[branchId] = branchUsage;
+        if (!managed) {
+          realized.nodeRuns += 1;
+          realized.tokens += usage.tokens;
+          realized.costUsd += usage.costUsd;
+          realized.timeMs += usage.timeMs;
+          const nodeUsage = evidence.nodes[node.id]?.resources ?? emptyUsage();
+          addUsage(nodeUsage, usage);
+          const branchId = node.track ?? 'default';
+          const branchUsage = evidence.branches[branchId] ?? emptyUsage();
+          addUsage(branchUsage, usage);
+          evidence.branches[branchId] = branchUsage;
+          evidence.nodes[node.id] = { ...(evidence.nodes[node.id] ?? {}), resources: nodeUsage };
+        }
         evidence.nodes[node.id] = {
           ...(evidence.nodes[node.id] ?? {}),
-          resources: nodeUsage,
           scope: mergedScopeEvidence(
             evidence.nodes[node.id]?.scope,
             node.scope,
@@ -544,6 +814,7 @@ export async function executeFlowGraph(manifest, options = {}) {
           ...(raw?.score === undefined ? {} : { score: raw.score }),
           ...(raw?.citations === undefined ? {} : { citations: clone(raw.citations) }),
           adapter: options.adapterId ?? 'unspecified',
+          ...(managed ? { admission: clone(raw?.managedAdmission) } : {}),
           nodeRunId,
           invocationKey,
         };
@@ -563,9 +834,14 @@ export async function executeFlowGraph(manifest, options = {}) {
           citations: clone(raw?.citations),
           ...tracePayload(node, inputSnapshot, outputs),
         });
+        if (managed) delete accounting.pending[`${nodeRunId}:${attempt}`];
         await persist();
         return result;
       } catch (error) {
+        if (managed && requested) {
+          await chargeAttempt(node, `${nodeRunId}:${attempt}`, error, requested);
+          delete accounting.pending[`${nodeRunId}:${attempt}`];
+        }
         lastError = error;
         await emit('node-attempt-failed', {
           nodeId: node.id,
@@ -680,9 +956,7 @@ export async function executeFlowGraph(manifest, options = {}) {
     const resources = join.sources.reduce((total, source) => {
       const usage = evidence.nodes[source]?.resources ?? emptyUsage();
       total.runs += usage.runs;
-      total.tokens += usage.tokens;
-      total.costUsd += usage.costUsd;
-      total.timeMs += usage.timeMs;
+      for (const key of ['tokens', 'costUsd', 'timeMs']) total[key] = total[key] === null || usage[key] === null ? null : total[key] + usage[key];
       return total;
     }, emptyUsage());
     evidence.joins[join.id] = { sources: [...join.sources], resources };
@@ -722,11 +996,84 @@ export async function executeFlowGraph(manifest, options = {}) {
     });
     for (const node of nodesToRun) recordJoinEvidence(joinFor(node.id));
     let settled;
-    if (parallelEligible) {
+    if (parallelEligible && managed) {
       const requests = nodesToRun.map((node) => {
         enforceAuthority(node);
         const inputs = inputsFor(node);
-        assertNoWorkerValues(inputs);
+        validateInputs(node, inputs);
+        const requested = requestedResources(node);
+        for (const key of ['tokens', 'costUsd', 'timeMs']) {
+          const share = (manifest.spec.ceilings[key] - accounting.known[key] - accounting.reserved[key]) / nodesToRun.length;
+          requested[key] = Math.min(requested[key], key === 'costUsd' ? share : Math.floor(share));
+          if (requested[key] <= 0) throw new FlowGraphRuntimeError('RESOURCE_CEILING_EXHAUSTED', `Managed parallel Flow has no remaining ${key} allowance.`);
+        }
+        const nodeRunId = `${runId}:${node.id}:${tick}:${iteration}`;
+        return { graphId, runId, node: clone(node), nodeRunId, activationId: `${runId}:activation:${tick}`,
+          activation: tick, iteration, attempt: 1, invocationKey: nodeRunId,
+          inputs: clone(inputs), state: clone(state), requestedResources: requested, runResources: clone(manifest.spec.ceilings), invocationId: `${nodeRunId}:1` };
+      });
+      for (const request of requests) accounting.pending[`${request.nodeRunId}:1`] = { nodeId: request.node.id, requestedResources: clone(request.requestedResources) };
+      await persist();
+      const observations = new Map();
+      const pending = new Map();
+      let rawResults;
+      let dispatchError;
+      for (const request of requests) await emit('node-started', {
+        nodeId: request.node.id, nodeRunId: request.nodeRunId, activation: tick, iteration,
+        attempt: 1, invocationKey: request.invocationKey, inputDigest: digest(request.inputs), delegated: 'parallel-dispatch',
+      });
+      try {
+        rawResults = await options.parallelDispatch(clone(requests), (request) => {
+          const original = requests.find((item) => item.nodeRunId === request.nodeRunId);
+          if (!original || pending.has(original.nodeRunId)) throw new FlowGraphRuntimeError('PARALLEL_RESULT_MISMATCH', 'Managed parallel dispatch must invoke each planned request once.');
+          const call = Promise.resolve().then(() => options.invokeNode(clone(original))).then(
+            (raw) => { observations.set(original.nodeRunId, { raw }); return raw; },
+            (error) => { observations.set(original.nodeRunId, { error }); throw error; },
+          );
+          pending.set(original.nodeRunId, call);
+          return call;
+        });
+        if (!Array.isArray(rawResults) || rawResults.length !== requests.length || pending.size !== requests.length) {
+          throw new FlowGraphRuntimeError('PARALLEL_RESULT_MISMATCH', 'Managed parallelDispatch must invoke every planned request through the supplied execution owner.');
+        }
+      } catch (error) { dispatchError = error; }
+      // Promise.all may reject before other dispatched attempts settle. Retain
+      // every observed spend before returning control to the graph owner.
+      await Promise.allSettled([...pending.values()]);
+      settled = [];
+      for (const [index, request] of requests.entries()) {
+        const node = nodesToRun[index];
+        const observation = observations.get(request.nodeRunId);
+        const raw = observation?.raw;
+        const error = observation?.error ?? (!raw ? dispatchError : undefined);
+        const usage = await chargeAttempt(node, `${request.nodeRunId}:1`, raw ?? error, request.requestedResources);
+        delete accounting.pending[`${request.nodeRunId}:1`];
+        try {
+          if (error) throw error;
+          checkChargedCeilings(node, usage, request.requestedResources);
+          const outputs = clone(raw?.outputs ?? {});
+          applyOutputs(node, outputs);
+          const result = { outputs, usage, adapter: options.adapterId ?? 'unspecified', admission: clone(raw?.managedAdmission), nodeRunId: request.nodeRunId, invocationKey: request.invocationKey,
+            ...(raw?.score === undefined ? {} : { score: raw.score }), ...(raw?.citations === undefined ? {} : { citations: clone(raw.citations) }) };
+          evidence.nodes[node.id].scope = mergedScopeEvidence(evidence.nodes[node.id]?.scope, node.scope, publicTouches(raw?.observedTouches), raw?.observationComplete === true);
+          results[node.id] = result;
+          completed.add(node.id);
+          failed.delete(node.id);
+          await emit('node-completed', { nodeId: node.id, nodeRunId: request.nodeRunId, activation: tick, iteration,
+            attempt: 1, invocationKey: request.invocationKey, delegated: 'parallel-dispatch', usage, ...tracePayload(node, request.inputs, outputs) });
+          settled.push({ node, result });
+        } catch (error) {
+          failed.add(node.id);
+          completed.delete(node.id);
+          settled.push({ node, error });
+        }
+      }
+      await persist();
+    } else if (parallelEligible) {
+      const requests = nodesToRun.map((node) => {
+        enforceAuthority(node);
+        const inputs = inputsFor(node);
+        validateInputs(node, inputs);
         const nodeRunId = `${runId}:${node.id}:${tick}:${iteration}`;
         return {
           graphId,
@@ -937,9 +1284,7 @@ export async function executeFlowGraph(manifest, options = {}) {
         resources: join.sources.reduce((total, source) => {
           const usage = evidence.nodes[source]?.resources ?? emptyUsage();
           total.runs += usage.runs;
-          total.tokens += usage.tokens;
-          total.costUsd += usage.costUsd;
-          total.timeMs += usage.timeMs;
+          for (const key of ['tokens', 'costUsd', 'timeMs']) total[key] = total[key] === null || usage[key] === null ? null : total[key] + usage[key];
           return total;
         }, emptyUsage()),
       });
@@ -950,9 +1295,7 @@ export async function executeFlowGraph(manifest, options = {}) {
     const joinResources = join.sources.reduce((total, source) => {
       const usage = evidence.nodes[source]?.resources ?? emptyUsage();
       total.runs += usage.runs;
-      total.tokens += usage.tokens;
-      total.costUsd += usage.costUsd;
-      total.timeMs += usage.timeMs;
+      for (const key of ['tokens', 'costUsd', 'timeMs']) total[key] = total[key] === null || usage[key] === null ? null : total[key] + usage[key];
       return total;
     }, emptyUsage());
     evidence.joins[join.id] = { sources: [...join.sources], resources: joinResources };
@@ -1014,6 +1357,10 @@ export async function executeFlowGraph(manifest, options = {}) {
   }
 
   const output = resultOutput(results, manifest.spec.output.from);
+  if (managed && !terminal) {
+    try { values.check(manifest.spec.output.schema, output, 'INVALID_TYPED_OUTPUT', manifest.spec.output.from); }
+    catch (error) { terminal = { code: error.code, reason: error.message }; }
+  }
   let status = terminal?.status ?? (terminal ? 'failed' : 'completed');
   if (terminal && !terminal.status && manifest.spec.failure.onNodeFailure === 'partial-synthesis') status = 'partial';
   const publicOutput = status === 'completed' && output !== undefined
@@ -1046,6 +1393,7 @@ export async function executeFlowGraph(manifest, options = {}) {
     results: clone(results),
     requestedResources: clone(manifest.spec.ceilings),
     realizedResources: clone(realized),
+    ...(managed ? { accounting: clone(accounting) } : {}),
     evidence: clone(evidence),
     trace: events,
     checkpoint: checkpoint(),

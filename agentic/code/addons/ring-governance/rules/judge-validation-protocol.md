@@ -1,3 +1,12 @@
+---
+enforcement: high
+activation: bound
+summary: Require protected task-family validation, chance-corrected agreement, retest and bias evidence before treating an LLM judge as governance proof.
+bound_to:
+  agents: [governance-skeptic]
+  skills: [evolution-surface-review, governance-corpus-inventory, governance-escape-hatch-audit]
+---
+
 # Judge Validation Protocol
 
 **Enforcement Level**: HIGH

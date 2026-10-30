@@ -3,6 +3,7 @@ import {
   basename, dirname, extname, resolve,
 } from 'node:path';
 import { z } from 'zod';
+import { dateTime } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -26,7 +27,7 @@ import {
 export const CURSOR_ADAPTER_VERSION = '1.0.0';
 export const CURSOR_SOURCE_SCHEMA_VERSION = '1.0.0';
 
-const CliEventSchema = z.object({
+const CliEventSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   cliVersion: z.string().optional(),
   version: z.string().optional(),
@@ -38,51 +39,51 @@ const CliEventSchema = z.object({
   cwd: z.string().optional(),
   model: z.string().optional(),
   permissionMode: z.string().optional(),
-  message: z.object({
+  message: z.looseObject({
     role: z.string().optional(),
-    content: z.array(z.object({
+    content: z.array(z.looseObject({
       type: z.string(),
       text: z.string().optional(),
-    }).passthrough()).optional(),
-  }).passthrough().optional(),
-  tool_call: z.record(z.unknown()).optional(),
+    })).optional(),
+  }).optional(),
+  tool_call: z.record(z.string(), z.unknown()).optional(),
   result: z.string().optional(),
   is_error: z.boolean().optional(),
-}).passthrough();
+});
 
-const CloudEventSchema = z.object({
+const CloudEventSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   id: z.string().optional(),
   event_id: z.string().optional(),
   type: z.string().min(1),
-  agent: z.object({
+  agent: z.looseObject({
     id: z.string().min(1),
     status: z.string().optional(),
-  }).passthrough().optional(),
-  run: z.object({
+  }).optional(),
+  run: z.looseObject({
     id: z.string().min(1),
     status: z.string().optional(),
-  }).passthrough().optional(),
+  }).optional(),
   data: z.unknown().optional(),
-}).passthrough().refine((value) => value.agent?.id || value.run?.id, {
+}).refine((value) => value.agent?.id || value.run?.id, {
   message: 'cloud event requires an agent or run identity',
 });
 
-const AgentTranscriptEventSchema = z.object({
+const AgentTranscriptEventSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   id: z.string().optional(),
   event_id: z.string().optional(),
   request_id: z.string().optional(),
-  timestamp: z.string().datetime({ offset: true }).optional(),
+  timestamp: dateTime({ offset: true }).optional(),
   type: z.string().min(1).optional(),
   status: z.string().min(1).optional(),
   role: z.string().min(1).optional(),
-  message: z.object({
+  message: z.looseObject({
     id: z.string().optional(),
     role: z.string().optional(),
     content: z.union([z.string(), z.array(z.unknown())]).optional(),
-  }).passthrough().optional(),
-}).passthrough().refine((value) => value.role || value.type, {
+  }).optional(),
+}).refine((value) => value.role || value.type, {
   message: 'agent transcript event requires role or type',
 });
 

@@ -3,6 +3,12 @@ id: film-performance
 name: Film Performance
 description: Preserve dialogue intent and selected takes while matching speech mode, visible action, and contextual sound.
 enforcement: high
+activation: bound
+summary: Preserve dialogue intent and selected takes while matching speech mode, visible action, and contextual sound.
+bound_to:
+  agents: [film-producer, film-story-director, film-scene-supervisor, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-story-proof, film-performance-sound, film-motion-coverage, film-shot-plan, film-storyboard, film-edit-conform, film-review-gate]
+  flows: [film-develop, film-design, film-previs, film-generate, film-finish, film-resume, film-revise-with-impact]
 ---
 
 # Film Performance

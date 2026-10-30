@@ -26,9 +26,10 @@ import {
   buildProviderBootstrapBlock,
   PROVIDER_BOOTSTRAP_START,
   PROVIDER_BOOTSTRAP_END,
+  dedupeProviderBootstrap,
 } from './workspace-context.js';
 import { dominantLineEnding, withLineEnding } from './line-endings.js';
-import { assertSafeContextFile } from './context-file-safety.js';
+import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
 
 export const CLAUDE_HOOK_START = '<!-- AIWG:claude-md-hook:start -->';
 export const CLAUDE_HOOK_END = '<!-- AIWG:claude-md-hook:end -->';
@@ -40,35 +41,21 @@ export const CLAUDE_HOOK_END = '<!-- AIWG:claude-md-hook:end -->';
  */
 type ClaudeArtifactOutputPolicy = { canonical?: string; provider_native?: string; destinations?: Record<string, { enabled?: boolean; use_when?: string }> };
 
-function buildClaudeArtifactOutputPolicy(policy: ClaudeArtifactOutputPolicy = {}): string[] {
-  const providerNative = policy.provider_native ?? 'explicit-only';
-  const design = policy.destinations?.['claude-code.design'];
-  const designEnabled = design?.enabled !== false && design?.use_when !== 'disabled';
-  return [
-    '## AIWG artifact output policy',
-    '',
-    `- Canonical durable artifacts: AIWG artifact store (policy: ${policy.canonical ?? 'aiwg'}).`,
-    `- Provider-native presentation/export: ${providerNative}.`,
-    `- Claude Design: ${designEnabled ? 'available only when explicitly selected by the resolved policy or requested by the user' : 'disabled by project policy'}.`,
-    '- Never substitute, relocate, or omit the canonical AIWG plan/review artifact because Claude adds or changes a provider default.',
-    '- When both canonical and presentation outputs are selected, write the canonical artifact first; treat Design as a derived export and record provenance linking it to the canonical source of truth.',
-    '- Unknown provider-native destinations fail safe with a diagnostic. Higher-authority project policy overrides user preferences; explicit task selection overrides provider defaults only within the project policy ceiling.',
-  ];
-}
-
-export function buildClaudeHookBlock(policy: ClaudeArtifactOutputPolicy = {}): string {
+export function buildClaudeHookBlock(_policy: ClaudeArtifactOutputPolicy = {}): string {
   return [
     CLAUDE_HOOK_START,
     '',
     buildProviderBootstrapBlock('claude'),
-    '@.aiwg/aiwg.config',
+    // Plain-text pointer, deliberately not an `@` import: the raw JSON config
+    // is several KB and would be pulled into every system prompt (#3451).
+    'Project configuration: `.aiwg/aiwg.config` (not auto-loaded; run `aiwg config show --project` to view it).',
     '',
-    ...buildClaudeArtifactOutputPolicy(policy),
+    'Artifact destination authority: `aiwg show rule artifact-output-policy` (kernel).',
     '',
     '<!--',
     '  This block is managed by `aiwg regenerate` and `aiwg use`.',
     '  Operator content above and below this block is preserved on regenerate.',
-    '  To change AIWG.md content, edit .aiwg/AIWG.md (the normalized source)',
+    '  Edit WORKSPACE.md Project Context or optional .aiwg/AIWG.md operator notes,',
     '  then run `aiwg regenerate`.',
     '-->',
     '',
@@ -94,6 +81,26 @@ export interface ClaudeHookResult {
   warnings: string[];
 }
 
+/** Keep the first managed hook block and drop any later complete copies. */
+function collapseExtraHookBlocks(content: string): string {
+  const first = content.indexOf(CLAUDE_HOOK_START);
+  if (first === -1) return content;
+  const firstEnd = content.indexOf(CLAUDE_HOOK_END, first);
+  if (firstEnd === -1) return content;
+  const blockEnd = firstEnd + CLAUDE_HOOK_END.length;
+  let tail = content.slice(blockEnd);
+  const before = tail;
+  for (;;) {
+    const s = tail.indexOf(CLAUDE_HOOK_START);
+    if (s === -1) break;
+    const e = tail.indexOf(CLAUDE_HOOK_END, s);
+    if (e === -1) break;
+    tail = tail.slice(0, s) + tail.slice(e + CLAUDE_HOOK_END.length);
+  }
+  if (tail === before) return content;
+  return content.slice(0, blockEnd) + tail.replace(/(?:\r?\n){3,}/g, '\n\n');
+}
+
 /**
  * Ensure CLAUDE.md at projectPath contains the AIWG-managed marker block
  * pointing at AIWG.md. Returns a result describing what was done.
@@ -110,14 +117,7 @@ export async function ensureClaudeMdHook(
     warnings: [],
   };
 
-  let policy: ClaudeArtifactOutputPolicy = {};
-  try {
-    const config = JSON.parse(await fs.readFile(path.join(projectPath, '.aiwg', 'aiwg.config'), 'utf8')) as { artifact_outputs?: ClaudeArtifactOutputPolicy };
-    policy = config.artifact_outputs ?? {};
-  } catch {
-    // Missing/legacy/temporarily malformed config receives the safe default.
-  }
-  let block = buildClaudeHookBlock(policy);
+  let block = buildClaudeHookBlock();
 
   // Case 1: CLAUDE.md does not exist — create a minimal one with just the block.
   let existing: string;
@@ -126,12 +126,18 @@ export async function ensureClaudeMdHook(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       const minimal = `${block}\n`;
-      await fs.writeFile(claudeMdPath, minimal, 'utf8');
+      writeContextFileSync(claudeMdPath, minimal, 'utf8');
       result.action = 'created';
       return result;
     }
     throw err;
   }
+
+  // Repair duplicates left by earlier generations before locating markers, so
+  // regeneration converges on exactly one bootstrap (#3451).
+  const original = existing;
+  existing = collapseExtraHookBlocks(dedupeProviderBootstrap(existing));
+  const repaired = existing !== original;
 
   const lineEnding = dominantLineEnding(existing);
   block = withLineEnding(block, lineEnding);
@@ -155,7 +161,7 @@ export async function ensureClaudeMdHook(
         existing.substring(0, bootstrapStartIdx)
         + block
         + existing.substring(bootstrapEndIdx);
-      await fs.writeFile(claudeMdPath, updated, 'utf8');
+      writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
       result.action = 'updated';
       return result;
     }
@@ -170,7 +176,7 @@ export async function ensureClaudeMdHook(
     // Ensure the file ends with a single newline before appending.
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
     const updated = `${trimmed}${lineEnding}${block}${lineEnding}`;
-    await fs.writeFile(claudeMdPath, updated, 'utf8');
+    writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -186,12 +192,12 @@ export async function ensureClaudeMdHook(
     // With --force, back up and append a fresh block.
     if (opts.detectExistingFiles !== false) {
       const backupPath = `${claudeMdPath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      await fs.writeFile(backupPath, existing, 'utf8');
+      writeContextFileSync(backupPath, existing, 'utf8');
       result.backupPath = backupPath;
     }
     const trimmed = existing.replace(/(?:\r?\n)+$/, lineEnding);
     const updated = `${trimmed}${lineEnding}${block}${lineEnding}`;
-    await fs.writeFile(claudeMdPath, updated, 'utf8');
+    writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
     result.action = 'inserted';
     return result;
   }
@@ -201,6 +207,11 @@ export async function ensureClaudeMdHook(
   const currentBlock = existing.substring(startIdx, blockEndOffset);
 
   if (currentBlock === block) {
+    if (repaired) {
+      writeContextFileSync(claudeMdPath, existing, 'utf8');
+      result.action = 'updated';
+      return result;
+    }
     result.action = 'unchanged';
     return result;
   }
@@ -210,7 +221,7 @@ export async function ensureClaudeMdHook(
   // the case where an operator made deliberate edits inside the block).
   if (opts.force) {
     const backupPath = `${claudeMdPath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    await fs.writeFile(backupPath, existing, 'utf8');
+    writeContextFileSync(backupPath, existing, 'utf8');
     result.backupPath = backupPath;
   } else {
     result.warnings.push(
@@ -219,7 +230,7 @@ export async function ensureClaudeMdHook(
   }
 
   const updated = existing.substring(0, startIdx) + block + existing.substring(blockEndOffset);
-  await fs.writeFile(claudeMdPath, updated, 'utf8');
+  writeContextFileSync(claudeMdPath, dedupeProviderBootstrap(updated), 'utf8');
   result.action = 'updated';
   return result;
 }

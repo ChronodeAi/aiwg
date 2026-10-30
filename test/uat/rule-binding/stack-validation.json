@@ -1,0 +1,4038 @@
+{
+  "issue": "roctinam/aiwg#2935",
+  "worktree": "/home/roctinam/dev/jmagly/aiwg-wt/2945",
+  "evidence_directory": "/var/tmp/aiwg-2945-cm4myydu/validation",
+  "updated_at": "2026-10-18T21:24:52.875Z",
+  "adr": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+  "constraints": {
+    "scope": "Changes made by this validation task only; pre-existing Wave 4 edits were retained.",
+    "nice": 19,
+    "maxWorkers": 3,
+    "rule_bodies_modified": [],
+    "rule_frontmatter_modified": [],
+    "network": "External network forbidden; npm offline configured. Final runs also use a Node preload because one packaging fixture reconstructs and strips npm environment settings.",
+    "installs": "No workspace dependency installs apart from the explicitly permitted offline SQLite attempt. Existing packaging fixtures perform temporary tarball installs. The built-in web ci remains blocked pending clarification."
+  },
+  "resource_interruption": {
+    "reason": "Shared /tmp tmpfs exhausted (31G used; ENOSPC). Interrupted the attempt before further cascades.",
+    "tmpdir": "/tmp/v-n5q6dm68",
+    "entries_after_interrupt": [
+      {
+        "name": "awt-1K9Sjh",
+        "children": [
+          "aiwg-use-all-BOhitY",
+          "aiwg-use-cli-home-DyT6aN",
+          "aiwg-wave3-HCkKNx",
+          "aiwg-wave5-utils-f1qhib"
+        ]
+      }
+    ]
+  },
+  "baseline_offline_enforcement": "The global-install fixture strips npm_config_* from its child environment. The first packaging run therefore did not reliably enforce offline mode for that child; later runs use a Node preload that reapplies offline mode and rejects external connections.",
+  "baseline": {
+    "note": "The initial failing-set run overlapped iterative fixes; per-case observations are reproduction evidence, not a pristine snapshot of the supplied tip.",
+    "failing_sets": {
+      "files": 16,
+      "passed": 399,
+      "failed": 24
+    },
+    "packaging": {
+      "files": 13,
+      "passed": 107,
+      "failed": 4
+    }
+  },
+  "counts_source": "Vitest JSON; passed includes expected-failure cases where applicable. Files counts refer to testResults, not nested describe suites.",
+  "classification_scope": "All user-reported and newly observed failing test cases, including historically reported cases already green at this tip, plus two additional UAT cleanup findings. These are case/finding counts, not independent product-defect counts.",
+  "classification_counts": {
+    "a": 17,
+    "b": 52
+  },
+  "test_classification_counts": {
+    "a": 17,
+    "b": 50
+  },
+  "cleanup_findings": [
+    {
+      "classification": "b",
+      "kind": "temporary-directory-leak",
+      "file": "test/uat/helpers/hermetic-cli.ts",
+      "finding": "Five module-import node-only PATH directories survived UAT teardown.",
+      "change": [
+        {
+          "file": "test/uat/helpers/hermetic-cli.ts",
+          "line": 78,
+          "location": "test/uat/helpers/hermetic-cli.ts:78"
+        },
+        {
+          "file": "test/uat/helpers/hermetic-cli.ts",
+          "line": 126,
+          "location": "test/uat/helpers/hermetic-cli.ts:126"
+        }
+      ],
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 403,
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:403",
+        "section": "Rollout and validation"
+      },
+      "resolution": "Create the node-only PATH lazily and remove the owned directory after each importing UAT file."
+    },
+    {
+      "classification": "b",
+      "kind": "temporary-directory-leak",
+      "file": "test/uat/worker-dispatch-gate.uat.ts",
+      "finding": "Both worker-dispatch test cases left their sibling stub-binary directory behind.",
+      "change": [
+        {
+          "file": "test/uat/worker-dispatch-gate.uat.ts",
+          "line": 37,
+          "location": "test/uat/worker-dispatch-gate.uat.ts:37"
+        }
+      ],
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 403,
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:403",
+        "section": "Rollout and validation"
+      },
+      "resolution": "Own the stub directory inside the project fixture so existing afterEach cleanup removes it."
+    }
+  ],
+  "known_limitations": [
+    "Full SDLC/all Hermes kernels exceed the 19000-character cap; tests verify atomic rejection without truncation. Explicit utilities-only worker profiles fit.",
+    "No live model probes were invoked, as required by the task limits."
+  ],
+  "tests": [
+    {
+      "file": "test/unit/providers/wave5-secops-rule-bindings.test.ts",
+      "test": "Wave 5 secops canonical rule delivery (#2945) discovers each scoped rule in the top three from its natural-language need (U6)",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "ci-resource-interruption",
+          "status": "failed",
+          "diagnostic": "Failed during the interrupted ENOSPC run; passed unchanged on disk-backed private temp storage."
+        },
+        {
+          "run": "secops-disk-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "secops-bound-only-recheck",
+          "status": "skipped"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "test/unit/providers/wave5-secops-rule-bindings.test.ts",
+          "line": 30,
+          "location": "test/unit/providers/wave5-secops-rule-bindings.test.ts:30"
+        }
+      ],
+      "rationale": "The ranking assertion passed unchanged on disk-backed private temp storage. Preserve caller TMPDIR/TMP/TEMP in isolated children to keep staging inside the owned validation run; interrupted ENOSPC failure was environmental.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/providers/rule-activation-deployment.test.ts",
+      "test": "activation-selected provider deployment (#2939) promotes empty resource directories along with the validated deployment",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "empty-directory-reproduction",
+          "status": "failed",
+          "diagnostic": "Expected the selected empty skill-resource directory to exist after staged promotion; it was absent."
+        },
+        {
+          "run": "directory-promotion-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Preserve intentional empty resource/workspace directories during staged promotion, while delegating nested native subtrees to their own authoritative mounts.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/deployment-completeness.test.ts",
+      "test": "Deployment Completeness claude: consolidated rules deploys RULES-INDEX.md",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/deployment-completeness.test.ts",
+      "test": "Deployment Completeness claude: consolidated rules RULES-INDEX.md has expected structure",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected '<!-- aiwg:managed v2026.10.3 bundled …' to contain '# AIWG'\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/deployment-completeness.test.ts:638:23\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/integration/deployment-completeness.test.ts",
+          "line": 28,
+          "location": "test/integration/deployment-completeness.test.ts:28"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Derive startup body membership and summary-index entries from authored activation metadata; assert absence of bound/summary bodies. The stronger checks also exposed a regression where the outer prune removed tagged path rules from consolidated addons.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/deployment-completeness.test.ts",
+      "test": "Deployment Completeness claude: consolidated rules deploys individual rule files alongside RULES-INDEX.md (PUW-016 #1117)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: claude: anti-laziness.md should be deployed alongside RULES-INDEX.md: expected [ 'RULES-INDEX.md', …(20) ] to include 'anti-laziness.md'\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1319:15)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/chai/index.js:1700:25)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/deployment-completeness.test.ts:657:97\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/integration/deployment-completeness.test.ts",
+          "line": 28,
+          "location": "test/integration/deployment-completeness.test.ts:28"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Derive startup body membership and summary-index entries from authored activation metadata; assert absence of bound/summary bodies. The stronger checks also exposed a regression where the outer prune removed tagged path rules from consolidated addons.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/deployment-completeness.test.ts",
+      "test": "Deployment Completeness factory: consolidated rules deploys individual rule files alongside RULES-INDEX.md (PUW-016 #1117)",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: factory: anti-laziness.md should be deployed alongside RULES-INDEX.md: expected [ 'RULES-INDEX.md', …(20) ] to include 'anti-laziness.md'\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1319:15)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/chai/index.js:1700:25)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/deployment-completeness.test.ts:657:97\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/integration/deployment-completeness.test.ts",
+          "line": 28,
+          "location": "test/integration/deployment-completeness.test.ts:28"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Derive startup body membership and summary-index entries from authored activation metadata; assert absence of bound/summary bodies. The stronger checks also exposed a regression where the outer prune removed tagged path rules from consolidated addons.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/deployment-completeness.test.ts",
+      "test": "Deployment Completeness opencode: consolidated rules deploys individual rule files alongside RULES-INDEX.md (PUW-016 #1117)",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: opencode: anti-laziness.md should be deployed alongside RULES-INDEX.md: expected [ 'RULES-INDEX.md', …(20) ] to include 'anti-laziness.md'\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1319:15)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/chai/index.js:1700:25)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/deployment-completeness.test.ts:657:97\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/integration/deployment-completeness.test.ts",
+          "line": 28,
+          "location": "test/integration/deployment-completeness.test.ts:28"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Derive startup body membership and summary-index entries from authored activation metadata; assert absence of bound/summary bodies. The stronger checks also exposed a regression where the outer prune removed tagged path rules from consolidated addons.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/deployment-completeness.test.ts",
+      "test": "Deployment Completeness Idempotency deploying claude twice does not corrupt file content",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/forensics-complete.test.ts",
+      "test": "Deployment Scaffold aiwg use forensics creates the framework-scoped DFIR workspace scaffold",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: \n  ◆ Installing forensics framework  for Claude Code\n\n  OK CLI namespace 'century-readiness' registered (1 subcommands)\n  OK CLI namespace 'civic' registered (3 subcommands)\n  OK CLI namespace 'composition' registered (4 subcommands)\n  OK CLI namespace 'compound-memory' registered (7 subcommands)\n  OK CLI namespace 'graph' registered (6 subcommands)\n  OK CLI namespace 'line-memory' registered (10 subcommands)\n  OK CLI namespace 'context-bench' registered (1 subcommands)\n  OK CLI namespace 'monitorability-red-team' registered (1 subcommands)\n  OK CLI namespace 'harness' registered (3 subcommands)\n  OK CLI namespace 'nlp' registered (7 subcommands)\n  OK CLI namespace 'topology-lab' registered (1 subcommands)\n  OK CLI namespace 'premortem-v2' registered (1 subcommands)\n  OK CLI namespace 'test-conformance' registered (12 subcommands)\n: expected 143 to be +0 // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/forensics-complete.test.ts:435:60\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n  "
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected false to be true // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/forensics-complete.test.ts:443:59\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure. Promote empty scaffold directories after validation, with exclusive ownership for nested mounts.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance repeat deploy prunes stale managed skills while preserving operator-owned skills",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance claude repairs a full-copy deployment while preserving operator-owned skills",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance codex repairs a full-copy deployment while preserving operator-owned skills",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance cursor repairs a full-copy deployment while preserving operator-owned skills",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance warp repairs a full-copy deployment while preserving operator-owned skills",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/model-worker-provider-matrix.test.ts",
+      "test": "model worker provider matrix emits exact native model workers for 'claude'",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 486,
+          "location": "tools/agents/providers/rule-delivery.mjs:486"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 442,
+          "location": "tools/agents/providers/rule-delivery.mjs:442"
+        },
+        {
+          "file": "test/integration/model-worker-provider-matrix.test.ts",
+          "line": 153,
+          "location": "test/integration/model-worker-provider-matrix.test.ts:153"
+        }
+      ],
+      "rationale": "Dry-run plans now report final destination paths as well as validation totals, rather than only disposable staging paths; retain exact model-pin assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/model-worker-provider-matrix.test.ts",
+      "test": "model worker provider matrix emits exact native model workers for 'codex'",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 486,
+          "location": "tools/agents/providers/rule-delivery.mjs:486"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 442,
+          "location": "tools/agents/providers/rule-delivery.mjs:442"
+        },
+        {
+          "file": "test/integration/model-worker-provider-matrix.test.ts",
+          "line": 153,
+          "location": "test/integration/model-worker-provider-matrix.test.ts:153"
+        }
+      ],
+      "rationale": "Dry-run plans now report final destination paths as well as validation totals, rather than only disposable staging paths; retain exact model-pin assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/model-worker-provider-matrix.test.ts",
+      "test": "model worker provider matrix emits exact native model workers for 'cursor'",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 486,
+          "location": "tools/agents/providers/rule-delivery.mjs:486"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 442,
+          "location": "tools/agents/providers/rule-delivery.mjs:442"
+        },
+        {
+          "file": "test/integration/model-worker-provider-matrix.test.ts",
+          "line": 153,
+          "location": "test/integration/model-worker-provider-matrix.test.ts:153"
+        }
+      ],
+      "rationale": "Dry-run plans now report final destination paths as well as validation totals, rather than only disposable staging paths; retain exact model-pin assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/model-worker-provider-matrix.test.ts",
+      "test": "model worker provider matrix declares inherited/global or unsupported degradation without false exact pins",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "Error: Command failed: /home/roctinam/.nvm/versions/node/v24.12.0/bin/node /home/roctinam/dev/jmagly/aiwg-wt/2945/tools/agents/deploy-agents.mjs --provider hermes --mode all --filter aiwg-model-* --target /tmp/aiwg-degraded-workers-5S5Xyz/hermes --skip-commands-migration --verbose\n\nDeployment failed: Hermes AGENTS.md (53702 chars) exceeds hard cap of 19000\n\n    at genericNodeError (node:internal/errors:985:15)\n    at wrappedFn (node:internal/errors:539:14)\n    at checkExecSyncError (node:child_process:925:11)\n    at execFileSync (node:child_process:961:15)\n    at deploy (/home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/model-worker-provider-matrix.test.ts:16:10)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/model-worker-provider-matrix.test.ts:151:5\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 183,
+        "section": "Provider projection: provider hard caps and complete kernel preservation",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:183"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 486,
+          "location": "tools/agents/providers/rule-delivery.mjs:486"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 442,
+          "location": "tools/agents/providers/rule-delivery.mjs:442"
+        },
+        {
+          "file": "test/integration/model-worker-provider-matrix.test.ts",
+          "line": 153,
+          "location": "test/integration/model-worker-provider-matrix.test.ts:153"
+        }
+      ],
+      "rationale": "Honor the agent selection filter. Assert that a full-profile Hermes hard-cap rejection leaves no partial deployment, then verify all worker definitions and inherited/global behavior from the explicitly selected utilities addon; startup routes definitions without bound blocks.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/project-local-deploy.test.ts",
+      "test": "project-local deploy integration (#1046) use synchronizes existing project-local skills without a project cache (#2155)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: \n  ◆ Installing sdlc framework  for Claude Code\n\n  OK CLI namespace 'century-readiness' registered (1 subcommands)\n  OK CLI namespace 'civic' registered (3 subcommands)\n  OK CLI namespace 'composition' registered (4 subcommands)\n  OK CLI namespace 'compound-memory' registered (7 subcommands)\n  OK CLI namespace 'graph' registered (6 subcommands)\n  OK CLI namespace 'line-memory' registered (10 subcommands)\n  OK CLI namespace 'context-bench' registered (1 subcommands)\n  OK CLI namespace 'monitorability-red-team' registered (1 subcommands)\n: expected 143 to be +0 // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/project-local-deploy.test.ts:311:42\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2025:60\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/project-local-deploy.test.ts",
+      "test": "project-local deploy integration (#1046) refresh synchronizes existing project-local skills without a project cache (#2155)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected 143 to be +0 // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/project-local-deploy.test.ts:311:42\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2025:60\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/project-local-deploy.test.ts",
+      "test": "project-local deploy integration (#1046) upgrade synchronizes existing project-local skills without a project cache (#2155)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: Installed frameworks: sdlc\n\nRe-deploying sdlc...\n\n  ◆ Installing sdlc framework  for Claude Code\n\n  OK CLI namespace 'century-readiness' registered (1 subcommands)\n  OK CLI namespace 'civic' registered (3 subcommands)\n  OK CLI namespace 'composition' registered (4 subcommands)\n  OK CLI namespace 'compound-memory' registered (7 subcommands)\n  OK CLI namespace 'graph' registered (6 subcommands)\n  OK CLI namespace 'line-memory' registered (10 subcommands)\n  OK CLI namespace 'context-bench' registered (1 subcommands)\n  OK CLI namespace 'monitorability-red-team' registered (1 subcommands)\n  OK CLI namespace 'harness' registered (3 subcommands)\n  OK CLI namespace 'nlp' registered (7 subcommands)\n  OK CLI namespace 'topology-lab' registered (1 subcommands)\n  OK CLI namespace 'premortem-v2' registered (1 subcommands)\n: expected 143 to be +0 // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/project-local-deploy.test.ts:311:42\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2025:60\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roc"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/project-local-deploy.test.ts",
+      "test": "project-local deploy integration (#1046) PL-COPY-ALL: project-local skills land at <provider>/.aiwg/skills/ via aiwg use",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/provider-file-locations.test.ts",
+      "test": "Provider File Locations Provider Isolation each provider creates only its own directories",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/provider-file-locations.test.ts",
+      "test": "Provider File Locations aiwg use Command Integration aiwg use --provider passes provider to all deployments",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/provider-file-locations.test.ts",
+      "test": "Edge Cases --force overwrites existing files",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected '<!-- aiwg:managed v2026.10.3 bundled …' to contain '# AIWG'\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/provider-file-locations.test.ts:483:21\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/integration/provider-file-locations.test.ts",
+          "line": 31,
+          "location": "test/integration/provider-file-locations.test.ts:31"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Derive startup body membership and summary-index entries from authored activation metadata; assert absence of bound/summary bodies. The stronger checks also exposed a regression where the outer prune removed tagged path rules from consolidated addons.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/provider-file-locations.test.ts",
+      "test": "Consolidated Rules Deployment deploys RULES-INDEX.md instead of individual rule files for Claude",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: anti-laziness.md should be deployed individually per PUW-016: expected [ 'RULES-ONDEMAND.md', …(19) ] to include 'anti-laziness.md'\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1319:15)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/chai/index.js:1700:25)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/provider-file-locations.test.ts:527:91\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/integration/provider-file-locations.test.ts",
+          "line": 31,
+          "location": "test/integration/provider-file-locations.test.ts:31"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Derive startup body membership and summary-index entries from authored activation metadata; assert absence of bound/summary bodies. The stronger checks also exposed a regression where the outer prune removed tagged path rules from consolidated addons.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/provider-file-locations.test.ts",
+      "test": "Consolidated Rules Deployment RULES-INDEX.md content includes expected sections",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected '<!-- aiwg:managed v2026.10.3 bundled …' to contain '# AIWG Rules Index'\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/provider-file-locations.test.ts:537:21\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/integration/provider-file-locations.test.ts",
+          "line": 31,
+          "location": "test/integration/provider-file-locations.test.ts:31"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Derive startup body membership and summary-index entries from authored activation metadata; assert absence of bound/summary bodies. The stronger checks also exposed a regression where the outer prune removed tagged path rules from consolidated addons.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/provider-file-locations.test.ts",
+      "test": "Consolidated Rules Deployment preserves operator pre-existing rule files on redeploy (#1143 default-off cleanup)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/provider-file-locations.test.ts",
+      "test": "Consolidated Rules Deployment deploys consolidated rules for all file-copy providers",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/provider-receipt-use-status.test.ts",
+      "test": "local-source user-scope use/status receipt integration (#2137) deploys then probes without an impossible missing-receipt remediation",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [],
+      "rationale": "Previously reported regression is already green at this tip; existing product behavior retained.",
+      "latest_status": "passed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage deploys to .claude/.aiwg/skills/ without errors",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: aiwg use all failed (exit 143):\nstdout:   No .aiwg/aiwg.config found — auto-created with provider 'claude'. Ask your AIWG agent to review repo/tracker/delivery policy.\n\n  ◆ Installing complete AIWG surface  for Claude Code\n\n  OK CLI namespace 'century-readiness' registered (1 subcommands)\n  OK CLI namespace 'civic' registered (3 subcommands)\n  OK CLI namespace 'composition' registered (4 subcommands)\n  OK CLI namespace 'compound-memory' registered (7 subcommands)\n\nstderr: spawnSync /home/roctinam/.nvm/versions/node/v24.12.0/bin/node ETIMEDOUT: expected 143 to be +0 // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:221:131\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/ro"
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:213:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage reports deployed and indexed skill counts in separate sections",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: aiwg use all failed (exit 143):\nstdout:   No .aiwg/aiwg.config found — auto-created with provider 'claude'. Ask your AIWG agent to review repo/tracker/delivery policy.\n\n  ◆ Installing complete AIWG surface  for Claude Code\n\n  OK CLI namespace 'century-readiness' registered (1 subcommands)\n  OK CLI namespace 'civic' registered (3 subcommands)\n  OK CLI namespace 'composition' registered (4 subcommands)\n  OK CLI namespace 'compound-memory' registered (7 subcommands)\n  OK CLI namespace 'graph' registered (6 subcommands)\n  OK CLI namespace 'line-memory' registered (10 subcommands)\n  OK CLI namespace 'context-bench' registered (1 subcommands)\n  OK CLI namespace 'monitorability-red-team' registered (1 subcommands)\n  OK CLI namespace 'harness' registered (3 subcommands)\n  OK CLI namespace 'nlp' registered (7 subcommands)\n  OK CLI namespace 'topology-lab' registered (1 subcommands)\n  OK CLI namespace 'premortem-v2' registered (1 subcommands)\n\nstderr: spawnSync /home/roctinam/.nvm/versions/node/v24.12.0/bin/node ETIMEDOUT: expected 143 to be +0 // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:228:131\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chun"
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:220:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage deploys more skills than the old hardcoded 4-addon set would produce",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected 143 to be +0 // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:238:29\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage does not deploy aiwg-dev skills",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:249:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:243:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage deploys addons that were previously missing from the hardcoded list",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:256:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage deploys agents alongside skills",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:279:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage mirrors Claude setup skills as slash commands",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:295:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:289:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage mirrors Claude kernel self-maintenance skills as bootstrap slash commands",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:305:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:299:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2462:26"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage writes complete RULES-ONDEMAND indexes for claude after real aiwg use all (#1784)",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected [ 'dev-idempotent-builds', …(4) ] to deeply equal ArrayContaining{…}\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:482:20\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 263,
+        "section": "Untagged migration fallback",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:263"
+      },
+      "change": [
+        {
+          "file": "test/integration/use-all-deployment.test.ts",
+          "line": 472,
+          "location": "test/integration/use-all-deployment.test.ts:472"
+        }
+      ],
+      "rationale": "Require the exact legacy fallback set and reject tagged or budget-demoted startup listings.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-all-deployment.test.ts",
+      "test": "aiwg use all — deployment coverage writes complete RULES-ONDEMAND indexes for codex after real aiwg use all (#1784)",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected [ 'dev-idempotent-builds', …(4) ] to deeply equal ArrayContaining{…}\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-all-deployment.test.ts:482:20\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 263,
+        "section": "Untagged migration fallback",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:263"
+      },
+      "change": [
+        {
+          "file": "test/integration/use-all-deployment.test.ts",
+          "line": 472,
+          "location": "test/integration/use-all-deployment.test.ts:472"
+        }
+      ],
+      "rationale": "Require the exact legacy fallback set and reject tagged or budget-demoted startup listings.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/use-self-verification.test.ts",
+      "test": "aiwg use self-verifying provider deployment (#2069) keeps default non-TTY output compact, colorless, and free of registry chatter",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected false to be true // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/use-self-verification.test.ts:259:74\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64"
+        },
+        {
+          "run": "integration",
+          "status": "passed"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 162,
+          "location": "tools/agents/providers/rule-delivery.mjs:162"
+        },
+        {
+          "file": "tools/agents/providers/hermes.mjs",
+          "line": 313,
+          "location": "tools/agents/providers/hermes.mjs:313"
+        }
+      ],
+      "rationale": "Mark newly created startup context as managed so regeneration preserves the rule block without treating generated files as operator-owned and emitting long warnings. Keep the 80-column assertion unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/agents/discover-addons-explicit-install.test.ts",
+      "test": "discoverAddons explicitInstall keeps activation-selected explicitInstall rules in the prune desired set without adding them to bulk deploys (#2862)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "prune-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "test/unit/agents/discover-addons-explicit-install.test.ts",
+          "line": 45,
+          "location": "test/unit/agents/discover-addons-explicit-install.test.ts:45"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Honor the real rule’s bound activation; additionally retain #2862’s explicit-kernel prune protection with a synthetic explicit-install fixture.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/providers/provider-output-characterization.test.ts",
+      "test": "provider output characterization for registry migration captures regenerate context files without touching the real home directory",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: claude AIWG.md: expected '# AIWG.md\\n<!-- aiwg-managed -->\\n<!-…' to contain 'aiwg discover'\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/providers/provider-output-characterization.test.ts:277:49\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 280,
+        "section": "Testable kernel admission: deduplicate startup authority",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:280"
+      },
+      "change": [
+        {
+          "file": "test/unit/providers/provider-output-characterization.test.ts",
+          "line": 277,
+          "location": "test/unit/providers/provider-output-characterization.test.ts:277"
+        }
+      ],
+      "rationale": "Check routing authority in framework context and explicit WORKSPACE.md/AIWG.md bridge links instead of duplicated discovery prose; preserve home isolation assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/providers/rule-tier-deployment.test.ts",
+      "test": "on-demand index propagation (#1675) aggregated provider bridge sections openhuman AGENTS.md substitutes the {{ON_DEMAND_RULES}} token (#1785)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected '# Project Name\\n\\n> Project descripti…' not to contain 'aiwg show rule skill-discovery`'\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/providers/rule-tier-deployment.test.ts:327:62\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "test/unit/providers/rule-tier-deployment.test.ts",
+          "line": 328,
+          "location": "test/unit/providers/rule-tier-deployment.test.ts:328"
+        }
+      ],
+      "rationale": "Exclude tagged rules from on-demand list entries while permitting the valid kernel-routing pointer elsewhere in the bridge.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/providers/wave1-rule-bindings.test.ts",
+      "test": "Wave 1 canonical rule delivery (#2941) shows every canonical binding through the actual CLI JSON envelope (U4)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 66,
+          "location": "tools/agents/providers/rule-delivery.mjs:66"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Shared target resolution normalizes source paths, preventing duplicate relative/absolute identities from becoming ambiguous. Per-invocation snapshot reuse avoids redundant corpus rebuilds; canonical binding and CLI-envelope assertions remain unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/providers/wave5-sdlc-b-rule-bindings.test.ts",
+      "test": "Wave 5 sdlc-b canonical rule delivery (#2945) claude: delivers every declared binding outside startup listings (U3/U9)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 66,
+          "location": "tools/agents/providers/rule-delivery.mjs:66"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Shared target resolution normalizes source paths, preventing duplicate relative/absolute identities from becoming ambiguous. Per-invocation snapshot reuse avoids redundant corpus rebuilds; canonical binding and CLI-envelope assertions remain unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/providers/wave5-sdlc-b-rule-bindings.test.ts",
+      "test": "Wave 5 sdlc-b canonical rule delivery (#2945) codex: delivers every declared binding outside startup listings (U3/U9)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 66,
+          "location": "tools/agents/providers/rule-delivery.mjs:66"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Shared target resolution normalizes source paths, preventing duplicate relative/absolute identities from becoming ambiguous. Per-invocation snapshot reuse avoids redundant corpus rebuilds; canonical binding and CLI-envelope assertions remain unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/providers/wave5-sdlc-b-rule-bindings.test.ts",
+      "test": "Wave 5 sdlc-b canonical rule delivery (#2945) cursor: delivers every declared binding outside startup listings (U3/U9)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 66,
+          "location": "tools/agents/providers/rule-delivery.mjs:66"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Shared target resolution normalizes source paths, preventing duplicate relative/absolute identities from becoming ambiguous. Per-invocation snapshot reuse avoids redundant corpus rebuilds; canonical binding and CLI-envelope assertions remain unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/providers/wave5-sdlc-b-rule-bindings.test.ts",
+      "test": "Wave 5 sdlc-b canonical rule delivery (#2945) hermes: delivers every declared binding outside startup listings (U3/U9)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 66,
+          "location": "tools/agents/providers/rule-delivery.mjs:66"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Shared target resolution normalizes source paths, preventing duplicate relative/absolute identities from becoming ambiguous. Per-invocation snapshot reuse avoids redundant corpus rebuilds; canonical binding and CLI-envelope assertions remain unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/providers/wave5-sdlc-b-rule-bindings.test.ts",
+      "test": "Wave 5 sdlc-b canonical rule delivery (#2945) warp: delivers every declared binding outside startup listings (U3/U9)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 66,
+          "location": "tools/agents/providers/rule-delivery.mjs:66"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Shared target resolution normalizes source paths, preventing duplicate relative/absolute identities from becoming ambiguous. Per-invocation snapshot reuse avoids redundant corpus rebuilds; canonical binding and CLI-envelope assertions remain unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/providers/wave5-sdlc-b-rule-bindings.test.ts",
+      "test": "Wave 5 sdlc-b canonical rule delivery (#2945) openclaw: delivers every declared binding outside startup listings (U3/U9)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 66,
+          "location": "tools/agents/providers/rule-delivery.mjs:66"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Shared target resolution normalizes source paths, preventing duplicate relative/absolute identities from becoming ambiguous. Per-invocation snapshot reuse avoids redundant corpus rebuilds; canonical binding and CLI-envelope assertions remain unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/schema/lint-schemas.test.ts",
+      "test": "schema lint control-plane report keeps the generated repository catalog deterministic and current",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "test/uat/rule-binding/probes.schema.json",
+          "line": 3,
+          "location": "test/uat/rule-binding/probes.schema.json:3"
+        },
+        {
+          "file": "schemas/catalog/domains/repository-json-schemas.json",
+          "line": 2452,
+          "location": "schemas/catalog/domains/repository-json-schemas.json:2452"
+        }
+      ],
+      "rationale": "Give the new probe schema its required stable $id and refresh the deterministic schema catalog.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/unit/cli/handlers/use-provider-addon.test.ts",
+      "test": "aiwg use addon requiring aiwg-utils across providers (#3035) deploys decision-engine and support assets for openclaw",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected true to be false // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/cli/handlers/use-provider-addon.test.ts:209:54\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 263,
+        "section": "Untagged migration fallback",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:263"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 231,
+          "location": "tools/agents/providers/rule-delivery.mjs:231"
+        }
+      ],
+      "rationale": "Do not create an empty AIWG.md or dangling bootstrap read when the selected addon has no activation-selected startup contract; keep the original assertion.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/smoke/cockpit-base-footprint.test.js",
+      "test": "cockpit base-npm footprint guard (#1593) the cockpit tarball dry-run names @aiwg/cockpit and excludes node_modules",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "packaging-baseline",
+          "status": "failed",
+          "diagnostic": "Error: Command failed: npm pack --dry-run --json\n\n> @aiwg/cockpit@2026.10.3 prepack\n> npm run build:web:release\n\n\n> @aiwg/cockpit@2026.10.3 build:web:release\n> node scripts/build-web-release.mjs\n\nnpm error code ENOTCACHED\nnpm error request to https://registry.npmjs.org/yallist/-/yallist-3.1.1.tgz failed: cache mode is 'only-if-cached' but no cached response is available.\nnpm error A complete log of this run can be found in: /tmp/aiwg-cockpit-web-release-Ss64vd/.npm-cache/_logs/2026-10-18T19_48_00_856Z-debug-0.log\nfile:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:101\n    throw new Error(`npm ${args.join(' ')} failed with exit code ${result.status}`);\n          ^\n\nError: npm ci --include=dev --no-audit --no-fund failed with exit code 1\n    at runNpm (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:101:11)\n    at buildWebRelease (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:134:5)\n    at async file:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:175:1\n\nNode.js v24.12.0\nnpm error code 1\nnpm error path /home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit\nnpm error command failed\nnpm error command sh -c npm run build:web:release\nnpm error A complete log of this run can be found in: /tmp/aiwg-npm-cache/_logs/2026-10-18T19_48_00_618Z-debug-0.log\n\n    at genericNodeError (node:internal/errors:985:15)\n    at wrappedFn (node:inter"
+        },
+        {
+          "run": "packaging",
+          "status": "failed",
+          "diagnostic": "Error: Command failed: npm pack --dry-run --json\n\n> @aiwg/cockpit@2026.10.3 prepack\n> npm run build:web:release\n\n\n> @aiwg/cockpit@2026.10.3 build:web:release\n> node scripts/build-web-release.mjs\n\nnpm error code ENOTCACHED\nnpm error request to https://registry.npmjs.org/yallist/-/yallist-3.1.1.tgz failed: cache mode is 'only-if-cached' but no cached response is available.\nnpm error A complete log of this run can be found in: /tmp/aiwg-2945-validation/npm-logs/2026-10-18T20_26_21_453Z-debug-0.log\nfile:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:101\n    throw new Error(`npm ${args.join(' ')} failed with exit code ${result.status}`);\n          ^\n\nError: npm ci --include=dev --no-audit --no-fund failed with exit code 1\n    at runNpm (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:101:11)\n    at buildWebRelease (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:134:5)\n    at async file:///home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit/scripts/build-web-release.mjs:175:1\n\nNode.js v24.12.0\nnpm error code 1\nnpm error path /home/roctinam/dev/jmagly/aiwg-wt/2945/apps/cockpit\nnpm error command failed\nnpm error command sh -c npm run build:web:release\nnpm error A complete log of this run can be found in: /tmp/aiwg-2945-validation/npm-logs/2026-10-18T20_26_21_151Z-debug-0.log\n\n    at genericNodeError (node:internal/errors:985:15)\n    at wrappedFn (node:internal/errors"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 403,
+        "section": "Rollout and validation: full deployment/packaging gates",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:403"
+      },
+      "change": [],
+      "rationale": "Environment prerequisite: web dependencies/build output are absent, and the offline Cockpit prepack cannot populate its fresh cache. Assertions and package-root allowlist retained; installing dependencies requires clarification of the no-installs constraint.",
+      "environment_blocker": true,
+      "latest_status": "failed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/decision-engine-clean-install.test.ts",
+      "test": "decision-engine clean install from the packed tarball deploys the addon by name and runs the deployed dispatcher on the fixture request",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "packaging-baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected false to be true // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/decision-engine-clean-install.test.ts:272:88\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64"
+        },
+        {
+          "run": "packaging",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected [ { name: 'decision-offload', …(3) } ] to deep equally contain ObjectContaining{…}\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/decision-engine-clean-install.test.ts:285:31\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "packaging-decision",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "test/integration/decision-engine-clean-install.test.ts",
+          "line": 272,
+          "location": "test/integration/decision-engine-clean-install.test.ts:272"
+        }
+      ],
+      "rationale": "Verify native binding summary/pointer and CLI full-body expansion from the packed install; forbid a bound body in Claude’s recursive rules tree. Dispatcher assertions remain intact.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/global-install-native-policy.test.ts",
+      "test": "global install native lifecycle-script policy globally installs kernel assets and leaves only lightweight project wiring",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "packaging-baseline",
+          "status": "failed",
+          "diagnostic": "Error: STACK_TRACE_ERROR\n    at task (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1784:27)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1817:16)\n    at Object.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1563:28)\n    at chain (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:599:14)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/global-install-native-policy.test.ts:264:3\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:40\n    at runWithSuite (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2258:8)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1889:10)\n    at Object.collect (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1893:54)\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)"
+        },
+        {
+          "run": "packaging",
+          "status": "skipped"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 3942,
+          "location": "src/cli/handlers/use.ts:3942"
+        },
+        {
+          "file": "src/cli/handlers/use.ts",
+          "line": 2703,
+          "location": "src/cli/handlers/use.ts:2703"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 99,
+          "location": "tools/agents/providers/rule-delivery.mjs:99"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 263,
+          "location": "tools/agents/providers/rule-delivery.mjs:263"
+        },
+        {
+          "file": "test/integration/forensics-complete.test.ts",
+          "line": 430,
+          "location": "test/integration/forensics-complete.test.ts:430"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "line": 38,
+          "location": "test/integration/global-install-native-policy.test.ts:38"
+        }
+      ],
+      "rationale": "Reuse a temporary source-index snapshot per use invocation, deduplicate binding lookups/target records, and use direct source lookup during injection instead of repeatedly rebuilding/scanning the full corpus. Cache cleanup runs on success and failure.",
+      "latest_status": "skipped",
+      "environment_blocker": true,
+      "verification": "Blocked by the packaging fixture’s empty offline dependency cache; current runtime behavior cannot be validated by that fixture.",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/tarball-allowlist-packaging.test.ts",
+      "test": "npm tarball top-level allowlist (packaging lane) matches the actual dry-run package roots exactly",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "packaging-baseline",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected [ 'CLAUDE.md', 'LICENSE', …(16) ] to deeply equal [ 'CLAUDE.md', 'LICENSE', …(15) ]\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/tarball-allowlist-packaging.test.ts:46:28\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64"
+        },
+        {
+          "run": "packaging",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected [ 'CLAUDE.md', 'LICENSE', …(16) ] to deeply equal [ 'CLAUDE.md', 'LICENSE', …(15) ]\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/tarball-allowlist-packaging.test.ts:46:28\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 403,
+        "section": "Rollout and validation: full deployment/packaging gates",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:403"
+      },
+      "change": [],
+      "rationale": "Environment prerequisite: web dependencies/build output are absent, and the offline Cockpit prepack cannot populate its fresh cache. Assertions and package-root allowlist retained; installing dependencies requires clarification of the no-installs constraint.",
+      "environment_blocker": true,
+      "latest_status": "failed",
+      "unchanged": true,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/tools-packed-relative-imports.test.ts",
+      "test": "shipped tools/**, bin/**, and dist/src/** relative imports resolve (#3062 finding 1) every relative import resolves to a packed file without exceptions",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "packaging-baseline",
+          "status": "passed"
+        },
+        {
+          "run": "packaging",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/rules/run-rule-probes.mjs",
+          "line": 11,
+          "location": "tools/rules/run-rule-probes.mjs:11"
+        },
+        {
+          "file": "tools/rules/measure-startup-context.mjs",
+          "line": 8,
+          "location": "tools/rules/measure-startup-context.mjs:8"
+        },
+        {
+          "file": "package.json",
+          "line": 276,
+          "location": "package.json:276"
+        }
+      ],
+      "rationale": "Resolve shipped tools through dist/src using importImpl; ship the default probe schema, probes, and measurement fixture. Add an installed dry-run smoke test with no model binaries available.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/tools-packed-relative-imports.test.ts",
+      "test": "shipped tools/**, bin/**, and dist/src/** relative imports resolve (#3062 finding 1) no shipped file has an unresolved import into src/process/bounded-child-process.mjs (#3062)",
+      "reported_by_user": true,
+      "observations": [
+        {
+          "run": "packaging-baseline",
+          "status": "passed"
+        },
+        {
+          "run": "packaging",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/rules/run-rule-probes.mjs",
+          "line": 11,
+          "location": "tools/rules/run-rule-probes.mjs:11"
+        },
+        {
+          "file": "tools/rules/measure-startup-context.mjs",
+          "line": 8,
+          "location": "tools/rules/measure-startup-context.mjs:8"
+        },
+        {
+          "file": "package.json",
+          "line": 276,
+          "location": "package.json:276"
+        }
+      ],
+      "rationale": "Resolve shipped tools through dist/src using importImpl; ship the default probe schema, probes, and measurement fixture. Add an installed dry-run smoke test with no model binaries available.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": false
+    },
+    {
+      "file": "test/integration/hermes-deployment.test.ts",
+      "test": "Hermes deployment delivers rules through AGENTS.md and CLI pointers without requiring MCP",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "Error: Command failed: /home/roctinam/.nvm/versions/node/v24.12.0/bin/node /home/roctinam/dev/jmagly/aiwg-wt/2945/tools/agents/deploy-agents.mjs --provider hermes --mode sdlc --target /tmp/i2945-c1rlgcb0/aiwg-hermes-project-Na9Or7 --deploy-skills --deploy-rules\n\nDeployment failed: Hermes AGENTS.md (39738 chars) exceeds hard cap of 19000\n\n    at genericNodeError (node:internal/errors:985:15)\n    at wrappedFn (node:internal/errors:539:14)\n    at checkExecSyncError (node:child_process:925:11)\n    at execFileSync (node:child_process:961:15)\n    at deployHermes (/home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/hermes-deployment.test.ts:11:3)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/hermes-deployment.test.ts:36:7\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 183,
+        "section": "Provider projection: hard caps",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:183"
+      },
+      "change": [
+        {
+          "file": "test/integration/hermes-deployment.test.ts",
+          "line": 38,
+          "location": "test/integration/hermes-deployment.test.ts:38"
+        }
+      ],
+      "rationale": "Assert atomic rejection of the oversized full SDLC profile, then verify complete canonical kernel bodies and summary-only pointers from an explicitly selected fitting addon; retain CLI/MCP-optional assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/integration/kernel-deployment-conformance.test.ts",
+      "test": "kernel deployment conformance hermes repairs a full-copy deployment while preserving operator-owned skills",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "integration",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected true to be false // Object.is equality\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/integration/kernel-deployment-conformance.test.ts:227:69\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64"
+        },
+        {
+          "run": "integration-final",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 123,
+        "section": "Both binding delivery paths are required",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:123"
+      },
+      "change": [
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 23,
+          "location": "tools/agents/providers/rule-delivery.mjs:23"
+        },
+        {
+          "file": "tools/agents/providers/rule-delivery.mjs",
+          "line": 482,
+          "location": "tools/agents/providers/rule-delivery.mjs:482"
+        }
+      ],
+      "rationale": "Preserve exclusive ownership of nested native mounts during directory/file promotion, so a parent snapshot cannot resurrect child-pruned managed skills. Keep operator preservation and exact kernel inventory assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/providers/wave5-secops-rule-bindings.test.ts",
+      "test": "Wave 5 secops canonical rule delivery (#2945) forensics-complete/codex: delivers bindings and activation-selected startup content (U3/U9)",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "secops-disk-recheck",
+          "status": "failed",
+          "diagnostic": "Error: ENOENT: no such file or directory, stat '/var/tmp/0spam84v/aiwg-wave5-secops-zTXzbB/codex/forensics-complete/project/AGENTS.md'\n    at Object.statSync (node:fs:1725:25)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/providers/wave5-secops-rule-bindings.test.ts:230:41\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20\n    at new Promise (<anonymous>)\n    at runWithTimeout (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10)"
+        },
+        {
+          "run": "secops-bound-only-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-initial-default",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "line": 48,
+        "section": "Activation selects delivery; severity selects consequence",
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/unit/providers/wave5-secops-rule-bindings.test.ts",
+          "line": 235,
+          "location": "test/unit/providers/wave5-secops-rule-bindings.test.ts:235"
+        }
+      ],
+      "rationale": "Retain the Codex cap for every emitted bridge. An absent bridge is valid only when the nonempty selected rule set is entirely bound/on-demand, preserving zero automatic startup delivery and all artifact-binding assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/artifacts/fortemi-core-discover-show.test.ts",
+      "test": "Fortemi Core discover/show parity adapter (#1688) discovers, filters, and shows indexed project-local rules on Fortemi Core",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "ci-initial-default",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected { …(11) } to match object { …(3) }\n(17 matching properties omitted from actual)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1283:10)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/chai/index.js:1700:25)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/artifacts/fortemi-core-discover-show.test.ts:1422:35\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "fortemi-repro",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected { …(11) } to match object { …(3) }\n(17 matching properties omitted from actual)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1283:10)\n    at Proxy.<anonymous> (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/expect/dist/index.js:1156:15)\n    at Proxy.methodWrapper (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/chai/index.js:1700:25)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/artifacts/fortemi-core-discover-show.test.ts:1422:35\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "ci-extra-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "section": "Rollout and validation",
+        "line": 403,
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:403"
+      },
+      "change": [
+        {
+          "file": "test/unit/artifacts/fortemi-core-discover-show.test.ts",
+          "line": 1407,
+          "location": "test/unit/artifacts/fortemi-core-discover-show.test.ts:1407"
+        }
+      ],
+      "rationale": "Repair fixture isolation: supply an unrelated framework rule and its healthy cache instead of invoking the legitimate installed-corpus fallback. Exact project-rule first place, type exclusion, filter and full show-body assertions are unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/mission-protocol/inventory.test.ts",
+      "test": "Mission protocol inventory is reproducible and rejects newly unclassified consumers",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "ci-initial-default",
+          "status": "failed",
+          "diagnostic": "Error: Command failed: /home/roctinam/.nvm/versions/node/v24.12.0/bin/node tools/mission-protocol/inventory.mjs\nMission inventory drift detected; unclassified: test/uat/rule-binding/wave5-sdlc-b-probes.yaml. Run with --write and review classifications.\n\n    at genericNodeError (node:internal/errors:985:15)\n    at wrappedFn (node:internal/errors:539:14)\n    at checkExecSyncError (node:child_process:925:11)\n    at execFileSync (node:child_process:961:15)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/mission-protocol/inventory.test.ts:11:12\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)"
+        },
+        {
+          "run": "ci-extra-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "section": "Rollout and validation",
+        "line": 403,
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:403"
+      },
+      "change": [
+        {
+          "file": "schemas/mission-protocol/inventory-v1.json",
+          "line": 1850,
+          "location": "schemas/mission-protocol/inventory-v1.json:1850"
+        }
+      ],
+      "rationale": "Regenerate and review the inventory: add exactly the new probe fixture, with no removed or changed existing entries. Keep reproducibility and fallback assertions unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/mission-protocol/inventory.test.ts",
+      "test": "Mission protocol inventory falls back to the Git index when ripgrep is unavailable",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "ci-initial-default",
+          "status": "failed",
+          "diagnostic": "Error: Command failed: /home/roctinam/.nvm/versions/node/v24.12.0/bin/node tools/mission-protocol/inventory.mjs\nMission inventory drift detected; unclassified: test/uat/rule-binding/wave5-sdlc-b-probes.yaml. Run with --write and review classifications.\n\n    at genericNodeError (node:internal/errors:985:15)\n    at wrappedFn (node:internal/errors:539:14)\n    at checkExecSyncError (node:child_process:925:11)\n    at execFileSync (node:child_process:961:15)\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/mission-protocol/inventory.test.ts:19:20\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20\n    at new Promise (<anonymous>)\n    at runWithCancel (file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10)"
+        },
+        {
+          "run": "ci-extra-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "b",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "section": "Rollout and validation",
+        "line": 403,
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:403"
+      },
+      "change": [
+        {
+          "file": "schemas/mission-protocol/inventory-v1.json",
+          "line": 1850,
+          "location": "schemas/mission-protocol/inventory-v1.json:1850"
+        }
+      ],
+      "rationale": "Regenerate and review the inventory: add exactly the new probe fixture, with no removed or changed existing entries. Keep reproducibility and fallback assertions unchanged.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/providers/prune-stale-artifacts.test.ts",
+      "test": "#1627 computeAllArtifactBasenames returns the global source stems for agents/rules (mode-independent)",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "ci-initial-default",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected Set{ 'RULES-INDEX', …(26) } to deeply equal Set{ 'RULES-INDEX', …(25) }\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/providers/prune-stale-artifacts.test.ts:91:19\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "prune-repro",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected Set{ 'RULES-INDEX', …(26) } to deeply equal Set{ 'RULES-INDEX', …(25) }\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/providers/prune-stale-artifacts.test.ts:91:19\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "prune-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "section": "Activation selects delivery; severity selects consequence",
+        "line": 48,
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:48"
+      },
+      "change": [
+        {
+          "file": "test/unit/providers/rule-source-expectations.ts",
+          "line": 29,
+          "location": "test/unit/providers/rule-source-expectations.ts:29"
+        },
+        {
+          "file": "tools/agents/providers/base.mjs",
+          "line": 2628,
+          "location": "tools/agents/providers/base.mjs:2628"
+        }
+      ],
+      "rationale": "Retain exact set equality. The metadata-derived oracle must retain tagged kernel/path rules even for consolidated addons; the product prune fix exposed the stale legacy-only expectation.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    },
+    {
+      "file": "test/unit/cli/handlers/init.test.ts",
+      "test": "initHandler --non-interactive mode creates config with default claude provider and default scripts",
+      "reported_by_user": false,
+      "observations": [
+        {
+          "run": "ci-initial-default",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected '# AIWG.md\\n<!-- aiwg-managed -->\\n<!-…' to contain 'aiwg discover'\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/cli/handlers/init.test.ts:142:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "init-repro",
+          "status": "failed",
+          "diagnostic": "AssertionError: expected '# AIWG.md\\n<!-- aiwg-managed -->\\n<!-…' to contain 'aiwg discover'\n    at /home/roctinam/dev/jmagly/aiwg-wt/2945/test/unit/cli/handlers/init.test.ts:142:26\n    at file:///home/roctinam/dev/jmagly/aiwg-wt/2945/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+        },
+        {
+          "run": "init-recheck",
+          "status": "passed"
+        },
+        {
+          "run": "ci-default",
+          "status": "passed"
+        }
+      ],
+      "classification": "a",
+      "adr": {
+        "file": "docs/architecture/adr-rule-activation-and-bound-delivery.md",
+        "section": "Testable kernel admission: deduplicate startup authority",
+        "line": 280,
+        "location": "docs/architecture/adr-rule-activation-and-bound-delivery.md:280"
+      },
+      "change": [
+        {
+          "file": "test/unit/cli/handlers/init.test.ts",
+          "line": 142,
+          "location": "test/unit/cli/handlers/init.test.ts:142"
+        }
+      ],
+      "rationale": "Require both canonical routing-authority pointers in normalized context after deduplication, retaining the finalization/config/script assertions.",
+      "latest_status": "passed",
+      "unchanged": false,
+      "failure_observed_in_recorded_runs": true
+    }
+  ],
+  "product_fixes": {
+    "performance": [
+      {
+        "file": "src/cli/handlers/use.ts",
+        "line": 3942,
+        "location": "src/cli/handlers/use.ts:3942"
+      },
+      {
+        "file": "src/cli/handlers/use.ts",
+        "line": 2703,
+        "location": "src/cli/handlers/use.ts:2703"
+      },
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 99,
+        "location": "tools/agents/providers/rule-delivery.mjs:99"
+      },
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 263,
+        "location": "tools/agents/providers/rule-delivery.mjs:263"
+      },
+      {
+        "file": "test/integration/forensics-complete.test.ts",
+        "line": 430,
+        "location": "test/integration/forensics-complete.test.ts:430"
+      },
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 23,
+        "location": "tools/agents/providers/rule-delivery.mjs:23"
+      },
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 482,
+        "location": "tools/agents/providers/rule-delivery.mjs:482"
+      },
+      {
+        "file": "test/integration/global-install-native-policy.test.ts",
+        "line": 38,
+        "location": "test/integration/global-install-native-policy.test.ts:38"
+      }
+    ],
+    "directories": [
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 23,
+        "location": "tools/agents/providers/rule-delivery.mjs:23"
+      },
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 482,
+        "location": "tools/agents/providers/rule-delivery.mjs:482"
+      }
+    ],
+    "prune": [
+      {
+        "file": "tools/agents/providers/base.mjs",
+        "line": 2628,
+        "location": "tools/agents/providers/base.mjs:2628"
+      }
+    ],
+    "preview": [
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 486,
+        "location": "tools/agents/providers/rule-delivery.mjs:486"
+      },
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 442,
+        "location": "tools/agents/providers/rule-delivery.mjs:442"
+      },
+      {
+        "file": "test/integration/model-worker-provider-matrix.test.ts",
+        "line": 153,
+        "location": "test/integration/model-worker-provider-matrix.test.ts:153"
+      }
+    ],
+    "ownership": [
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 162,
+        "location": "tools/agents/providers/rule-delivery.mjs:162"
+      },
+      {
+        "file": "tools/agents/providers/hermes.mjs",
+        "line": 313,
+        "location": "tools/agents/providers/hermes.mjs:313"
+      }
+    ],
+    "empty": [
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 231,
+        "location": "tools/agents/providers/rule-delivery.mjs:231"
+      }
+    ],
+    "anchoring": [
+      {
+        "file": "tools/agents/providers/rule-delivery.mjs",
+        "line": 66,
+        "location": "tools/agents/providers/rule-delivery.mjs:66"
+      }
+    ],
+    "imports": [
+      {
+        "file": "tools/rules/run-rule-probes.mjs",
+        "line": 11,
+        "location": "tools/rules/run-rule-probes.mjs:11"
+      },
+      {
+        "file": "tools/rules/measure-startup-context.mjs",
+        "line": 8,
+        "location": "tools/rules/measure-startup-context.mjs:8"
+      },
+      {
+        "file": "package.json",
+        "line": 276,
+        "location": "package.json:276"
+      }
+    ],
+    "schema": [
+      {
+        "file": "test/uat/rule-binding/probes.schema.json",
+        "line": 3,
+        "location": "test/uat/rule-binding/probes.schema.json:3"
+      },
+      {
+        "file": "schemas/catalog/domains/repository-json-schemas.json",
+        "line": 2452,
+        "location": "schemas/catalog/domains/repository-json-schemas.json:2452"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "typecheck",
+      "command": "npm run typecheck",
+      "status": "passed",
+      "exit_code": 0,
+      "evidence": [
+        "typecheck.log",
+        "typecheck-final.log"
+      ]
+    },
+    {
+      "name": "build",
+      "command": "npm run build",
+      "status": "blocked",
+      "exit_code": 77,
+      "detail": "CLI portion passed. A temporary npm guard blocked the nested apps/web ci under the no-installs constraint; clarification pending."
+    },
+    {
+      "name": "build:cli",
+      "command": "npm run build:cli",
+      "status": "passed",
+      "exit_code": 0,
+      "copied_runtime_resources": 112
+    },
+    {
+      "name": "features:sqlite",
+      "command": "npm run features:sqlite",
+      "status": "blocked",
+      "exit_code": 1,
+      "detail": "Initial isolated-cache attempt failed offline for @fortemi/core. A retry with verified entries copied from the host cache also failed during dependency resolution (ENOTCACHED: compatible katex metadata unavailable). No network fallback or dependency mutation.",
+      "evidence": [
+        "sqlite-cache-final.log",
+        "npm-cache-copy.json"
+      ]
+    },
+    {
+      "name": "integration",
+      "command": "npx vitest run --config config/vitest.config.js test/integration --maxWorkers=3",
+      "status": "passed",
+      "files": 84,
+      "passed": 1028,
+      "failed": 0,
+      "skipped": 41
+    },
+    {
+      "name": "packaging",
+      "command": "npm run test:packaging",
+      "status": "failed",
+      "files": 13,
+      "passed": 84,
+      "failed": 2,
+      "skipped": 26,
+      "setup_failures": [
+        {
+          "file": "test/integration/cli-package-webmode.test.ts",
+          "classification": "b",
+          "cause": "Offline clean-install cache lacks @fortemi/core; assertions retained."
+        },
+        {
+          "file": "test/integration/global-install-native-policy.test.ts",
+          "classification": "b",
+          "cause": "Offline clean-install cache lacks @fortemi/core; assertions retained."
+        }
+      ],
+      "blockers": [
+        "apps/web/dist is absent: the build script requires a disallowed dependency install.",
+        "Cockpit prepack uses a fresh cache and cannot install yallist offline.",
+        "Clean npm installs require @fortemi/core metadata unavailable in their empty offline caches."
+      ],
+      "evidence": [
+        "packaging.json",
+        "packaging-decision.json"
+      ]
+    },
+    {
+      "name": "lint:plugin-copies",
+      "command": "npm run lint:plugin-copies",
+      "status": "passed",
+      "plugins": 40,
+      "exit_code": 0
+    },
+    {
+      "name": "test:ci",
+      "command": "npm run test:ci",
+      "status": "passed",
+      "exit_code": 0,
+      "lanes": [
+        {
+          "name": "ci-default",
+          "files": 1253,
+          "passed": 22824,
+          "failed": 0,
+          "skipped": 306,
+          "success": true
+        },
+        {
+          "name": "ci-uat",
+          "files": 12,
+          "passed": 145,
+          "failed": 0,
+          "skipped": 0,
+          "success": true
+        }
+      ],
+      "passed": 22969,
+      "failed": 0,
+      "skipped": 306,
+      "expected_failures": 1,
+      "passed_excluding_expected_failures": 22968,
+      "post_cleanup_verification": {
+        "command": "vitest run --config config/vitest.uat.config.js --maxWorkers=3",
+        "passed": 145,
+        "failed": 0,
+        "files": 12,
+        "success": true,
+        "evidence": "uat-cleanup-recheck.json"
+      }
+    }
+  ],
+  "leaks": {
+    "status": "fixed",
+    "classification": "b",
+    "full_ci_tmpdir": "/var/tmp/68k70m4m",
+    "full_ci_entries_before_cleanup_fix": [
+      "aiwg-uat-wd002-bin-Kwc5wH",
+      "aiwg-uat-node-only-YYx7He",
+      "aiwg-uat-node-only-nfaDMl",
+      "aiwg-uat-node-only-SIA0Nh",
+      "aiwg-uat-wd002-bin-bi64fg",
+      "aiwg-uat-node-only-tL67dh",
+      "aiwg-uat-node-only-twpVjj",
+      "aiwg-uat-wd002-bin-Kwc5wH/fake-claude",
+      "aiwg-uat-node-only-YYx7He/node",
+      "aiwg-uat-node-only-nfaDMl/node",
+      "aiwg-uat-node-only-SIA0Nh/node",
+      "aiwg-uat-wd002-bin-bi64fg/fake-claude",
+      "aiwg-uat-node-only-tL67dh/node",
+      "aiwg-uat-node-only-twpVjj/node"
+    ],
+    "full_ci_top_level_directories_leaked": 7,
+    "full_ci_after_recording_and_removing_old_leaks": [],
+    "recheck_command": "vitest run --config config/vitest.uat.config.js --maxWorkers=3",
+    "recheck_tmpdir": "/var/tmp/jxukjtlw",
+    "recheck_entries": [],
+    "recheck_passed": 145,
+    "evidence": [
+      "ci-leaks-before-fix.json",
+      "uat-cleanup-recheck.json"
+    ],
+    "note": "The complete test:ci command passed before the cleanup-only test edits; the entire affected UAT lane was rerun afterwards in a fresh private TMPDIR and left no entries."
+  }
+}

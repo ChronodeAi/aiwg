@@ -79,6 +79,7 @@ export class DiscordAdapter extends BaseAdapter {
     super('discord');
 
     this.#botToken = config.botToken || process.env.AIWG_DISCORD_TOKEN;
+    this._setSensitiveValues(this.#botToken);
     this.#defaultChannelId = config.defaultChannelId || process.env.AIWG_DISCORD_CHANNEL_ID;
     this.#guildId = config.guildId || process.env.AIWG_DISCORD_GUILD_ID;
 
@@ -101,7 +102,8 @@ export class DiscordAdapter extends BaseAdapter {
       // Use first default room or first room as the fallback defaultChannelId
       if (!this.#defaultChannelId) {
         const defaultRoom = config.rooms.find(r => r.is_default || r.isDefault) || config.rooms[0];
-        this.#defaultChannelId = defaultRoom.channel_id || defaultRoom.channelId;
+        this._setSensitiveValues(this.#botToken);
+    this.#defaultChannelId = defaultRoom.channel_id || defaultRoom.channelId;
       }
     }
 
@@ -135,10 +137,11 @@ export class DiscordAdapter extends BaseAdapter {
       }
 
       const botUser = await response.json();
-      console.log(`[discord] Connected as ${botUser.username}#${botUser.discriminator}`);
+      console.log(this._redactText(`[discord] Connected as ${botUser.username}#${botUser.discriminator}`));
 
       this._setConnected();
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       throw new Error(`Discord initialization failed: ${error.message}`);
     }
@@ -198,6 +201,7 @@ export class DiscordAdapter extends BaseAdapter {
         success: true,
       };
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       return {
         messageId: '',
@@ -239,6 +243,7 @@ export class DiscordAdapter extends BaseAdapter {
 
       this._recordSend();
     } catch (error) {
+      error = this._redactError(error);
       this._recordError(error);
       throw error;
     }
@@ -356,6 +361,7 @@ export class DiscordAdapter extends BaseAdapter {
         console.log(`[discord] Created thread: ${threadName}`);
       }
     } catch (error) {
+      error = this._redactError(error);
       console.warn(`[discord] Thread creation failed:`, error.message);
       // Non-fatal - message was still sent
     }

@@ -17,6 +17,38 @@ const routeInput = (f: ReturnType<typeof workerResolutionFixture>, index = 0) =>
   identityEvidence: 'runtime-configured' as const, observation: rows(f)[index].worker!, now: new Date(f.request.now),
 });
 
+describe('catalog digest facts', () => {
+  it('ignores only discovery fetchedAt without mutating the catalog', () => {
+    const f = workerResolutionFixture();
+    const before = structuredClone(f.snapshot.catalog);
+    const first = resolve(f);
+    expect(f.snapshot.catalog).toEqual(before);
+    f.snapshot.catalog.discovery!.fetchedAt = '2099-01-01T00:00:00Z';
+    expect(resolve(f).digests).toEqual(first.digests);
+  });
+
+  it.each(['efforts', 'availability', 'provider-observedAt', 'worker-observedAt', 'worker-fetchedAt', 'verifiedAt', 'refreshedAt', 'static-role'])(
+    'keeps %s pinned even in a cached catalog', fact => {
+      const f = workerResolutionFixture();
+      const discovery = f.snapshot.catalog.discovery!;
+      discovery.source = 'cache'; discovery.upstreamSource = 'native';
+      const first = resolve(f).digests;
+      const row = rows(f)[0];
+      if (fact === 'efforts') row.reasoningEfforts = ['medium'];
+      if (fact === 'availability') row.credentialState = 'unavailable';
+      if (fact === 'provider-observedAt') discovery.instances!.codex.observedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'worker-observedAt') row.worker!.observedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'worker-fetchedAt') row.worker!.fetchedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'verifiedAt') row.worker!.verifiedAt = '2099-01-01T00:00:00Z';
+      if (fact === 'refreshedAt') f.snapshot.catalog.refreshedAt = '2099-01-01';
+      if (fact === 'static-role') f.snapshot.catalog.providers.codex = { roles: { coding: { id: 'changed-model' } } };
+      expect(resolve(f).digests.catalogDigest).not.toBe(first.catalogDigest);
+      f.request.expectedDigests = first;
+      expect(resolve(f).status).toBe('blocked');
+      expect(codes(resolve(f))).toContain('OG_CONFIG_REFERENCE');
+    });
+});
+
 describe('Consolidated review regressions for #2883', () => {
   it('names the operator data policy key and warns about unreported output', () => {
     const f = workerResolutionFixture();
@@ -153,12 +185,29 @@ describe('Consolidated review regressions for #2883', () => {
     f.request.authority.premiumAuthorized = true;
     expect(resolve(f).status).toBe('eligible');
     // This finding requests documentation of behavior that already worked.
-    const source = readFileSync(new URL('../../../src/models/resolver.ts', import.meta.url), 'utf8');
+    const source = readFileSync(new URL('../../../src/models/worker-plan.ts', import.meta.url), 'utf8');
     expect(source).toContain('// Worker candidates always invoke a model; deterministic/routine hints must not bypass premium authority.');
   });
 });
 
 describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => {
+  it.each(['unknown', 'changed'])('distinguishes %s explicit profile references from invocation failures (#3516)', kind => {
+    const f = workerResolutionFixture();
+    const adapter = f.snapshot.registry.providers.codex.workerAdapter!;
+    if (kind === 'changed') adapter.invocationProfiles!['other-shell'] = structuredClone(adapter.invocationProfiles!['fixture-shell']);
+    f.snapshot.config.parallelism!.clis = { codex: {
+      adapter: 'providers:codex', accountScope: 'synthetic', quotaScope: 'fixture', invocationProfile: 'other-shell',
+    } };
+    const plan = resolve(f);
+    expect(plan.status).toBe('blocked');
+    expect(plan.selected).toBeNull();
+    expect(plan.eligible).toEqual([]);
+    expect(plan.exclusions.flatMap(row => row.diagnostics)).toContainEqual(expect.objectContaining({
+      code: kind === 'unknown' ? 'OG_CONFIG_REFERENCE' : 'OG_PIN_MISMATCH',
+      pointer: '/parallelism/clis/codex/invocationProfile',
+    }));
+  });
+
   it.each([false, undefined])('explains dispatch off (%s) with shared enable and readiness commands (#3070)', workerDispatch => {
     const f = workerResolutionFixture();
     f.snapshot.config.parallelism!.worker_dispatch = workerDispatch;
@@ -331,7 +380,7 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     expect(resolve(f).status).toBe('blocked');
   });
 
-  it('R12 retains disabled/native behavior and distinguishes managed deferral', () => {
+  it('R12 shares eligibility with activated managed callers and rejects stale activation', () => {
     const f = workerResolutionFixture();
     f.snapshot.config.parallelism!.worker_dispatch = false;
     expect(resolve(f).status).toBe('disabled');
@@ -341,7 +390,8 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     f.snapshot.config.parallelism!.activation = { revision: 1, snapshotRef: 'fixture:snapshot',
       ...workerActivationDigests(f.snapshot.config), ...f.snapshot.modelDigests };
     expect(resolve(f).diagnostics.some(d => d.pointer === '/parallelism/activation')).toBe(false);
-    expect(resolve(f).selected).toBeNull(); // S2 runtime is not implemented by S1 mapping.
+    expect(resolve(f).status).toBe('eligible');
+    expect(resolve(f).selected?.member).toBe('primary');
     f.snapshot.modelDigests.userModelsDigest = workerConfigDigest({ changed: true });
     expect(resolve(f).diagnostics.some(d => d.pointer === '/parallelism/activation')).toBe(true);
   });
@@ -377,6 +427,48 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     expect(resolve(f).status).toBe('eligible');
     rows(f).forEach(row => { row.worker!.qualification.roles = ['coding']; });
     expect(resolve(f).status).toBe('blocked');
+  });
+
+  it('R16b scopes required-role qualification gaps to the groups a request considers', () => {
+    const f = workerResolutionFixture();
+    const groups = f.snapshot.config.parallelism!.groups!;
+    groups.unqualified = { maxParallel: 1, requiredRoles: ['coding'], members: [
+      { id: 'other', cli: 'muse', model: 'synthetic-unobserved', roles: ['coding'] },
+    ] };
+    const gapFor = (plan: ReturnType<typeof resolve>, source: 'diagnostics' | 'exclusions') =>
+      (source === 'diagnostics' ? plan.diagnostics : plan.exclusions.flatMap(e => e.diagnostics))
+        .filter(d => d.code === 'OG_ADAPTER_UNQUALIFIED' && d.pointer === '/parallelism/groups/unqualified/requiredRoles');
+    // A configured group outside the role guidance never blocks the request.
+    let plan = resolve(f);
+    expect(plan.status).toBe('eligible');
+    expect(gapFor(plan, 'diagnostics')).toEqual([]);
+    expect(gapFor(plan, 'exclusions')).toEqual([]);
+    // A pinned qualified group is unaffected by another guidance group's gap.
+    f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding.groups = ['workers', 'unqualified'];
+    f.request = { ...f.request, group: 'workers' };
+    plan = resolve(f);
+    expect(plan.status).toBe('eligible');
+    expect(plan.selected?.group).toBe('workers');
+    // Unpinned: the unqualified group is skipped visibly, not silently.
+    f.request = { ...f.request, group: undefined };
+    plan = resolve(f);
+    expect(plan.status).toBe('eligible');
+    expect(plan.eligible.every(t => t.group === 'workers')).toBe(true);
+    expect(plan.exclusions).toContainEqual(expect.objectContaining({ group: 'unqualified', member: 'other', effort: null }));
+    expect(gapFor(plan, 'exclusions')[0].message).toContain('aiwg doctor --probe-workers --qualify');
+    // Pinning the unqualified group still blocks with the actionable gap.
+    f.request = { ...f.request, group: 'unqualified' };
+    plan = resolve(f);
+    expect(plan.status).toBe('blocked');
+    expect(gapFor(plan, 'diagnostics')).toHaveLength(1);
+    // When no considered group is qualified the role still blocks.
+    f.request = { ...f.request, group: undefined };
+    rows(f).forEach(row => { row.worker!.qualification.status = 'unqualified'; });
+    groups.workers.requiredRoles = ['coding'];
+    plan = resolve(f);
+    expect(plan.status).toBe('blocked');
+    expect(gapFor(plan, 'diagnostics')).toHaveLength(1);
+    expect(plan.diagnostics.some(d => d.pointer === '/parallelism/groups/workers/requiredRoles')).toBe(true);
   });
 
   it('R17 intersects all current ceilings and exposes default permissions as guidance', () => {
@@ -421,7 +513,7 @@ describe('T-OG-01 S1 resolution, synthetic evidence and no side effects', () => 
     f.snapshot.config.parallelism!.budgets = { perRun: { tokens: 9000, costUsd: 3 }, perTask: { tokens: 5000, wallSeconds: 120 } };
     f.snapshot.config.parallelism!.retry = { maxAttempts: 4 };
     f.snapshot.constraints = { ceilings: { tokens: 4000, costUsd: 2, wallSeconds: 90, maxAttempts: 3 } };
-    f.request.ceilings = { tokens: 8000, costUsd: 1, wallSeconds: 60, maxAttempts: 10 };
+    f.request.ceilings = { tokens: 4000, costUsd: 1, wallSeconds: 60, maxAttempts: 3 };
     expect(resolve(f).ceilings).toEqual({ tokens: 4000, costUsd: 1, wallSeconds: 60, maxAttempts: 3 });
     expect(resolve(f).status).toBe('eligible');
     f.snapshot.config.parallelism!.budgets.enforcement = 'hard';

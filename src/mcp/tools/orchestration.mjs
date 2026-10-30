@@ -9,6 +9,8 @@
  */
 
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
+import { showDrillInSchema, showDrillInArgs } from './discovery.mjs';
 import { parse as parseYaml } from 'yaml';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -157,18 +159,23 @@ export function registerFlowToolset(server) {
 
   server.registerTool('flow-show', {
     title: 'Show AIWG Flow',
-    description: 'Fetch a declarative Flow playbook by name, including parsed step summary and the wrapper skill path when present.',
+    description: 'Return the same metadata card as aiwg show flow, with optional body, section, rules, and resource drill-ins.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Flow name or playbook file name (e.g. flow-release)'),
       framework: z.string().optional().describe('Optional framework disambiguator'),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, async ({ name, framework }) => {
+  }, async ({ name, framework, ...drillIn }) => {
     try {
-      const flow = await findFlow(name, framework);
-      if (!flow) return mcpError(`flow-show: flow not found: ${name}`);
-      flow.wrapper_skill.exists = await pathExists(flow.wrapper_skill.path);
-      return mcpJson(flow);
+      const flow = framework ? await findFlow(name, framework) : null;
+      if (framework && !flow) return mcpError(`flow-show: flow not found: ${name}`);
+      const { stdout, stderr, code } = await runAiwgCli([
+        'show', 'flow', flow?.path ?? name, '--json',
+        ...showDrillInArgs(drillIn),
+      ]);
+      if (code !== 0) return mcpError(`flow-show lookup failed: ${stderr}`);
+      return mcpJson(stdout);
     } catch (err) {
       return mcpError(`flow-show: ${err.message}`);
     }
@@ -181,7 +188,7 @@ export function registerFlowToolset(server) {
       name: z.string().describe('Flow name (e.g. flow-release)'),
       framework: z.string().optional().describe('Optional framework disambiguator'),
       project_dir: z.string().optional().describe('Project directory where the Flow should operate'),
-      args: z.array(z.string()).default([]).describe('Operator arguments to pass conceptually to the wrapper skill'),
+      args: z.array(z.string()).prefault([]).describe('Operator arguments to pass conceptually to the wrapper skill'),
       confirmed: z.boolean().default(false).describe('Required because Flows can run shell commands and write artifacts'),
     },
     annotations: { destructiveHint: true, openWorldHint: true },
@@ -236,15 +243,16 @@ export function registerMissionToolset(server) {
       session_id: z.string().describe('Existing Mission Control session id from mc-start / mc-list'),
       objective: z.string().describe('Mission objective'),
       completion: z.string().describe('Measurable completion criterion'),
-      max_iterations: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
-      max_total_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
-      max_output_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
-      max_tool_calls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
+      max_iterations: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
+      max_total_tokens: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
+      max_output_tokens: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
+      max_tool_calls: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
       max_total_cost: z.number().positive().finite().optional().describe('Hard cumulative provider-reported spend ceiling'),
       max_wall_clock_minutes: z.number().positive().finite().optional().describe('Hard cumulative runtime ceiling'),
-      exploration_quota: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
+      exploration_quota: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
       budget_stop_policy: z.enum(['completion-wins', 'budget-wins']).optional().describe('Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)'),
       project_dir: z.string().optional().describe('Project directory for CLI dispatch'),
+      worker_dispatch: z.string().optional().describe('Absolute prepared managed worker dispatch JSON path inside the project'),
       confirmed: z.boolean().default(false).describe('Required for durable/long-running mission dispatch'),
     },
     annotations: { destructiveHint: true, openWorldHint: true },
@@ -260,6 +268,7 @@ export function registerMissionToolset(server) {
     max_wall_clock_minutes,
     exploration_quota,
     budget_stop_policy,
+    worker_dispatch,
     project_dir,
     confirmed,
   }) => {
@@ -279,6 +288,7 @@ export function registerMissionToolset(server) {
       if (max_wall_clock_minutes) cliArgs.push('--max-wall-clock-minutes', String(max_wall_clock_minutes));
       if (exploration_quota) cliArgs.push('--exploration-quota', String(exploration_quota));
       if (budget_stop_policy) cliArgs.push('--budget-stop-policy', budget_stop_policy);
+      if (worker_dispatch) cliArgs.push('--worker-dispatch', worker_dispatch);
       const { stdout, stderr, code } = await runAiwgCli(
         cliArgs,
         { cwd: project_dir, timeoutMs: 30_000 },
@@ -325,7 +335,7 @@ export function registerWorkerResolveTool(server) {
   server.registerTool('worker-resolve', {
     title: 'Resolve Worker Invocation',
     description: 'Resolve a nonlaunching qualified worker plan without Mission or MC state.',
-    inputSchema: z.object({
+    inputSchema: z.strictObject({
       role: z.enum(['efficiency', 'coding', 'reasoning']),
       task: z.string().min(1),
       group: z.string().min(1).regex(/^[a-z][a-z0-9-]{0,62}$/),
@@ -335,7 +345,7 @@ export function registerWorkerResolveTool(server) {
       transport: z.enum(['shell', 'mcp']).default('shell'),
       format: z.enum(['shell', 'json']).optional(),
       project_dir: z.string().min(1).optional(),
-    }).strict(),
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   }, async input => {
     try {

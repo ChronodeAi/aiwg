@@ -69,6 +69,10 @@ jobs:
           git -C /tmp/aiwg-omp-source checkout --detach 5964a0f7649275bcde818f20073193fd032451f2
           bun install --cwd /tmp/aiwg-omp-source --ignore-scripts --frozen-lockfile
           node tools/providers/omp-conformance-api.mjs --source /tmp/aiwg-omp-source --require --output artifacts/omp-api-conformance.json
+      - name: Build CLI implementation for provider translators
+        # The precedence probe deploys agents through the provider translators,
+        # which load the compiled model-wrapper modules from dist/ (#2649).
+        run: npm run build:cli
       - name: Native discovery precedence and conditional rule matching
         run: node tools/providers/omp-precedence-conformance.mjs --binary /tmp/aiwg-omp-conformance --source /tmp/aiwg-omp-source --output artifacts/omp-precedence-conformance.json
       - name: Retain versioned evidence including explicit unverified checks

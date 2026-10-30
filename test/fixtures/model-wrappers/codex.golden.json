@@ -1,0 +1,34 @@
+{
+  "aiwg-model-reasoning-worker": {
+    "name": "aiwg-model-reasoning-worker",
+    "model": "gpt-6.1-sol",
+    "model_reasoning_effort": "high",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-coding-worker": {
+    "name": "aiwg-model-coding-worker",
+    "model": "gpt-6.1-terra",
+    "model_reasoning_effort": "medium",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-efficiency-worker": {
+    "name": "aiwg-model-efficiency-worker",
+    "model": "gpt-6-luna",
+    "model_reasoning_effort": "low",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-explorer": {
+    "name": "aiwg-model-explorer",
+    "model": "gpt-6-luna",
+    "model_reasoning_effort": "low",
+    "sandbox_mode": "read-only",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-verifier": {
+    "name": "aiwg-model-verifier",
+    "model": "gpt-6.1-terra",
+    "model_reasoning_effort": "medium",
+    "sandbox_mode": "read-only",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  }
+}

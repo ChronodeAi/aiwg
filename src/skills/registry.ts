@@ -20,6 +20,7 @@ import { AgentSkillsAdapter } from './adapters/agent-skills.js';
 import { LocalAdapter } from './adapters/local.js';
 import { ClawHubAdapter } from './adapters/clawhub.js';
 import { OpenClawAdapter } from './adapters/openclaw.js';
+import { selectSkillOwners } from './collision-discovery.js';
 
 /**
  * All known registry adapters
@@ -84,11 +85,17 @@ export async function searchSkills(
     const available = await adapter.isAvailable();
     if (!available) continue;
 
-    const adapterResults = await adapter.search(query);
-    results.push(...adapterResults);
+    const adapterResults = adapter.id === 'local' || adapter.id === 'agentskills'
+      ? await adapter.list() : await adapter.search(query);
+    results.push(...adapterResults.map(skill => adapter.id === 'agentskills'
+      ? { ...skill, origin: 'imported' as const } : skill));
   }
 
-  return results;
+  const normalized = query.toLowerCase();
+  return selectSkillOwners(results).filter(skill => !skill.origin
+    || skill.name.toLowerCase().includes(normalized)
+    || skill.description.toLowerCase().includes(normalized)
+    || skill.package?.toLowerCase().includes(normalized));
 }
 
 /**
@@ -108,10 +115,11 @@ export async function listSkills(
     if (!available) continue;
 
     const adapterResults = await adapter.list();
-    results.push(...adapterResults);
+    results.push(...adapterResults.map(skill => adapter.id === 'agentskills'
+      ? { ...skill, origin: 'imported' as const } : skill));
   }
 
-  return results;
+  return selectSkillOwners(results);
 }
 
 /**
@@ -125,15 +133,18 @@ export async function getSkillInfo(
     ? ALL_ADAPTERS.filter((a) => a.id === providerId)
     : ALL_ADAPTERS;
 
+  const results: SkillDetails[] = [];
   for (const adapter of adapters) {
+    if (results.length && adapter.id !== 'local' && adapter.id !== 'agentskills') break;
     const available = await adapter.isAvailable();
     if (!available) continue;
 
     const info = await adapter.info(name);
-    if (info) return info;
+    if (info && adapter.id === 'agentskills') info.origin = 'imported';
+    if (info && !info.origin) return info;
+    if (info) results.push(info);
   }
-
-  return undefined;
+  return selectSkillOwners(results)[0];
 }
 
 /**

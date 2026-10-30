@@ -10,6 +10,7 @@
  * Fixture qualification here is synthetic and never live qualification:
  * the bundled OpenHuman profile stays unqualified (OD06).
  */
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -53,7 +54,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   // Inactive health metadata becomes a loader candidate only in this copy.
   registry.providers.openhuman.workerAdapter = structuredClone(registry.providers.openhuman.workerHealthAdapter);
   return registry;
@@ -443,13 +444,9 @@ describe('T-OG-20/21/23 OpenHuman run identity, stall and security signals', () 
   it('OD13 TERM ignored requires KILL; the exit records the signal, never zero', async () => {
     const { root, workdir } = await scratch();
     const { file } = await fakeConfig(root, 'ignore-term');
-    let child: ReturnType<typeof spawn> | undefined;
     const result = await run(process.execPath, argv(), { cwd: workdir, stdinData: frame(workdir), env: { AIWG_FAKE_WORKER_CONFIG: file },
-      timeoutMs: 8_000, onStart: started => { child = started; setTimeout(() => {
-        started.kill('SIGTERM');
-        setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-      }, 600); } });
-    expect(child).toBeDefined();
+      timeoutMs: 8_000, onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });

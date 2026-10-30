@@ -3,6 +3,12 @@ id: film-continuity
 name: Film Continuity
 description: Preserve physical identity, object states, geometry, and causal transitions across film shots.
 enforcement: high
+activation: bound
+summary: Preserve physical identity, object states, geometry, and causal transitions across film shots.
+bound_to:
+  agents: [film-producer, film-story-director, film-scene-supervisor, film-continuity-supervisor, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-continuity-pack, film-motion-coverage, film-shot-plan, film-storyboard, film-review-gate, film-reference-edit, film-edit-conform]
+  flows: [film-design, film-previs, film-generate, film-finish, film-resume, film-revise-with-impact]
 ---
 
 # Film Continuity

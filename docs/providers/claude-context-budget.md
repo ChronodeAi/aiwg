@@ -3,15 +3,22 @@
 AIWG Claude-facing artifacts must fit standard Claude Code Sonnet usage. Do not
 design skills, commands, or subagents around a 1M-context account.
 
-This note complements the listing-budget troubleshooting guide. Listing budgets
-cover the cost of skill names and descriptions at startup. This note covers two
-further costs: the **aggregate startup context** Claude Code inlines on every
-session, and the **runtime cost** after a skill or subagent is invoked.
+This note complements the listing-budget troubleshooting guide. Keep three
+budgets apart: (1) the **startup skill listing** (skill names + descriptions
+inlined every session — see the
+[skills budget guide](../skills-budget-guide.md#the-three-budgets-do-not-conflate-them));
+(2) **bridge bytes and the aggregate startup context** Claude Code inlines on
+every session (below); and (3) the **runtime reattachment cost** after a skill
+or subagent body is loaded on demand (see Budget Model and Required Rules).
 
-The standard Claude Code Sonnet window (`claude-sonnet-5`) is **200,000
-tokens**. The 1M window is a premium tier gated behind usage credits. When the
-required context exceeds the standard window, Claude Code upgrades to the 1M
-tier; on accounts without 1M credits that upgrade is rejected
+AIWG treats **200,000 tokens** as the standard-context baseline. That number
+is an AIWG-configured assumption, not an Anthropic-published limit: it is the
+default in `tools/lint/claude-context-inventory.mjs`
+(`STANDARD_SONNET_BUDGET_TOKENS`) and `tools/cli/doctor.mjs`
+(`CLAUDE_DEFAULT_CONTEXT_WINDOW`). Wider windows exist as premium tiers that
+can be gated behind usage credits. When the required context exceeds the
+standard baseline, Claude Code may attempt a wider-context tier; on accounts
+without the needed credits that upgrade is rejected
 (`Usage credits required for 1M context`), and on standard-only accounts it
 surfaces as immediate `Context limit reached` after the first few actions.
 
@@ -20,7 +27,9 @@ surfaces as immediate `Context limit reached` after the first few actions.
 Claude Code inlines the following into every session before any user prompt:
 
 - the base Claude Code system prompt and tool definitions,
-- `CLAUDE.md` and its `@`-includes (`AIWG.md`, `.aiwg/AIWG.md`), plus `AGENTS.md`,
+- `CLAUDE.md` and its `@`-includes (`AIWG.md`, `.aiwg/AIWG.md`), plus the minimal
+  `AGENTS.md` hook (bootstrap, precedence, compact core where inline, and harness
+  rules entry points; kernel bodies and summary/path indexes stay in rule files),
 - every file in `.claude/rules/*.md` (full body),
 - **each ancestor directory's `CLAUDE.md` and `.claude/rules/*.md`** — a project
   nested under a workspace with its own deployment starts with both sets,
@@ -60,6 +69,16 @@ Measure the startup surface with `npm run lint:claude-context -- --startup`, and
 check dispatch headroom with `aiwg doctor` — its **Subagent Dispatch** check
 fails when the inlined surface leaves no room for a Task dispatch, and names the
 ancestor contribution when one applies.
+
+Two different checks cover the two halves of this budget: `npm run
+lint:context-sizes` enforces the per-file **bridge-bytes** ceiling
+(`tools/lint/context-size-guard.mjs`, `DEFAULT_BRIDGE_CEILING_BYTES = 8 KiB`
+per file — not the skill listing, not skill bodies), while
+`npm run lint:claude-context` measures the **aggregate** memory-plus-rules
+surface against the 200,000-token baseline (warn at 60%,
+`DEFAULT_STARTUP_WARN_RATIO`) and inventories on-demand skill bodies (flagged
+above 24 KiB, `DEFAULT_SKILL_CEILING_BYTES`) and agent definitions (above
+16 KiB, `DEFAULT_AGENT_CEILING_BYTES`).
 
 ## Sources
 

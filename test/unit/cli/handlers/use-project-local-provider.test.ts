@@ -23,6 +23,10 @@ let originalEnv: Partial<Record<typeof ARTIFACT_ENV_KEYS[number], string | undef
 const state = vi.hoisted(() => ({
   frameworkRoot: '',
   run: vi.fn().mockResolvedValue({ exitCode: 0 }),
+  prepare: vi.fn(),
+  finalize: vi.fn().mockResolvedValue(undefined),
+  commit: vi.fn().mockResolvedValue({}),
+  dispose: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../../../src/channel/manager.mjs', () => ({
@@ -34,6 +38,11 @@ vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
   createScriptRunner: vi.fn(() => ({
     run: state.run,
   })),
+}));
+
+vi.mock('../../../../src/cli/services/provider-prepare-coordinator.js', () => ({
+  prepareProviderDeployments: state.prepare,
+  finalizePreparedProvider: state.finalize,
 }));
 
 import { useHandler } from '../../../../src/cli/handlers/use.js';
@@ -77,6 +86,14 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     state.frameworkRoot = frameworkRoot;
     state.run.mockReset();
     state.run.mockResolvedValue({ exitCode: 0 });
+    state.commit.mockReset();
+    state.commit.mockResolvedValue({});
+    state.dispose.mockReset();
+    state.dispose.mockResolvedValue(undefined);
+    state.prepare.mockReset();
+    state.prepare.mockResolvedValue({ commit: state.commit, dispose: state.dispose });
+    state.finalize.mockReset();
+    state.finalize.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -103,7 +120,7 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     expect(state.run).toHaveBeenCalledWith(
       'tools/agents/deploy-agents.mjs',
       expect.arrayContaining(['--provider', 'claude']),
-      {},
+      expect.objectContaining({ capture: true, stdoutFd: expect.any(Number) }),
     );
     expect(state.run.mock.calls[0][1]).not.toContain('my-provider');
   });
@@ -113,7 +130,7 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
 
     expect(result.exitCode).toBe(0);
-    expect(state.run).toHaveBeenCalledWith('tools/agents/deploy-agents.mjs', expect.arrayContaining(['--provider', 'windsurf']), {});
+    expect(state.run).toHaveBeenCalledWith('tools/agents/deploy-agents.mjs', expect.arrayContaining(['--provider', 'windsurf']), expect.objectContaining({ capture: true, stdoutFd: expect.any(Number) }));
     if (selector !== 'windsurf') expect(state.run.mock.calls[0][1]).not.toContain(selector);
   });
 
@@ -133,7 +150,10 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
     expect(result.exitCode).toBe(0);
     const calls = state.run.mock.calls.filter(([script]) => script === 'tools/agents/deploy-agents.mjs');
-    expect(calls.length).toBeGreaterThanOrEqual(framework === 'all' ? 3 : 1);
+    expect(calls.length).toBeGreaterThanOrEqual(framework === 'all' ? 2 : 1);
+    if (framework === 'all') {
+      expect(calls.some(([, args]) => args.includes(join(frameworkRoot, 'agentic/code/extensions/test-extension')))).toBe(false);
+    }
     for (const [, deployArgs] of calls) {
       expect(deployArgs[deployArgs.indexOf('--scope') + 1]).toBe('user');
     }
@@ -166,6 +186,73 @@ describe('aiwg use project-local provider bundles (#1717)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.message).toContain('selected with --provider');
     expect(result.message).toContain('aiwg use sdlc --provider my-provider');
+    expect(state.run).not.toHaveBeenCalled();
+  });
+
+  it('prepares two built-in providers concurrently and finalizes them in commit order', async () => {
+    mkdirSync(join(projectDir, '.aiwg'), { recursive: true });
+    writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1', providers: ['cursor', 'claude'], installed: {}, scripts: {},
+    }));
+    const args = ['sdlc', '--target', projectDir, '--no-utils', '--no-project-local', '--skip-conflicts', '--no-context-files'];
+    const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
+
+    expect(result.message).not.toContain('Concurrent provider preparation failed');
+    expect(state.prepare).toHaveBeenCalledTimes(1);
+    const jobs = state.prepare.mock.calls[0][1];
+    expect(jobs.map((job: { provider: string }) => job.provider)).toEqual(['cursor', 'claude']);
+    expect(state.commit.mock.calls.map(([order]) => order)).toEqual([0, 1]);
+    expect(state.dispose).toHaveBeenCalledTimes(1);
+    expect(state.finalize).toHaveBeenCalledTimes(2);
+    expect(state.finalize.mock.calls.map(([, deployArgs]) => deployArgs[deployArgs.indexOf('--provider') + 1])).toEqual(['cursor', 'claude']);
+  });
+
+  it('retains serial fallback for user-scope and dry-run multi-provider deployment', async () => {
+    mkdirSync(join(projectDir, '.aiwg'), { recursive: true });
+    writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1', providers: ['cursor', 'claude'], installed: {}, scripts: {},
+    }));
+    const args = ['sdlc', '--target', projectDir, '--scope', 'user', '--dry-run', '--no-utils', '--no-project-local', '--skip-conflicts', '--no-context-files'];
+    const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
+
+    expect(result.exitCode).toBe(0);
+    expect(state.prepare).not.toHaveBeenCalled();
+    const calls = state.run.mock.calls.filter(([script]) => script === 'tools/agents/deploy-agents.mjs');
+    expect(calls.map(([, deployArgs]) => deployArgs[deployArgs.indexOf('--provider') + 1])).toEqual(['cursor', 'claude']);
+  });
+
+  it('retains serial fallback when a multi-provider selection includes a project-local adapter', async () => {
+    writeProviderBundle(projectDir, 'my-provider', 'claude');
+    writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1', providers: ['my-provider', 'cursor'], installed: {}, scripts: {},
+    }));
+    const args = ['sdlc', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local', '--skip-conflicts', '--no-context-files'];
+    const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
+
+    expect(result.exitCode).toBe(0);
+    expect(state.prepare).not.toHaveBeenCalled();
+    const calls = state.run.mock.calls.filter(([script]) => script === 'tools/agents/deploy-agents.mjs');
+    expect(calls.map(([, deployArgs]) => deployArgs[deployArgs.indexOf('--provider') + 1])).toEqual(['claude', 'cursor']);
+  });
+
+  it('retains serial fallback for a built-in without a transferable transaction', async () => {
+    mkdirSync(join(projectDir, '.aiwg'), { recursive: true });
+    writeFileSync(join(projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1', providers: ['factory', 'cursor'], installed: {}, scripts: {},
+    }));
+    const args = ['sdlc', '--target', projectDir, '--dry-run', '--no-utils', '--no-project-local', '--skip-conflicts', '--no-context-files'];
+    const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
+
+    expect(result.exitCode).toBe(0);
+    expect(state.prepare).not.toHaveBeenCalled();
+    const calls = state.run.mock.calls.filter(([script]) => script === 'tools/agents/deploy-agents.mjs');
+    expect(calls.map(([, deployArgs]) => deployArgs[deployArgs.indexOf('--provider') + 1])).toEqual(['factory', 'cursor']);
+  });
+
+  it('rejects a caller-supplied prepared-provider bypass capability', async () => {
+    const args = ['sdlc', '--provider', 'cursor', '--target', projectDir, '--aiwg-provider-main-prepared', 'forged'];
+    const result = await useHandler.execute({ cwd: projectDir, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result).toMatchObject({ exitCode: 2, message: expect.stringMatching(/Unknown option.*--aiwg-provider-main-prepared.*aiwg use --help/) });
     expect(state.run).not.toHaveBeenCalled();
   });
 });

@@ -756,9 +756,11 @@ export async function startServer(opts: {
       return c.json({ error: `Invalid register payload: ${errors}` }, 400);
     }
 
-    const result = executorRegistry.register(body as ExecutorRegisterRequest);
-    if ('status' in result && result.status === 400) {
-      return c.json({ error: result.error }, 400);
+    const authHeader: string = c.req.header('authorization') ?? '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const result = executorRegistry.register(body as ExecutorRegisterRequest, token);
+    if ('status' in result) {
+      return c.json({ error: result.error }, result.status);
     }
     // Emit telemetry (reuse agent.spawn as closest match for executor registration)
     const resp = result as { executor_id: string; token: string; registered_at: string };

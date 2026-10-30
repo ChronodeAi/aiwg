@@ -11,7 +11,8 @@ import {
   type AiwgFortemiIndexExport,
 } from "./browser-export.js";
 import type { ArtifactIndex } from "./types.js";
-import { loadGraphIndexFile } from "./index-reader.js";
+import { loadGraphIndexFile, publishIndexFiles } from "./index-reader.js";
+import { getFrameworkIndexBaseDir } from './framework-index-paths.js';
 
 export interface FortemiCoreSyncOptions {
   graph?: GraphType;
@@ -31,6 +32,12 @@ export interface FortemiCoreSyncManifest {
   export_schema_version: "aiwg.fortemi.index.export.v2";
   export_checksum: string;
   item_count: number;
+  text_quality?: {
+    short_text_threshold_chars: number;
+    short_text_count: number;
+    filename_title_count: number;
+    degenerate: boolean;
+  };
   skos_coverage?: {
     records_with_concepts: number;
     total_records: number;
@@ -76,10 +83,11 @@ export interface FortemiCoreExecutableSkillStatus {
   missing: string[];
 }
 
-function syncDir(cwd: string, graph: string): string {
+export function getFortemiCoreIndexDir(cwd: string, graph: string): string {
   loadGlobalGraphConfigs();
+  if (graph === 'framework') return path.join(getFrameworkIndexBaseDir(cwd), 'fortemi-core', graph);
   const config = GRAPH_CONFIGS[graph];
-  if (graph === "framework" || config?.shared) {
+  if (config?.shared) {
     const xdgData = process.env.XDG_DATA_HOME ?? path.join(process.env.HOME ?? cwd, ".local", "share");
     return path.join(xdgData, "aiwg", "index", "fortemi-core", graph);
   }
@@ -105,6 +113,57 @@ function prebuiltDir(graph: string): string | null {
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+interface ExportSnapshot {
+  signature: string;
+  checksum: string;
+  exported: AiwgFortemiIndexExport;
+}
+// Status checks and the query reader often inspect the same large export.
+// Keep at most two private snapshots, and never retain an object exposed to a
+// caller: query results have always been fresh, mutable objects.
+const exportSnapshots = new Map<string, ExportSnapshot>();
+
+function exportSignature(file: string): string {
+  const stat = fs.statSync(file, { bigint: true });
+  return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function readExportSnapshot(
+  file: string,
+  expectedChecksum: string | null,
+): ExportSnapshot {
+  const signature = exportSignature(file);
+  const cached = exportSnapshots.get(file);
+  // The manifest checksum is part of the snapshot identity. Filesystems may
+  // preserve every stat field across a same-size rewrite within one timestamp
+  // tick, while the manifest already names the replacement's checksum.
+  if (
+    cached?.signature === signature &&
+    cached.checksum === expectedChecksum
+  ) return cached;
+  exportSnapshots.delete(file);
+  const text = fs.readFileSync(file, "utf-8");
+  const exported = JSON.parse(text) as AiwgFortemiIndexExport;
+  const snapshot = { signature, exported, checksum: sha256(text) };
+  // A concurrent replacement cannot publish a snapshot under the wrong stamp.
+  if (exportSignature(file) === signature) {
+    exportSnapshots.set(file, snapshot);
+    while (exportSnapshots.size > 2) exportSnapshots.delete(exportSnapshots.keys().next().value!);
+  }
+  return snapshot;
+}
+
+/** Transfer a checked snapshot to the query reader without sharing mutable results. */
+export function consumeFortemiCoreExport(file: string, expectedChecksum: string | null): AiwgFortemiIndexExport {
+  try {
+    const snapshot = readExportSnapshot(file, expectedChecksum);
+    if (snapshot.checksum !== expectedChecksum) throw new Error("export checksum does not match manifest");
+    return snapshot.exported;
+  } finally {
+    exportSnapshots.delete(file);
+  }
 }
 
 function readManifest(manifestPath: string): FortemiCoreSyncManifest | null {
@@ -211,13 +270,14 @@ export function syncFortemiCoreIndex(
   options: FortemiCoreSyncOptions = {},
 ): FortemiCoreSyncManifest {
   const graph = options.graph ?? "project";
-  const dir = syncDir(cwd, graph);
+  const dir = getFortemiCoreIndexDir(cwd, graph);
   const exportPath = path.join(dir, "aiwg-fortemi-index-v2.json");
   const manifestPath = path.join(dir, "manifest.json");
   const maxChars = options.maxChunkChars ?? 64 * 1024;
   if (!Number.isSafeInteger(maxChars) || maxChars < 64) throw new Error("maxChunkChars must be an integer of at least 64");
   fs.mkdirSync(dir, { recursive: true });
-  const temporaryPath = path.join(dir, `.export-${randomUUID()}.tmp`);
+  const staging = fs.mkdtempSync(path.join(dir, ".sync-"));
+  const temporaryPath = path.join(staging, `.export-${randomUUID()}.tmp`);
   const previous = readManifest(manifestPath);
   const sourceBuiltAt = sourceIndexBuiltAt(cwd, graph);
 
@@ -225,6 +285,7 @@ export function syncFortemiCoreIndex(
     generatedAt: string;
     checksum: string;
     itemCount: number;
+    textQuality: FortemiCoreSyncManifest["text_quality"];
     skosCoverage: FortemiCoreSyncManifest["skos_coverage"];
   } => {
     const exported = buildAiwgFortemiIndexExport(cwd, {
@@ -238,10 +299,23 @@ export function syncFortemiCoreIndex(
     const recordsWithConcepts = exported.items.filter(
       (item) => (item.skos_concepts?.length ?? 0) > 0,
     ).length;
+    const shortTextThreshold = 200;
+    let shortTextCount = 0;
+    let filenameTitleCount = 0;
+    for (const item of exported.items) {
+      if (item.text.trim().length < shortTextThreshold) shortTextCount++;
+      if (item.title.trim() === path.posix.basename(item.source.path)) filenameTitleCount++;
+    }
     return {
       generatedAt,
       checksum,
       itemCount: exported.items.length,
+      textQuality: {
+        short_text_threshold_chars: shortTextThreshold,
+        short_text_count: shortTextCount,
+        filename_title_count: filenameTitleCount,
+        degenerate: exported.items.length === 0 || shortTextCount / exported.items.length >= 0.8,
+      },
       skosCoverage: {
         records_with_concepts: recordsWithConcepts,
         total_records: exported.items.length,
@@ -270,7 +344,7 @@ export function syncFortemiCoreIndex(
       }
     }
 
-    fs.renameSync(temporaryPath, exportPath);
+    fs.renameSync(temporaryPath, path.join(staging, path.basename(exportPath)));
     const manifest: FortemiCoreSyncManifest = {
       schema_version: "aiwg.fortemi.core-sync.v1",
       backend: "fortemi-core",
@@ -280,18 +354,20 @@ export function syncFortemiCoreIndex(
       export_schema_version: "aiwg.fortemi.index.export.v2",
       export_checksum: built.checksum,
       item_count: built.itemCount,
+      text_quality: built.textQuality,
       skos_coverage: built.skosCoverage,
       status,
       source_index_built_at: sourceBuiltAt,
     };
     fs.writeFileSync(
-      manifestPath,
+      path.join(staging, path.basename(manifestPath)),
       JSON.stringify(manifest, null, 2) + "\n",
       "utf-8",
     );
+    publishIndexFiles(staging, dir);
     return manifest;
   } finally {
-    fs.rmSync(temporaryPath, { force: true });
+    fs.rmSync(staging, { recursive: true, force: true });
   }
 }
 
@@ -299,7 +375,7 @@ export function getFortemiCoreSyncStatus(
   cwd: string,
   graph: string = "project",
 ): FortemiCoreSyncStatus {
-  const dir = syncDir(cwd, graph);
+  const dir = getFortemiCoreIndexDir(cwd, graph);
   const manifestPath = path.join(dir, "manifest.json");
   const exportPath = path.join(dir, "aiwg-fortemi-index-v2.json");
   const { manifest, reason: manifestReadReason } = readManifestResult(manifestPath);
@@ -326,9 +402,11 @@ export function getFortemiCoreSyncStatus(
   let exportChecksumMatches = false;
   if (exportExists) {
     try {
-      const exportText = fs.readFileSync(exportPath, "utf-8");
-      const exported = JSON.parse(exportText) as AiwgFortemiIndexExport;
-      exportChecksumMatches = sha256(exportText) === manifest.export_checksum;
+      const { exported, checksum } = readExportSnapshot(
+        exportPath,
+        manifest.export_checksum,
+      );
+      exportChecksumMatches = checksum === manifest.export_checksum;
       if (exportChecksumMatches) {
         if (exported.schema_version !== manifest.export_schema_version) {
           exportReadReason = `export schema '${exported.schema_version}' does not match manifest '${manifest.export_schema_version}'`;
@@ -375,8 +453,9 @@ export function getFortemiCoreSyncStatus(
 
 export function getFortemiCorePrebuiltStatus(
   graph: string = "framework",
+  packageRoot?: string,
 ): FortemiCoreSyncStatus {
-  const dir = prebuiltDir(graph) ?? path.join(process.cwd(), "prebuilt", "fortemi-core", graph);
+  const dir = (packageRoot ? path.join(packageRoot, "prebuilt", "fortemi-core", graph) : prebuiltDir(graph)) ?? path.join(process.cwd(), "prebuilt", "fortemi-core", graph);
   const manifestPath = path.join(dir, "manifest.json");
   const exportPath = path.join(dir, "aiwg-fortemi-index-v2.json");
   const { manifest, reason: manifestReadReason } = readManifestResult(manifestPath);
@@ -403,8 +482,10 @@ export function getFortemiCorePrebuiltStatus(
   let reason: string | null = null;
   if (exportExists) {
     try {
-      const exportText = fs.readFileSync(exportPath, "utf-8");
-      const exported = JSON.parse(exportText) as AiwgFortemiIndexExport;
+      const { exported, checksum } = readExportSnapshot(
+        exportPath,
+        prebuiltManifest.export_checksum,
+      );
       if (
         prebuiltManifest.schema_version !== "aiwg.fortemi.prebuilt.v1" ||
         prebuiltManifest.backend !== "fortemi-core" ||
@@ -413,7 +494,7 @@ export function getFortemiCorePrebuiltStatus(
         prebuiltManifest.export_schema_version !== "aiwg.fortemi.index.export.v2"
       ) {
         reason = "prebuilt manifest is incompatible with the requested graph";
-      } else if (sha256(exportText) !== prebuiltManifest.export_checksum) {
+      } else if (checksum !== prebuiltManifest.export_checksum) {
         reason = "prebuilt export checksum does not match manifest";
       } else if (exported.schema_version !== prebuiltManifest.export_schema_version) {
         reason = `prebuilt export schema '${exported.schema_version}' does not match manifest '${prebuiltManifest.export_schema_version}'`;

@@ -1,20 +1,24 @@
+import { WorkerRequestArgumentError, type WorkerCommandRequest } from './worker-command-request.js';
+export { parseWorkerCommandArgs, type WorkerCommandRequest } from './worker-command-request.js';
 /** One nonlaunching typed renderer shared by models resolve and Ralph. */
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { lstat, realpath, open } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { inspectWorkerPath as inspectPath, workerOutputPaths, readBrief, assertConductorWorkerPlan } from './worker-invocation-paths.js';
+export { inspectWorkerPath } from './worker-invocation-paths.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { resolveWorkerPlan, type WorkerPlanSnapshot, type WorkerResolutionPlan } from '../models/resolver.js';
 import { workerConfigDigest, validateWorkerHealthConfig } from '../config/aiwg-config.js';
+import { intersectWorkerCeilings } from '../models/worker-ceilings.js';
 import type { McpServerRegistry, McpWorkerQualificationInput } from '../mcp/registry.js';
 import type { McpProfile } from '../mcp/profiles.js';
 import { assertValidWorkerPayload } from '../mission-protocol/codecs.js';
 import type { WorkerResolvedInvocation, WorkerEffectiveHealth } from '../mission-protocol/types.js';
 import type { WorkerPolicyDiagnostic } from '../models/types.js';
 import { qualificationDigest } from '../models/qualification-digest.mjs';
+import { prepareWorkerInvocation, type WorkerInvocationQualification } from './worker-invocation-preparation.js';
+export { prepareWorkerInvocation, mcpToolSchemaDigest, type WorkerInvocationQualification, type WorkerInstallationRequest } from './worker-invocation-preparation.js';
 import type { WorkerExecution, ParallelismConfig } from '../config/aiwg-config.js';
-import { qualifyWorkerInvocationProfile, isOperatorQualifiedWorkerAdapter, assertOperatorWorkerNativeArgv, assertWorkerSelectionAllowed,
-  requiredWorkerControls, requiresWorkerExternalBoundary, isCanonicalWorkerModelKey, assertWorkerHealthQualification, WorkerPolicyError, DEFAULT_WORKER_SELECTION, type WorkerAdapterMetadata, type WorkerInvocationProfile, type WorkerBoundary } from '../models/provider-policy.js';
+import { isOperatorQualifiedWorkerAdapter, assertOperatorWorkerNativeArgv,
+  assertWorkerLaunchMode, WorkerRoleEffortError, requiredWorkerControls, isCanonicalWorkerModelKey, WorkerPolicyError, DEFAULT_WORKER_SELECTION } from '../models/provider-policy.js';
 
 /** Frozen per-attempt windows; parent/transport ceilings include time already spent. */
 export function resolveWorkerEffectiveHealth(config: ParallelismConfig['health'], input: {
@@ -72,189 +76,10 @@ export function resolveWorkerEffectiveHealth(config: ParallelismConfig['health']
   return health;
 }
 
-/**
- * The exact digest formula an MCP worker binding's `inputSchemaDigest`/
- * `outputSchemaDigest` are pinned against (used below and reused verbatim by
- * the #2892 MCP worker-invoke bridge's own live `tools/list` schema-drift
- * check — see `src/mcp/tools/worker-invoke.mjs` M3). Deliberately the raw
- * `JSON.stringify` of the schema object, NOT `workerConfigDigest`'s
- * canonicalized (sorted-key) form — a schema's own declared key order is
- * part of what gets pinned at qualification time.
- */
-export function mcpToolSchemaDigest(schema: unknown): string {
-  return `sha256:${createHash('sha256').update(JSON.stringify(schema)).digest('hex')}`;
-}
-
-export interface WorkerInvocationQualification extends ParametersContext {
-  installation?: WorkerInstallationRequest;
-  /** Host store bytes bound by the recorded-installation loader, never a brief/cwd lookup. */
-  stdinFramerBinding?: { storePath: string; storeDigest: string };
-  adapter: WorkerAdapterMetadata;
-  adapterId: string;
-  cliVersion: string;
-  platform?: string;
-  requiredControls?: string[];
-  permissions?: WorkerExecution;
-  boundary?: WorkerBoundary;
-  mcp?: WorkerInvocationProfile['mcp'];
-  mcpSchemas?: { input: Record<string, unknown>; output: Record<string, unknown> };
-  expectedDigests?: Pick<WorkerResolvedInvocation, 'policyDigest' | 'catalogDigest' | 'profileDigest' | 'briefDigest'>;
-}
-/** Host-owned #2885 inspection inputs; never loaded from task/brief data. */
-export interface WorkerInstallationRequest {
-  executable: string;
-  cwd: string;
-  workerWritableRoots: string[];
-  effectiveConfigDigest: string;
-  accountScope: string;
-  boundary: WorkerBoundary;
-  environment?: Record<string, string>;
-  mcpServerDigest?: string;
-  evidence: NonNullable<WorkerInvocationProfile['installationQualification']> & { cases: Record<string, string> };
-  [key: string]: unknown;
-}
-type ParametersContext = Parameters<typeof assertWorkerSelectionAllowed>[1];
-type CompleteInvocation = WorkerResolvedInvocation & Required<Pick<WorkerResolvedInvocation,
-  'cwd' | 'briefPath' | 'stdoutPath' | 'stderrPath' | 'finalPath' | 'argv' | 'envNames'>>;
-
-export async function prepareWorkerInvocation(invocation: WorkerResolvedInvocation,
-  qualification: WorkerInvocationQualification): Promise<WorkerResolvedInvocation> {
-  const result = structuredClone(invocation) as CompleteInvocation;
-  // shellCommand is derived syntax, never authority supplied by a brief.
-  if (result.transport === 'shell') result.shellCommand = '';
-  // Validate the established invocation shape first. Health is optional and
-  // is checked after policy, installation and transport qualification below.
-  const contract = { ...result };
-  delete contract.health;
-  assertValidWorkerPayload('workerResolvedInvocation', contract);
-  if ((qualification.platform ?? process.platform) !== 'linux') {
-    throw new Error('Unsupported worker invocation platform; Linux is required');
-  }
-  if (!Number.isFinite(qualification.now) || Date.parse(result.expiresAt) <= qualification.now) {
-    throw new Error('Worker invocation is expired or has no validation clock');
-  }
-  if (qualification.adapter.id !== qualification.adapterId) {
-    throw new Error('Worker invocation adapter identity mismatch');
-  }
-  for (const [key, value] of Object.entries(qualification.expectedDigests ?? {})) {
-    if (result[key as keyof WorkerResolvedInvocation] !== value) throw new WorkerPolicyError('OG_PIN_MISMATCH', `Worker invocation ${key} changed`);
-  }
-  const verified = Date.parse(qualification.adapter.qualification.verifiedAt ?? '');
-  const policyDays = qualification.policy?.freshness?.policyDays ?? DEFAULT_WORKER_SELECTION.freshness!.policyDays!;
-  if (!Number.isFinite(verified) || verified > qualification.now || qualification.now - verified >= policyDays * 86400000) {
-    throw new Error('Worker installation qualification is stale or invalid');
-  }
-  assertWorkerSelectionAllowed(result.selected, qualification);
-  const profile = qualifyWorkerInvocationProfile(qualification.adapter, {
-    profile: result.selected.profileRef, transport: result.transport,
-    cliVersion: qualification.cliVersion,
-    requiredControls: qualification.requiredControls, policy: qualification.policy,
-    permissions: qualification.permissions, effort: result.selected.effort.value, boundary: qualification.boundary,
-    mcp: qualification.mcp,
-  });
-  if (requiresWorkerExternalBoundary(qualification.adapter, { ...qualification,
-    profile: result.selected.profileRef, transport: result.transport, effort: result.selected.effort.value })) {
-    const installed = qualification.installation;
-    const evidence = profile.installationQualification;
-    if (!installed || !evidence || (['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'] as const)
-      .some(key => installed.evidence?.[key] !== evidence[key])
-      || !qualification.boundary || qualificationDigest(qualification.boundary) !== qualificationDigest(installed.boundary)) {
-      throw new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Worker installation evidence and qualified boundary must match');
-    }
-  }
-  if (profile.installationQualification) {
-    const installedAt = Date.parse(profile.installationQualification.verifiedAt);
-    if (!Number.isFinite(installedAt) || installedAt > qualification.now
-      || qualification.now - installedAt >= policyDays * 86400000) {
-      throw new Error('Worker installation qualification is stale or invalid');
-    }
-  }
-  const scopeDigest = profile.installationQualification?.scopeDigest ?? qualification.adapter.qualification.fixtureDigest;
-  if (result.selected.qualificationDigest !== scopeDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker qualification digest changed');
-  const absolute = (value: unknown): value is string => typeof value === 'string' && path.posix.isAbsolute(value) && !value.includes('\0');
-  for (const key of ['cwd', 'briefPath', 'stdoutPath', 'stderrPath', 'finalPath'] as const) {
-    if (!absolute(result[key])) throw new Error(`Worker invocation requires absolute ${key}`);
-  }
-  const briefPath = path.posix.normalize(result.briefPath);
-  if ([result.stdoutPath, result.stderrPath, result.finalPath].some(value => path.posix.normalize(value) === briefPath)
-    || path.posix.normalize(result.stdoutPath) === path.posix.normalize(result.stderrPath)) {
-    throw new Error('Worker invocation input/output paths must be distinct');
-  }
-  if (result.transport === 'shell') {
-    assertOperatorWorkerNativeArgv(qualification.adapter, result.argv, result.selected, qualification.permissions);
-    if (!absolute(result.argv[0]) || result.argv[0].includes('=') || result.argv.some(value => value.includes('\0'))) {
-      throw new WorkerPolicyError('OG_CONFIG_REFERENCE', 'Worker invocation requires an absolute binary without equals and NUL-free argv');
-    }
-    if (result.envNames.some(name => !profile.envAllowlist.includes(name))) {
-      throw new Error('Worker invocation environment is outside the qualified allowlist');
-    }
-    const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
-    // Only validated environment names appear as shell syntax; their values
-    // remain in the conductor environment and are never printed in the plan.
-    const environment = result.envNames.map(name => `${name}="\${${name}-}"`).join(' ');
-    // The frozen 'closed' value means empty stdin (immediate EOF). 'brief-json'
-    // pipes a conductor-built params document framed from the brief file
-    // (worker-stdin-frame.mjs), so brief text never enters any argv.
-    const worker = `env -i${environment ? ` ${environment}` : ''} ${result.argv.map(quote).join(' ')}`;
-    const outputs = `> ${quote(result.stdoutPath)} 2> ${quote(result.stderrPath)}`;
-    if (result.stdin === 'brief-json') {
-      const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
-      const frame = [process.execPath, framer, result.briefPath, result.selected.model, result.cwd].map(quote).join(' ');
-      result.shellCommand = `cd ${quote(result.cwd)} && env -i ${frame} | ${worker} ${outputs}`;
-    } else if (result.stdin === 'adapter-frame') {
-      const binding = qualification.stdinFramerBinding;
-      if (!binding || !absolute(binding.storePath) || !/^sha256:[a-f0-9]{64}$/.test(binding.storeDigest)) {
-        throw new Error('Adapter stdin framer requires a trusted installation binding');
-      }
-      const framer = fileURLToPath(new URL('./worker-stdin-frame.mjs', import.meta.url));
-      const frame = [process.execPath, framer, '--adapter-frame', result.briefPath, result.cwd,
-        result.selected.cli, qualification.adapterId, result.selected.qualificationDigest, result.briefDigest!,
-        binding.storePath, binding.storeDigest, JSON.stringify(qualification.policy ?? null)].map(quote).join(' ');
-      result.shellCommand = `cd ${quote(result.cwd)} && env -i${environment ? ` ${environment}` : ''} ${frame} | ${worker} ${outputs}`;
-    } else if (result.stdin === 'closed' || result.stdin === 'brief-text') {
-      const stdin = result.stdin === 'closed' ? '< /dev/null' : `< ${quote(result.briefPath)}`;
-      result.shellCommand = `cd ${quote(result.cwd)} && ${worker} ${stdin} ${outputs}`;
-    } else {
-      throw new Error(`Unsupported worker stdin mode: ${result.stdin}`);
-    }
-  } else {
-    const binding = result.mcp!;
-    for (const key of ['serverRef', 'tool', 'inputSchemaDigest', 'outputSchemaDigest', 'sessionIsolation']) {
-      if (binding[key as keyof typeof binding] !== profile.mcp![key as keyof NonNullable<typeof profile.mcp>]) throw new WorkerPolicyError('OG_PIN_MISMATCH', `MCP worker binding changed: ${key}`);
-    }
-    if (binding.timeoutSeconds > result.limits.wallSeconds) {
-      throw new Error('MCP worker timeout exceeds the invocation deadline');
-    }
-    for (const key of ['input', 'output'] as const) {
-      const schema = qualification.mcpSchemas?.[key];
-      if (!schema || mcpToolSchemaDigest(schema) !== binding[`${key}SchemaDigest`]) {
-        throw new WorkerPolicyError('OG_PIN_MISMATCH', `MCP worker ${key} schema digest changed`);
-      }
-    }
-    const { default: Ajv2020 } = await import('ajv/dist/2020.js');
-    const { default: addFormats } = await import('ajv-formats');
-    const validate = addFormats(new Ajv2020({ strict: true, allErrors: true })).compile(qualification.mcpSchemas!.input);
-    if (!validate(binding.arguments)) throw new Error('MCP worker arguments violate the pinned input schema');
-  }
-  assertValidWorkerPayload('workerResolvedInvocation', result);
-  if (result.health !== undefined) {
-    if (result.health.profileRef !== result.selected.profileRef
-      || result.health.hardTimeoutSeconds > Math.min(result.limits.wallSeconds, result.mcp?.timeoutSeconds ?? Infinity)) {
-      throw new Error('Worker health profile or wall ceiling mismatch');
-    }
-    if (['native', 'external'].includes(result.health.stepEnforcement)
-      && profile.controls.stepCap?.support !== result.health.stepEnforcement) throw new Error('Unqualified worker step enforcement');
-  }
-  assertWorkerHealthQualification(profile, { profileRef: result.selected.profileRef, cliVersion: qualification.cliVersion,
-    accountScope: qualification.installation?.accountScope ?? '', inferenceProvider: result.selected.inferenceProvider,
-    model: result.selected.model, effort: result.selected.effort.value });
-  return result;
-}
-
 /** Trusted #2885 installation owner supplies driver bindings, never task input. */
 export interface WorkerInvocationDriver {
   /** Pure installed-adapter framing; called only to deliver stdin. */
-  buildWorkerStdinFrame?(brief: string | Buffer): string | Uint8Array;
+  buildWorkerStdinFrame?(brief: string | Buffer, invocation?: { selected?: { model?: string } }): string | Uint8Array;
   /** Existing adapter extraction; raw stream remains separate and untrusted. */
   extractFinal?(stdout: string): unknown;
   parseWorkerFinal?(output: string | Uint8Array, options: Record<string, unknown>): Promise<unknown>;
@@ -267,105 +92,50 @@ export interface WorkerInvocationDriver {
   prepareWorkerInvocation?(invocation: WorkerResolvedInvocation, qualification: WorkerInvocationQualification): Promise<WorkerResolvedInvocation>;
   /** Must use the installed qualified driver, not legacy session defaults or template eval. */
   buildInvocation(input: {
-    selected: WorkerResolvedInvocation['selected']; permissions: WorkerExecution;
+    invocationId?: string; selected: WorkerResolvedInvocation['selected']; permissions: WorkerExecution;
     cwd: string; briefPath: string; brief: string; finalPath: string;
     limits: WorkerResolvedInvocation['limits'];
-    health: WorkerEffectiveHealth;
+    health: WorkerEffectiveHealth; role?: string;
   }): Promise<Pick<WorkerResolvedInvocation, 'argv' | 'stdin' | 'envNames' | 'mcp' | 'artifacts'>>;
 }
 
-export interface WorkerCommandRequest {
-  role: 'efficiency' | 'coding' | 'reasoning';
-  task: string;
-  group: string;
-  brief: string;
-  workdir: string;
-  final_output: string;
-  transport?: 'shell' | 'mcp';
-  format?: 'shell' | 'json';
-  authority?: { premiumAuthorized: true; maxAutoTier: 3 };
+const invocationChecks = {
+  invocation_build_failed: { pointer: '/invocation/buildInvocation',
+    message: 'Worker adapter could not build the invocation; check the selected model, effort, permissions and request paths.' },
+  native_argv_invalid: { pointer: '/invocation/argv',
+    message: 'Worker adapter arguments do not preserve the requested native controls; review the installed driver and qualify again.' },
+  invocation_prepare_failed: { pointer: '/invocation/prepareWorkerInvocation',
+    message: 'Worker invocation preparation failed; check installation evidence, policy, paths and environment, then qualify again.' },
+  installation_recheck_unavailable: { pointer: '/invocation/prepareWorkerInvocation',
+    message: 'The selected profile requires an installation recheck, but the installed driver has no preparation method. Restore the qualified driver and qualify again.' },
+  qualified_workspace_mismatch: { pointer: '/request/workdir',
+    message: 'Worker workdir differs from the qualified workspace. Use the qualified workspace or run aiwg doctor --probe-workers --qualify from the requested workdir.' },
+} satisfies Record<NonNullable<WorkerPolicyDiagnostic['reason']>, { pointer: string; message: string }>;
+
+/** Only fixed check identifiers, never adapter/filesystem error text, cross this boundary. */
+export class WorkerInvocationCheckError extends WorkerPolicyError {
+  constructor(code: WorkerPolicyDiagnostic['code'], public readonly reason: keyof typeof invocationChecks) {
+    super(code, invocationChecks[reason].message);
+  }
 }
 
-/** Reject unsupported syntax before discovery or any path reads. */
-export function parseWorkerCommandArgs(args: string[]): WorkerCommandRequest {
-  const names: Record<string, string> = { role: 'role', task: 'task', group: 'group', brief: 'brief',
-    workdir: 'workdir', 'final-output': 'final_output', transport: 'transport', format: 'format' };
-  const result: Record<string, string> = {};
-  let json = false;
-  let premiumAuthorized = false;
-  for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-    if (token === '--authorize-premium') {
-      if (premiumAuthorized) throw new Error('Duplicate --authorize-premium');
-      premiumAuthorized = true; continue;
-    }
-    if (token === '--json') { if (json) throw new Error('Duplicate --json'); json = true; continue; }
-    const match = /^--([^=]+)(?:=([\s\S]*))?$/.exec(token);
-    if (!match || !Object.hasOwn(names, match[1])) throw new Error(`Unsupported models resolve argument: ${token}`);
-    const key = names[match[1]];
-    if (key in result) throw new Error(`Duplicate --${match[1]}`);
-    const value = match[2] ?? args[++i];
-    if (!value || value.startsWith('--') && match[2] === undefined || value.includes('\0')) {
-      throw new Error(`--${match[1]} requires a value`);
-    }
-    result[key] = value;
+/** Nonlaunching build and native-control check shared by resolution and doctor. */
+export async function buildWorkerInvocationTransport(driver: Pick<WorkerInvocationDriver, 'qualification' | 'buildInvocation'>,
+  input: Parameters<WorkerInvocationDriver['buildInvocation']>[0]): ReturnType<WorkerInvocationDriver['buildInvocation']> {
+  assertWorkerLaunchMode(driver.qualification.adapter, input.permissions);
+  let transport: Awaited<ReturnType<WorkerInvocationDriver['buildInvocation']>>;
+  try { transport = await driver.buildInvocation(input); }
+  catch (error) {
+    throw new WorkerInvocationCheckError(error instanceof WorkerPolicyError ? error.code : 'OG_ADAPTER_UNQUALIFIED', 'invocation_build_failed');
   }
-  if (json && result.format && result.format !== 'json') throw new Error('--json conflicts with --format');
-  if (json) result.format = 'json';
-  for (const key of ['role', 'task', 'group', 'brief', 'workdir', 'final_output']) {
-    if (!result[key]) throw new Error(`Missing ${key}`);
+  if (driver.qualification.adapter.invocationProfiles?.[input.selected.profileRef]?.transport === 'shell') {
+    try { assertOperatorWorkerNativeArgv(driver.qualification.adapter, transport.argv!, input.selected, input.permissions); }
+    catch { throw new WorkerInvocationCheckError('OG_ADAPTER_UNQUALIFIED', 'native_argv_invalid'); }
   }
-  if (!['efficiency', 'coding', 'reasoning'].includes(result.role)) throw new Error('Unsupported role');
-  if (!/^[a-z][a-z0-9-]{0,62}$/.test(result.group)) throw new Error('Invalid group');
-  if (result.transport && !['shell', 'mcp'].includes(result.transport)) throw new Error('Unsupported transport');
-  if (result.format && !['shell', 'json'].includes(result.format)) throw new Error('Unsupported renderer; use POSIX shell or JSON');
-  return { ...result, ...(premiumAuthorized ? { authority: { premiumAuthorized: true, maxAutoTier: 3 } } : {}) } as unknown as WorkerCommandRequest;
+  return transport;
 }
 
 const bytesDigest = (bytes: Buffer | string): string => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-
-export async function inspectWorkerPath(filename: string, kind: 'file' | 'directory' | 'output'): Promise<boolean> {
-  if (!path.isAbsolute(filename) || filename.includes('\0')) throw new Error('Absolute NUL-free paths are required');
-  if (filename.split('/').includes('..')) throw new Error('Worker path traversal is not allowed');
-  const normalized = path.resolve(filename);
-  let current = normalized;
-  while (true) {
-    try {
-      const canonical = await realpath(current);
-      if (canonical !== current) throw new Error(`Symlink path is not allowed: ${filename}`);
-      if (current !== normalized) return false;
-      const stat = await lstat(normalized);
-      if (kind === 'directory' ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1) {
-        throw new Error(`Expected an unaliased ${kind}: ${filename}`);
-      }
-      return true;
-    } catch (error: any) {
-      if (error.code !== 'ENOENT') throw error;
-      const parent = path.dirname(current);
-      if (parent === current) throw error;
-      current = parent;
-    }
-  }
-}
-const inspectPath = inspectWorkerPath;
-
-async function readBrief(filename: string): Promise<Buffer | null> {
-  if (!await inspectPath(filename, 'file')) return null;
-  const handle = await open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 262144) throw new Error('Brief must be a bounded regular file (256 KiB)');
-    const buffer = Buffer.alloc(262145);
-    let length = 0;
-    while (length < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
-      if (!bytesRead) break;
-      length += bytesRead;
-    }
-    if (length > 262144) throw new Error('Brief exceeds 256 KiB');
-    return buffer.subarray(0, length);
-  } finally { await handle.close(); }
-}
 
 export type WorkerCommandPlan = WorkerResolutionPlan & { invocation?: WorkerResolvedInvocation; request?: WorkerCommandRequest };
 
@@ -381,14 +151,17 @@ export class WorkerPathScopeError extends WorkerPolicyError {
 
 /** Re-resolve saved JSON through the same trusted owners; saved argv is never authority. */
 export async function revalidateWorkerInvocationPlan(saved: WorkerCommandPlan, snapshot: WorkerPlanSnapshot,
-  drivers: Record<string, WorkerInvocationDriver>, now = new Date().toISOString()): Promise<WorkerResolvedInvocation> {
-  if (!saved.request || saved.mode !== 'direct' || saved.status !== 'eligible'
+  drivers: Record<string, WorkerInvocationDriver>, now = new Date().toISOString(), invocationPath?: string): Promise<WorkerResolvedInvocation> {
+  const managed = saved.mode === 'managed' && snapshot.config.parallelism?.worker_mode === 'managed';
+  if (!saved.request || (saved.mode !== 'direct' && !managed) || saved.mode !== (snapshot.config.parallelism?.worker_mode ?? 'direct') || saved.status !== 'eligible'
+    || (managed && saved.invocation?.mode !== 'managed')
     || saved.invocation?.readiness !== 'launchable' || Date.parse(saved.invocation.expiresAt) <= Date.parse(now)) {
     throw new Error('A fresh launchable models resolve JSON plan is required');
   }
   assertValidWorkerPayload('workerResolvedInvocation', saved.invocation);
+  if (saved.invocation.invocationId) await assertConductorWorkerPlan(saved, invocationPath, drivers);
   const current = await resolveWorkerInvocation(snapshot, saved.request, drivers, now,
-    { digests: saved.digests, briefDigest: saved.invocation.briefDigest ?? null });
+    { digests: saved.digests, briefDigest: saved.invocation.briefDigest ?? null, invocationId: saved.invocation.invocationId });
   // Expiry is calculated from the resolution clock. All execution bindings,
   // controls, thresholds and paths must remain byte-for-byte digest equivalent.
   if (!current.invocation || current.status !== 'eligible'
@@ -403,37 +176,59 @@ export async function revalidateWorkerInvocationPlan(saved: WorkerCommandPlan, s
  * This function does no probing, spawning, registration, admission or writes. */
 export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, request: WorkerCommandRequest,
   drivers: Record<string, WorkerInvocationDriver>, now = new Date().toISOString(),
-  expected?: { digests: Record<string, string>; briefDigest: string | null }): Promise<WorkerCommandPlan> {
+  expected?: { digests: Record<string, string>; briefDigest: string | null; invocationId?: string }): Promise<WorkerCommandPlan> {
   snapshot = structuredClone(snapshot);
   request = structuredClone(request);
   let pointer = '/request/brief';
   let failureCode: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE';
   let plan: WorkerCommandPlan | undefined;
   try {
-    if (!path.isAbsolute(request.brief)) throw new WorkerPolicyError('OG_CONFIG_REFERENCE', '--brief must be an absolute path; relative paths are not resolved against cwd or --workdir.');
+    const managedIntent = request.managedIntent;
+    if (managedIntent) {
+      assertValidWorkerPayload('workerSelectionIntent', managedIntent);
+      if (snapshot.config.parallelism?.worker_mode !== 'managed'
+        || managedIntent.role !== request.role || managedIntent.taskClass !== request.task || managedIntent.group !== request.group) {
+        throw new Error('Managed task authority differs from the worker request');
+      }
+    }
+    for (const key of ['brief', 'workdir', 'final_output'] as const) {
+      if (!path.isAbsolute(request[key])) throw new WorkerRequestArgumentError(key);
+    }
     const bytes = await readBrief(request.brief);
     const briefDigest = bytes === null ? null : bytesDigest(bytes);
     if (expected && expected.briefDigest !== briefDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief digest changed; resolve again');
-    let brief: import('../mission-protocol/types.js').WorkerDirectBrief | undefined;
+    let brief: import('../mission-protocol/types.js').WorkerDirectBrief | import('../mission-protocol/types.js').WorkerBrief | undefined;
     if (bytes?.toString('utf8').trimStart().startsWith('{')) {
       brief = JSON.parse(bytes.toString('utf8'));
-      assertValidWorkerPayload('workerDirectBrief', brief);
-      if (brief!.intent.role !== request.role || brief!.intent.taskClass !== request.task || brief!.intent.group !== request.group
+      assertValidWorkerPayload(managedIntent ? 'workerBrief' : 'workerDirectBrief', brief);
+      if (managedIntent && workerConfigDigest(brief!.intent) !== workerConfigDigest(managedIntent)) {
+        throw new Error('Managed brief differs from parent task authority');
+      }
+      if (brief!.intent.role !== (snapshot.models.defaults.workerSelection?.roleGuidance?.[request.role]?.baseRole ?? request.role) || brief!.intent.taskClass !== request.task || brief!.intent.group !== request.group
         || brief!.workspace.path !== request.workdir || brief!.output.resultPath !== request.final_output) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Brief role/task/group/workspace/output differs from request');
       }
     }
+    // Brief and parent authority restrict caller ceilings; neither can overwrite them.
+    const intent = managedIntent ?? brief?.intent;
+    if (intent) snapshot.constraints = { ...snapshot.constraints, ceilings: intersectWorkerCeilings(
+      snapshot.constraints?.ceilings, { ...intent.limits, costUsd: intent.limits.costUsd ?? undefined }) };
     plan = resolveWorkerPlan(snapshot, { role: request.role, taskClass: request.task, group: request.group,
       transport: request.transport, authority: request.authority, now, expectedDigests: expected?.digests,
-      ...(brief ? { dataClass: brief.intent.dataClass, member: brief.intent.pins.member,
-        model: brief.intent.pins.model, effort: brief.intent.pins.effort?.value, ceilings: {
-          ...brief.intent.limits, costUsd: brief.intent.limits.costUsd ?? undefined } } : {}),
+      ceilings: request.ceilings,
+      ...(intent ? { dataClass: intent.dataClass, member: intent.pins.member,
+        model: intent.pins.model, effort: intent.pins.effort?.value } : {}),
       context: { estimator: 'utf8-byte-upper-bound-v1', briefTokens: bytes?.length ?? 0,
         inputTokens: 0, toolOutputAllowance: 1024, reservedOutput: 1024 },
       requiredControls: snapshot.config.parallelism?.health?.requireStepCap ? ['stepCap'] : [],
-    });
+    }, { tokens: 50000, wallSeconds: 900 });
     plan.request = structuredClone(request);
     if (!plan.selected) return plan;
+    if (plan.mode === 'managed' && !managedIntent) {
+      plan.diagnostics.push({ code: 'OG_CONFIG_REFERENCE', pointer: '/request/managedIntent',
+        message: 'Managed execution requires the parent task authority and shared admission.' });
+      return plan;
+    }
     const tuple = plan.selected;
     pointer = `/parallelism/clis/${tuple.cli}`;
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
@@ -474,8 +269,8 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       if (path.resolve(request.brief) === output) throw new Error('Brief and output paths must be distinct');
       if (!await inspectPath(path.dirname(output), 'directory')) outputParentsExist = false;
     }
-    const limits = { tokens: Math.min(50000, plan.ceilings.tokens ?? 50000), costUsd: plan.ceilings.costUsd ?? null,
-      wallSeconds: Math.min(900, plan.ceilings.wallSeconds ?? 900), maxAttempts: plan.ceilings.maxAttempts ?? 3 };
+    const limits = { tokens: plan.ceilings.tokens!, costUsd: plan.ceilings.costUsd ?? null,
+      wallSeconds: plan.ceilings.wallSeconds!, maxAttempts: plan.ceilings.maxAttempts! };
     const observation = snapshot.catalog.discovery!.instances![tuple.cli].models.find(row => row.id === tuple.model || row.apiModelId === tuple.model)!.worker!;
     const profile = adapter.invocationProfiles![tuple.profile];
     const expiresAt = new Date(Math.min(Date.parse(now) + 300000,
@@ -485,7 +280,7 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
         + (plan.policy?.freshness?.policyDays ?? DEFAULT_WORKER_SELECTION.freshness!.policyDays!) * 86400000)).toISOString();
     const healthConfig = snapshot.config.parallelism?.health;
     if (profile.installationQualification && !driver.prepareWorkerInvocation) {
-      throw new Error('Installation-scoped profile requires the #2885 adapter preparation/recheck method');
+      throw new WorkerInvocationCheckError('OG_ADAPTER_UNQUALIFIED', 'installation_recheck_unavailable');
     }
     if (tuple.transport === 'mcp') {
       const serverRef = profile.mcp!.serverRef;
@@ -500,24 +295,41 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
     }
     const controls = isOperatorQualifiedWorkerAdapter(adapter) ? (healthConfig?.requireStepCap ? ['stepCap'] : []) : requiredWorkerControls({ policy: plan.policy, permissions: tuple.permissions, effort: tuple.effort,
       requiredControls: healthConfig?.requireStepCap ? ['stepCap'] : [] });
-    pointer = `/parallelism/clis/${tuple.cli}/invocationProfile`;
+    pointer = '/parallelism/health';
     failureCode = 'OG_ADAPTER_UNQUALIFIED';
-    const healthInput = { role: request.role, effort: tuple.effort,
+    const healthInput = { role: plan.policy?.roleGuidance?.[request.role]?.baseRole ?? request.role, effort: tuple.effort,
       modelKey: tuple.modelKey, profileRef: tuple.profile, wallSeconds: limits.wallSeconds,
       transportSeconds: adapter.invocation.kind === 'http' ? adapter.invocation.timeoutSeconds : undefined,
       stepEnforcement: controls.includes('stepCap') ? profile.controls.stepCap.support as 'native' | 'external' : 'unavailable' as const };
     let effectiveHealth = resolveWorkerEffectiveHealth(healthConfig, healthInput);
-    const transport = await driver.buildInvocation({ selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
+    const invocationId = expected?.invocationId ?? randomUUID();
+    const transport = await buildWorkerInvocationTransport(driver, { invocationId, selected: structuredClone(selected), permissions: structuredClone(tuple.permissions),
       cwd: request.workdir, briefPath: request.brief, brief: bytes?.toString('utf8') ?? '', finalPath, limits: structuredClone(limits),
-      health: structuredClone(effectiveHealth) });
+      health: structuredClone(effectiveHealth), role: request.role });
+    for (const output of Object.values(workerOutputPaths({ ...transport, selected, transport: tuple.transport, finalPath, stdoutPath, stderrPath }))) {
+      await inspectPath(output, 'output');
+      if (path.resolve(request.brief) === output) throw new Error('Brief and output paths must be distinct');
+    }
+    pointer = '/invocation/buildInvocation';
     if (transport.stdin === 'adapter-frame' && typeof driver.buildWorkerStdinFrame !== 'function') throw new Error('Installed adapter stdin framer is required');
     if (transport.mcp?.timeoutSeconds !== undefined) effectiveHealth = resolveWorkerEffectiveHealth(healthConfig,
       { ...healthInput, transportSeconds: Math.min(healthInput.transportSeconds ?? Infinity, transport.mcp.timeoutSeconds) });
+    if (request.ceilings?.wallSeconds !== undefined && request.ceilings.wallSeconds > effectiveHealth.hardTimeoutSeconds) {
+      plan.status = 'blocked';
+      plan.selected = null;
+      plan.diagnostics.push({ code: 'OG_POLICY_RELAXATION', pointer: '/request/ceilings/wallSeconds',
+        message: `Requested wallSeconds ceiling ${request.ceilings.wallSeconds} exceeds resolved policy ceiling ${effectiveHealth.hardTimeoutSeconds}.` });
+      return plan;
+    }
+    if (effectiveHealth.hardTimeoutSeconds === limits.wallSeconds) effectiveHealth.origins?.hardTimeoutSeconds.push(
+      ...(plan.origins?.['/ceilings/wallSeconds'] ?? []).map(origin => origin.pointer));
     if (workerConfigDigest(driver.qualification) !== qualificationDigest) throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation profile digest changed during resolution');
-    const invocation: WorkerResolvedInvocation = { version: 1, mode: 'direct', transport: tuple.transport, selected,
+    const invocation: WorkerResolvedInvocation = { version: 1, mode: managedIntent ? 'managed' : 'direct', transport: tuple.transport, selected,
+      isolation: tuple.permissions.launchMode ?? 'systemd-unit',
       policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest,
       expiresAt, cwd: request.workdir, briefPath: request.brief, stdoutPath, stderrPath, finalPath,
-      ...(transport.artifacts ? { artifacts: transport.artifacts } : {}),
+      ...(transport.artifacts ? { artifacts: transport.artifacts,
+        ...(transport.artifacts.some(artifact => artifact.location === 'workspace-relative') ? { invocationId } : {}) } : {}),
       argv: transport.argv, stdin: transport.stdin, envNames: transport.envNames, mcp: transport.mcp,
       ...(tuple.transport === 'shell' ? { shellCommand: '' } : {}),
       readiness: bytes !== null && workspaceExists && outputParentsExist ? 'launchable' : 'preparatory', briefDigest,
@@ -527,16 +339,25 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
       health: effectiveHealth,
     };
     const invocationQualification: WorkerInvocationQualification = { ...qualification, now: Date.parse(now),
+      ceilings: request.ceilings,
       policy: plan.policy, permissions: tuple.permissions, role: request.role, modelObservation: observation,
       expectedDigests: { policyDigest, catalogDigest: plan.digests.catalogDigest, profileDigest: plan.digests.profileDigest, briefDigest },
       requiredControls: controls };
-    const prepared = await (driver.prepareWorkerInvocation
-      ? driver.prepareWorkerInvocation(structuredClone(invocation), invocationQualification)
-      : prepareWorkerInvocation(invocation, invocationQualification));
+    let prepared: WorkerResolvedInvocation;
+    pointer = '/invocation/prepareWorkerInvocation';
+    try {
+      prepared = await (driver.prepareWorkerInvocation
+        ? driver.prepareWorkerInvocation(structuredClone(invocation), invocationQualification)
+        : prepareWorkerInvocation(invocation, invocationQualification));
+    } catch (error) {
+      if (error instanceof WorkerPathScopeError || error instanceof WorkerInvocationCheckError) throw error;
+      throw new WorkerInvocationCheckError(error instanceof WorkerPolicyError ? error.code : 'OG_ADAPTER_UNQUALIFIED', 'invocation_prepare_failed');
+    }
     if (workerConfigDigest({ ...prepared, shellCommand: invocation.shellCommand }) !== workerConfigDigest(invocation)) {
       throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Installation preparation changed the resolved invocation');
     }
     if (tuple.transport === 'mcp' && profile.installationQualification) {
+      pointer = '/invocation/mcp';
       const installation = qualification.installation;
       if (!installation?.mcpServerDigest || !driver.mcpRegistry?.assertWorkerQualified) {
         throw new Error('MCP installation registration recheck is required');
@@ -576,9 +397,25 @@ export async function resolveWorkerInvocation(snapshot: WorkerPlanSnapshot, requ
 /** Public diagnostics contain fixed summaries or explicit typed request-path details. */
 export function workerInvocationDiagnostic(error: unknown, pointer: string,
   fallback: WorkerPolicyDiagnostic['code'] = 'OG_CONFIG_REFERENCE'): WorkerPolicyDiagnostic {
-  if (error instanceof WorkerPathScopeError) return { code: error.code, pointer: error.pointer, message: error.message };
+  if (error instanceof WorkerRoleEffortError) return { code: error.code, pointer: error.pointer, message: error.message };
+  if (error instanceof WorkerPathScopeError || error instanceof WorkerRequestArgumentError) {
+    return { code: error.code, pointer: error.pointer, message: error.message };
+  }
+  if (error instanceof WorkerInvocationCheckError) return { code: error.code, reason: error.reason, ...invocationChecks[error.reason] };
   const code = error instanceof WorkerPolicyError ? error.code : fallback;
+  const signatureReason = error instanceof WorkerPolicyError
+    ? error.details?.rejections.find(row => row.reason.startsWith('signature-'))?.reason : undefined;
+  if (code === 'OG_ADAPTER_UNQUALIFIED' && signatureReason) {
+    const messages: Record<string, string> = {
+      'signature-missing': 'Unsigned worker installation approval is unqualified. This requires deliberate one-time requalification: re-run aiwg doctor --probe-workers --qualify.',
+      'signature-trust-unavailable': 'Worker qualification signing trust is unavailable. Check effects.keyProvider in aiwg.config and the existing delivery effect-ledger keyring (aiwg effect keys list); restore trust, then re-run aiwg doctor --probe-workers --qualify.',
+    };
+    return { code, pointer, message: messages[signatureReason]
+      ?? 'Worker installation signature is invalid or its keyid is untrusted. Re-run aiwg doctor --probe-workers --qualify.' };
+  }
   const messages: Record<WorkerPolicyDiagnostic['code'], string> = {
+    OG_SANDBOX_EXTERNAL: "The CLI's own sandbox is disabled by explicit external policy; isolation relies on the per-task worktree and launcher resource scope.",
+    OG_NATIVE_SANDBOX_UNAVAILABLE: 'Native sandbox unavailable inside systemd user units; select policy launchMode native-sandbox or allow unprivileged user namespaces through host AppArmor policy.',
     OG_CONFIG_REFERENCE: 'Invalid request or configuration reference; check the paths and settings.',
     OG_PIN_MISMATCH: 'Worker selection or pinned evidence changed; resolve again.',
     OG_MODEL_UNAPPROVED: 'The selected model lacks current approved observation evidence.',
@@ -588,6 +425,5 @@ export function workerInvocationDiagnostic(error: unknown, pointer: string,
     OG_POLICY_RELAXATION: 'The request would relax the resolved worker policy.',
     OG_BUDGET_UNMEASURABLE: 'The requested worker budget cannot be enforced.',
   };
-  return { code, pointer, message: error instanceof WorkerPolicyError && error.message === '--brief must be an absolute path; relative paths are not resolved against cwd or --workdir.'
-    ? error.message : messages[code] };
+  return { code, pointer, message: messages[code] };
 }

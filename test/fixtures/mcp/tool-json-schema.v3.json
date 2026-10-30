@@ -1,0 +1,3134 @@
+{
+  "discover": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "phrase": {
+          "type": "string",
+          "description": "Natural-language capability description (e.g. \"create intake form\")"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "skill",
+            "agent",
+            "command",
+            "rule",
+            "flow",
+            "runbook",
+            "template",
+            "behavior"
+          ],
+          "description": "Restrict to one artifact type"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 5,
+          "description": "Maximum results (default 5)"
+        }
+      },
+      "required": [
+        "phrase"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "skill-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "description": "Substring or glob filter on skill name"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50,
+          "description": "Maximum results"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "skill-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "boolean",
+          "description": "Fetch the full authored body"
+        },
+        "section": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exact headings (case-insensitive fallback); repeatable"
+        },
+        "rules": {
+          "type": "boolean",
+          "description": "Show governing rule summaries and required checks"
+        },
+        "with_rule_bodies": {
+          "type": "boolean",
+          "description": "Include full governing rule bodies"
+        },
+        "bound_rule_bodies": {
+          "type": "boolean",
+          "description": "Legacy alias for with_rule_bodies"
+        },
+        "resources": {
+          "type": "boolean",
+          "description": "List companion resources"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Fetch one resource path from the card"
+        },
+        "name": {
+          "type": "string",
+          "description": "Skill name (slug; e.g. \"intake-wizard\")"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "command-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "description": "Substring filter on command name"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "command-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "boolean",
+          "description": "Fetch the full authored body"
+        },
+        "section": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exact headings (case-insensitive fallback); repeatable"
+        },
+        "rules": {
+          "type": "boolean",
+          "description": "Show governing rule summaries and required checks"
+        },
+        "with_rule_bodies": {
+          "type": "boolean",
+          "description": "Include full governing rule bodies"
+        },
+        "bound_rule_bodies": {
+          "type": "boolean",
+          "description": "Legacy alias for with_rule_bodies"
+        },
+        "resources": {
+          "type": "boolean",
+          "description": "List companion resources"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Fetch one resource path from the card"
+        },
+        "name": {
+          "type": "string",
+          "description": "Command name (e.g. \"use\", \"discover\", \"ralph\")"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "rule-inventory": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "user",
+            "installation",
+            "catalog"
+          ],
+          "default": "workspace"
+        },
+        "capability": {
+          "type": "string"
+        },
+        "activation": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "bodies": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "rule-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "description": "Substring filter on rule name"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "rule-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "boolean",
+          "description": "Fetch the full authored body"
+        },
+        "section": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exact headings (case-insensitive fallback); repeatable"
+        },
+        "rules": {
+          "type": "boolean",
+          "description": "Show governing rule summaries and required checks"
+        },
+        "with_rule_bodies": {
+          "type": "boolean",
+          "description": "Include full governing rule bodies"
+        },
+        "bound_rule_bodies": {
+          "type": "boolean",
+          "description": "Legacy alias for with_rule_bodies"
+        },
+        "resources": {
+          "type": "boolean",
+          "description": "List companion resources"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Fetch one resource path from the card"
+        },
+        "name": {
+          "type": "string",
+          "description": "Rule name (e.g. \"no-attribution\", \"anti-laziness\")"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "agent-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "boolean",
+          "description": "Fetch the full authored body"
+        },
+        "section": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exact headings (case-insensitive fallback); repeatable"
+        },
+        "rules": {
+          "type": "boolean",
+          "description": "Show governing rule summaries and required checks"
+        },
+        "with_rule_bodies": {
+          "type": "boolean",
+          "description": "Include full governing rule bodies"
+        },
+        "bound_rule_bodies": {
+          "type": "boolean",
+          "description": "Legacy alias for with_rule_bodies"
+        },
+        "resources": {
+          "type": "boolean",
+          "description": "List companion resources"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Fetch one resource path from the card"
+        },
+        "name": {
+          "type": "string",
+          "description": "Agent name (e.g. \"test-engineer\", \"security-auditor\")"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "template-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "framework": {
+          "type": "string",
+          "description": "Restrict to one framework (e.g. \"sdlc-complete\")"
+        },
+        "filter": {
+          "type": "string",
+          "description": "Substring filter on template name"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "template-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string",
+          "description": "Template path (e.g. \"sdlc-complete/analysis-design/adr-template.md\")"
+        }
+      },
+      "required": [
+        "template"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "command-run": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Command name from `command-list` (e.g. \"use\", \"discover\", \"doctor\")"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Argument array (never shell-interpreted)"
+        },
+        "project_dir": {
+          "type": "string",
+          "description": "Working directory for the command"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Required for destructive commands (true to proceed)"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 600000,
+          "default": 120000,
+          "description": "Timeout (1s–10min, default 2min)"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "ask-user": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The question to ask the user."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "Machine value returned on selection."
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "Human-readable label."
+                  }
+                },
+                "required": [
+                  "label"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "minItems": 2,
+          "description": "Two or more options. Plain strings, or { label, value } objects."
+        },
+        "multiSelect": {
+          "type": "boolean",
+          "description": "Allow selecting multiple options (default false)."
+        },
+        "context": {
+          "type": "string",
+          "description": "Optional context shown above the question."
+        }
+      },
+      "required": [
+        "question",
+        "options"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "flow-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "framework": {
+          "type": "string",
+          "description": "Restrict to one framework (e.g. sdlc-complete)"
+        },
+        "filter": {
+          "type": "string",
+          "description": "Substring filter on flow name or path"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "flow-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "boolean",
+          "description": "Fetch the full authored body"
+        },
+        "section": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Exact headings (case-insensitive fallback); repeatable"
+        },
+        "rules": {
+          "type": "boolean",
+          "description": "Show governing rule summaries and required checks"
+        },
+        "with_rule_bodies": {
+          "type": "boolean",
+          "description": "Include full governing rule bodies"
+        },
+        "bound_rule_bodies": {
+          "type": "boolean",
+          "description": "Legacy alias for with_rule_bodies"
+        },
+        "resources": {
+          "type": "boolean",
+          "description": "List companion resources"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Fetch one resource path from the card"
+        },
+        "name": {
+          "type": "string",
+          "description": "Flow name or playbook file name (e.g. flow-release)"
+        },
+        "framework": {
+          "type": "string",
+          "description": "Optional framework disambiguator"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "flow-run": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Flow name (e.g. flow-release)"
+        },
+        "framework": {
+          "type": "string",
+          "description": "Optional framework disambiguator"
+        },
+        "project_dir": {
+          "type": "string",
+          "description": "Project directory where the Flow should operate"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Operator arguments to pass conceptually to the wrapper skill"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Required because Flows can run shell commands and write artifacts"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "worker-resolve": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "efficiency",
+            "coding",
+            "reasoning"
+          ]
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "brief": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workdir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "final_output": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "shell",
+            "mcp"
+          ],
+          "default": "shell"
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "shell",
+            "json"
+          ]
+        },
+        "project_dir": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "role",
+        "task",
+        "group",
+        "brief",
+        "workdir",
+        "final_output"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "mission-guide": {
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "mission-dispatch": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Existing Mission Control session id from mc-start / mc-list"
+        },
+        "objective": {
+          "type": "string",
+          "description": "Mission objective"
+        },
+        "completion": {
+          "type": "string",
+          "description": "Measurable completion criterion"
+        },
+        "max_iterations": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Ralph iteration cap"
+        },
+        "max_total_tokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Hard cumulative token ceiling"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Hard cumulative output-token ceiling"
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Hard cumulative tool-call ceiling"
+        },
+        "max_total_cost": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Hard cumulative provider-reported spend ceiling"
+        },
+        "max_wall_clock_minutes": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Hard cumulative runtime ceiling"
+        },
+        "exploration_quota": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Require structural variant after this many flat cycles (off unless declared; no default K)"
+        },
+        "budget_stop_policy": {
+          "type": "string",
+          "enum": [
+            "completion-wins",
+            "budget-wins"
+          ],
+          "description": "Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)"
+        },
+        "project_dir": {
+          "type": "string",
+          "description": "Project directory for CLI dispatch"
+        },
+        "worker_dispatch": {
+          "type": "string",
+          "description": "Absolute prepared managed worker dispatch JSON path inside the project"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Required for durable/long-running mission dispatch"
+        }
+      },
+      "required": [
+        "session_id",
+        "objective",
+        "completion"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "mission-status": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Optional Mission Control session id"
+        },
+        "project_dir": {
+          "type": "string",
+          "description": "Project directory for CLI status lookup"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "memory-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Filter by path prefix"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "memory-get": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "memory-put": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write (stdin to CLI)"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "memory-delete": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "memory-path": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "subpath": {
+          "type": "string",
+          "description": "Optional subpath"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "reflections-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Filter by path prefix"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "reflections-get": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "reflections-put": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write (stdin to CLI)"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "reflections-delete": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "reflections-path": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "subpath": {
+          "type": "string",
+          "description": "Optional subpath"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "kb-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Filter by path prefix"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "kb-get": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "kb-put": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write (stdin to CLI)"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "kb-delete": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "kb-path": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "subpath": {
+          "type": "string",
+          "description": "Optional subpath"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "provenance-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Filter by path prefix"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "provenance-get": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "provenance-put": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write (stdin to CLI)"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "provenance-delete": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "provenance-path": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "subpath": {
+          "type": "string",
+          "description": "Optional subpath"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "research-store-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "Filter by path prefix"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "research-store-get": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "research-store-put": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write (stdin to CLI)"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "research-store-delete": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Entry path/key"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "research-store-path": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "subpath": {
+          "type": "string",
+          "description": "Optional subpath"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "activity-log-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "description": "Filter by date YYYY-MM-DD"
+        },
+        "operation": {
+          "type": "string",
+          "description": "Filter by operation token (e.g. \"create\", \"deploy\")"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "activity-log-append": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "description": "Operation token (e.g. \"create\", \"deploy\", \"lint\")"
+        },
+        "summary": {
+          "type": "string",
+          "description": "One-line summary (<120 chars)"
+        }
+      },
+      "required": [
+        "operation",
+        "summary"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "activity-log-stats": {
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "index-build": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "force": {
+          "type": "boolean",
+          "default": false,
+          "description": "Force full rebuild"
+        },
+        "graph": {
+          "type": "string",
+          "enum": [
+            "project",
+            "codebase",
+            "source",
+            "user",
+            "framework"
+          ],
+          "description": "Restrict to one graph"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "index-query": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "keyword": {
+          "type": "string",
+          "description": "Keyword query"
+        },
+        "type": {
+          "type": "string",
+          "description": "Artifact type filter"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "index-deps": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "type": "string",
+          "description": "Artifact path or ID"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "upstream",
+            "downstream",
+            "both"
+          ],
+          "default": "both"
+        }
+      },
+      "required": [
+        "artifact"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "index-stats": {
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "ralph-start": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "description": "Task description"
+        },
+        "completion": {
+          "type": "string",
+          "description": "Measurable completion criteria (verification command)"
+        },
+        "max_cycles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 20
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Required (Ralph is long-running)"
+        }
+      },
+      "required": [
+        "task",
+        "completion"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "ralph-status": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Specific session id (default: all running)"
+        },
+        "all": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include completed/failed loops"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "ralph-abort": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Session id"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "ralph-attach": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Session id"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "mc-start": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Session label"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "mc-dispatch": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Session id"
+        },
+        "objective": {
+          "type": "string",
+          "description": "Mission objective"
+        },
+        "completion": {
+          "type": "string",
+          "description": "Completion criteria"
+        },
+        "max_iterations": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Ralph iteration cap"
+        },
+        "max_total_tokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Hard cumulative token ceiling"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Hard cumulative output-token ceiling"
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Hard cumulative tool-call ceiling"
+        },
+        "max_total_cost": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Hard cumulative provider-reported spend ceiling"
+        },
+        "max_wall_clock_minutes": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Hard cumulative runtime ceiling"
+        },
+        "exploration_quota": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Require structural variant after this many flat cycles (off unless declared; no default K)"
+        },
+        "budget_stop_policy": {
+          "type": "string",
+          "enum": [
+            "completion-wins",
+            "budget-wins"
+          ],
+          "description": "Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)"
+        }
+      },
+      "required": [
+        "session_id",
+        "objective"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "mc-status": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "mc-stop": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "mc-list": {
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "ops-status": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "all": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "ops-list": {
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "ops-use": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "ops-push": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-fleet-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "agentic-orchestration/v1",
+          "default": "agentic-orchestration/v1"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-fleet-get": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "agentic-orchestration/v1",
+          "default": "agentic-orchestration/v1"
+        },
+        "child_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      },
+      "required": [
+        "child_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-fleet-reconcile-preview": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "agentic-orchestration/v1",
+          "default": "agentic-orchestration/v1"
+        },
+        "before_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "child_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "before_revision",
+        "child_ids"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-fleet-admit": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "agentic-orchestration/v1",
+          "default": "agentic-orchestration/v1"
+        },
+        "workload": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "workload"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-fleet-observe": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "agentic-orchestration/v1",
+          "default": "agentic-orchestration/v1"
+        },
+        "child_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "expected_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "runtime_identity": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "command_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "child_id",
+        "expected_revision",
+        "status"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-fleet-reconcile": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "agentic-orchestration/v1",
+          "default": "agentic-orchestration/v1"
+        },
+        "before_revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "child_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "maxItems": 1000
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "before_revision",
+        "child_ids"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-activity-coverage": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "activity.event/v1",
+          "default": "activity.event/v1"
+        },
+        "tenant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "host_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "instance_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "agent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "event_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "collector": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "trust": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "plane": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "outcome": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "mission_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "task_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "tool_call_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "command_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "process_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "trace_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "since": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "until": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "tenant_id",
+        "host_id",
+        "instance_id",
+        "agent_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-activity-timeline": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "activity.event/v1",
+          "default": "activity.event/v1"
+        },
+        "tenant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "host_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "instance_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "agent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "event_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "collector": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "trust": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "plane": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "outcome": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "mission_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "task_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "tool_call_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "command_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "process_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "trace_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "since": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "until": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "tenant_id",
+        "host_id",
+        "instance_id",
+        "agent_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "sandbox-activity-export": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "type": "string",
+          "const": "activity.event/v1",
+          "default": "activity.event/v1"
+        },
+        "tenant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "host_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "instance_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "agent_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "filter": {
+          "type": "object",
+          "properties": {
+            "event_name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "collector": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "trust": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "plane": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "outcome": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "session_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "mission_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "task_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "tool_call_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "command_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "process_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "trace_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "since": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "until": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          "additionalProperties": false
+        },
+        "confirmed": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "tenant_id",
+        "host_id",
+        "instance_id",
+        "agent_id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-capabilities": {
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-driver-capabilities/v1"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "offlineReady": {
+              "type": "boolean"
+            },
+            "primitives": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "backend": {
+              "type": "object",
+              "properties": {
+                "configured": {
+                  "type": "boolean"
+                },
+                "probed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": "string",
+                  "const": "not-probed"
+                }
+              },
+              "required": [
+                "configured",
+                "probed",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "schema",
+            "enabled",
+            "offlineReady",
+            "primitives",
+            "backend"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-patterns-list": {
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-pattern-list/v1"
+            },
+            "patterns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "primitive": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version",
+                  "status"
+                ],
+                "additionalProperties": true
+              }
+            }
+          },
+          "required": [
+            "schema",
+            "patterns"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-pattern-show": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Decision pattern id"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-pattern-show/v1"
+            },
+            "pack": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "primitive": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "version",
+                "status"
+              ],
+              "additionalProperties": true
+            },
+            "inputSchema": {},
+            "outputSchema": {},
+            "livePlan": {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "live"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "skipped",
+                    "denied"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "executes": {
+                  "type": "boolean",
+                  "const": false
+                }
+              },
+              "required": [
+                "mode",
+                "status",
+                "reason",
+                "executes"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "schema",
+            "pack",
+            "livePlan"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-pattern-offline-run": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "fixture_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-offline-run/v1"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "success",
+                "abstained",
+                "denied",
+                "unavailable",
+                "error",
+                "cancelled"
+              ]
+            },
+            "route": {
+              "type": "string",
+              "enum": [
+                "accept",
+                "review",
+                "deny"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "evaluations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "alias": {
+                    "type": "string"
+                  },
+                  "primitive": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "attempts": {
+                    "type": "number"
+                  },
+                  "value": {}
+                },
+                "required": [
+                  "alias",
+                  "primitive",
+                  "status",
+                  "reason",
+                  "attempts"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "checks": {
+              "type": "array",
+              "items": {}
+            }
+          },
+          "required": [
+            "schema",
+            "status",
+            "route",
+            "reason",
+            "evaluations",
+            "checks"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-pattern-live-plan": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "explicit_opt_in": {
+          "type": "boolean",
+          "default": false
+        },
+        "credential_resolved": {
+          "type": "boolean",
+          "default": false
+        },
+        "egress_approved": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "live"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "ready",
+                "skipped",
+                "denied"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "executes": {
+              "type": "boolean",
+              "const": false
+            }
+          },
+          "required": [
+            "mode",
+            "status",
+            "reason",
+            "executes"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-validate": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "enum": [
+            "request",
+            "definition",
+            "ruleset",
+            "binding"
+          ]
+        },
+        "document": {
+          "description": "Inline decision document or dispatcher request object"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-validation/v1"
+            },
+            "target": {
+              "type": "string",
+              "enum": [
+                "request",
+                "definition",
+                "ruleset",
+                "binding"
+              ]
+            },
+            "valid": {
+              "type": "boolean"
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "apiVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": true
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "schema",
+            "target",
+            "valid",
+            "summary",
+            "errors"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-evaluate-profile": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string",
+          "description": "Profile name from AIWG_DECISION_MCP_REQUESTS"
+        },
+        "opt_in": {
+          "type": "boolean",
+          "default": false,
+          "description": "Required per-call opt-in"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-evaluate/v1"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "success",
+                "abstained",
+                "denied",
+                "unavailable",
+                "error",
+                "cancelled"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "exitCode": {
+              "type": "number"
+            },
+            "compact": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "$ref": "#/properties/result/properties/status"
+                    },
+                    "rulesetStatus": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "matchedRules": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "evaluations": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "$ref": "#/properties/result/properties/status"
+                          },
+                          "reason": {
+                            "type": "string"
+                          },
+                          "attempts": {
+                            "type": "number"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {},
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "status",
+                          "reason",
+                          "attempts"
+                        ],
+                        "additionalProperties": true
+                      }
+                    },
+                    "outcome": {
+                      "anyOf": [
+                        {},
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "rulesetStatus",
+                    "reason",
+                    "matchedRules",
+                    "evaluations"
+                  ],
+                  "additionalProperties": true
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {
+              "anyOf": [
+                {},
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "status",
+            "reason",
+            "exitCode"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-ask": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "yes_no": {
+          "type": "boolean",
+          "default": false
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2,
+          "maxItems": 255,
+          "description": "Choice ids, each optionally written as id=description so Jev knows what the option means"
+        },
+        "scale": {
+          "type": "object",
+          "properties": {
+            "low": {
+              "type": "integer"
+            },
+            "high": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "low",
+            "high"
+          ],
+          "additionalProperties": false
+        },
+        "context": {
+          "type": "string"
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.8
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 15000
+        },
+        "passes": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "escalation_passes": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "caller": {
+          "type": "string",
+          "description": "Optional decision-point attribution tag, recorded in the decision ledger (#2946)"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-ask/v1"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "answered",
+                "fallback"
+              ]
+            },
+            "answer": {
+              "anyOf": [
+                {
+                  "type": [
+                    "string",
+                    "boolean",
+                    "number"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "probability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "fallback": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "llm"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "inputTokens": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "outputTokens": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "inputTokens",
+                    "outputTokens"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "latencyMs": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "schema",
+            "status",
+            "answer",
+            "confidence",
+            "fallback",
+            "reason",
+            "model",
+            "usage",
+            "latencyMs"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "decision-setup-synthetic-classification": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "allowed_options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "aiwg-decision-synthetic-setup/v1"
+            },
+            "pattern": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "version"
+              ],
+              "additionalProperties": true
+            },
+            "files": {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "schema",
+            "pattern",
+            "files"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "worker-invoke": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "run",
+            "status",
+            "cancel",
+            "reconcile_stopped",
+            "reset_recovery_scope"
+          ]
+        },
+        "invocation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "scope_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_.:-]+$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "efficiency",
+            "coding",
+            "reasoning"
+          ]
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "brief": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workdir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "final_output": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "shell",
+            "mcp"
+          ],
+          "default": "shell"
+        },
+        "retry_of": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "artifact-read": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path relative to .aiwg/ (e.g., \"requirements/UC-001.md\")"
+        },
+        "project_dir": {
+          "type": "string",
+          "description": "Real project directory outside artifact trees (defaults to server-start project; artifact store pinned on first use)"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "artifact-write": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path relative to .aiwg/"
+        },
+        "content": {
+          "type": "string",
+          "description": "Artifact content"
+        },
+        "project_dir": {
+          "type": "string",
+          "description": "Real project directory outside artifact trees (defaults to server-start project; artifact store pinned on first use)"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "template-render": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string",
+          "description": "Template path (e.g., \"sdlc/intake/project-intake-template.md\")"
+        },
+        "variables": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Template variable substitutions"
+        }
+      },
+      "required": [
+        "template"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "agent-list": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "framework": {
+          "type": "string",
+          "enum": [
+            "sdlc-complete",
+            "media-marketing-kit",
+            "all"
+          ],
+          "default": "all",
+          "description": "Framework to list agents from"
+        },
+        "category": {
+          "type": "string",
+          "description": "Filter by category (e.g., \"security\", \"testing\")"
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  }
+}

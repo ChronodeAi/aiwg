@@ -25,7 +25,7 @@ import { shortcutAuditV7 } from '../../../tools/decision/studies/d29-shortcuts-v
 import { prepare, dryRun, validateStudyArtifact, oracle, studyModule, buildReport, d29GeneratorForSeed,
   d29CorpusGeneratorId, prepareWithGenerator, analysisPlanV8, dryRunV8, V8_DATASET_FROZEN_AT, GATE_PACK_ID,
   definitions, definitionsV8, LABELING_CONVENTIONS, LABELING_CONVENTIONS_V8 } from '../../../tools/decision/studies/d29.mjs';
-import { freezeAdmissionClock, preparedOnce, preparedOnceMissCount, PREPARE_HOOK_TIMEOUT, MULTI_AUDIT_TIMEOUT } from './d29-test-support.mjs';
+import { offlineD29GateInputs, freezeAdmissionClock, preparedOnce, preparedOnceMissCount, PREPARE_HOOK_TIMEOUT, MULTI_AUDIT_TIMEOUT } from './d29-test-support.mjs';
 
 freezeAdmissionClock();
 
@@ -353,7 +353,7 @@ describe('D29 v8 study wiring', () => {
       const analysis = structuredClone(prepared.analysis); analysis.gateBinding.spec.ceiling = ceiling;
       return buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), integrity, trustedIntegrityDigest: heldoutDigest(integrity),
         heldout: { schemaVersion: 'decision-sdlc-screening-heldout-records/v1', evaluatedAt, splits: analysis.splits, samples: samples(mutate) },
-        nowEpochMs: Date.parse('2026-10-04T00:00:00.000Z'), firstTestAccessAt, calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
+        nowEpochMs: Date.parse('2026-10-04T00:00:00.000Z'), ...offlineD29GateInputs(prepared, analysis, firstTestAccessAt), calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
         projectRoot: root });
     };
     expect(run().decision).toBe('HOLD');

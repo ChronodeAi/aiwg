@@ -119,10 +119,18 @@ describe('B-OG-29 production policy semantics (T-OG-01/05)', () => {
     expect(resolved.worker_mode).toBe('direct');
     expect(resolved.activation).toBeUndefined();
     expect(resolved.groups?.fixture).toMatchObject({ fallback: [], requiredRoles: [], execution: { isolation: 'worktree', sandbox: 'workspace-write', approval: 'never', network: 'deny', transport: 'shell', receipts: 'optional' }, members: [{ enabled: true, priority: 50 }] });
-    expect(resolved.admission).toEqual({ maxQueued: 128, queueTimeoutSeconds: 300, leaseSeconds: 60, authorityRef: 'project' });
+    expect(resolved.admission).toEqual({ maxQueued: 128, queueTimeoutSeconds: 300, leaseSeconds: 60, starvationSeconds: 120, authorityRef: 'project' });
     expect(resolved.retry?.maxAttempts).toBe(3);
     expect(JSON.stringify(input)).toBe(before);
     expect(resolveParallelism({ ...input, worker_dispatch: false }, 'claude')).toEqual(resolveParallelism(undefined, 'claude'));
+  });
+
+  it.each([0, -1, 0.5, 86401, '120', null])('rejects invalid starvation threshold %j', starvationSeconds => {
+    expect(validateParallelismConfig({ admission: { starvationSeconds } }).length).toBeGreaterThan(0);
+  });
+
+  it('preserves a configured diagnostic threshold', () => {
+    expect(resolveParallelism({ worker_dispatch: true, admission: { starvationSeconds: 15 } }).admission?.starvationSeconds).toBe(15);
   });
 
   it('checks cross-file group references and only explicitly required qualified roles', () => {

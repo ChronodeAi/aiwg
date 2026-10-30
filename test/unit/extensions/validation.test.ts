@@ -26,6 +26,7 @@ import {
 } from '../../../src/extensions/validation.js';
 import { CLAUDE_MODELS } from '../../fixtures/models.js';
 import type { Extension } from '../../../src/extensions/types.js';
+import { PROVIDER_IDS } from '../../../src/providers/provider-definitions.js';
 import { ZodError } from 'zod';
 
 // ============================================
@@ -127,6 +128,29 @@ describe('PlatformCompatibilitySchema', () => {
     testCases.forEach(({ input, expected, desc }) => {
       expect(PlatformCompatibilitySchema.safeParse(input).success).toBe(expected, `failed for ${desc}`);
     });
+  });
+
+  it('accepts pi and hermes (#3724)', () => {
+    const result = PlatformCompatibilitySchema.safeParse({ claude: 'full', pi: 'full', hermes: 'full' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts every registered provider id (#3724)', () => {
+    for (const id of PROVIDER_IDS) {
+      const result = PlatformCompatibilitySchema.safeParse({ [id]: 'full' });
+      expect(result.success).toBe(true, `provider '${id}' should be an accepted platform key`);
+    }
+    const all = Object.fromEntries(PROVIDER_IDS.map(id => [id, 'full']));
+    expect(PlatformCompatibilitySchema.safeParse(all).success).toBe(true);
+  });
+
+  it('rejects an unknown platform key and names it (#3724)', () => {
+    const result = PlatformCompatibilitySchema.safeParse({ claude: 'full', bogus: 'full' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map(issue => issue.message).join('\n');
+      expect(messages).toContain('bogus');
+    }
   });
 });
 

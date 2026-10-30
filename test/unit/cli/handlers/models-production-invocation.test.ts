@@ -1,26 +1,31 @@
+import { idleHostResourceReaders } from '../../../fixtures/host-resources.js';
+import { mkdtempSync } from 'node:fs';
+import { workerSigningFixture } from '../../../helpers/worker-qualification-signing.js';
 import { copyNode } from '../../../helpers/copy-node.js';
 import { createHash } from 'node:crypto';
-import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { modelsHandler } from '../../../../src/cli/handlers/models.js';
+import { createModelsHandler, loadWorkerInputs as loadHostWorkerInputs } from '../../../../src/cli/handlers/models.js';
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
-import { requiredWorkerControls } from '../../../../src/models/provider-policy.js';
+import { requiredWorkerControls, WORKER_OPERATOR_APPROVAL } from '../../../../src/models/provider-policy.js';
 import { resolveWorkerPlan } from '../../../../src/models/resolver.js';
-import { hasProvider as hasInstalledProvider } from '../../../../src/models/worker-installation.mjs';
+import { hasProvider as hasInstalledProvider, loadRecordedWorkerInstallations, registerProvider } from '../../../../src/models/worker-installation.mjs';
 import { qualificationDigest } from '../../../../src/models/qualification-digest.mjs';
 import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuite } from '../../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
 import { recordedWorkerStdinBytes } from '../../../../src/serve/worker-stdin-frame.mjs';
 
+const loadWorkerInputs = (ctx: Parameters<typeof loadHostWorkerInputs>[0]) => loadHostWorkerInputs(ctx, idleHostResourceReaders());
+const modelsHandler = createModelsHandler({ load: loadWorkerInputs });
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
 async function productionFixture(adapterFrame = false) {
   vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
-  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-production-worker-')); roots.push(root);
+  const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-production-worker-')); roots.push(root);
   const cwd = path.join(root, 'project');
   const workdir = path.join(cwd, 'worktree');
   const configDir = path.join(root, 'host-config');
@@ -94,17 +99,97 @@ async function productionFixture(adapterFrame = false) {
     cases: Object.fromEntries(Object.keys(workerNegativeFixtureSuite.cases).map(name => [name, 'passed'])) };
   const brief = path.join(cwd, 'brief.txt'); await writeFile(brief, 'Do the synthetic task.');
   const finalPath = path.join(workdir, 'final.json');
-  const record = { cli: id, binding, adapter, installation };
-  const call = async () => {
+  const signing = await workerSigningFixture(root, cwd);
+  const record = signing.sign({ cli: id, binding, adapter, installation });
+  const call = async (handler = modelsHandler) => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const args = ['resolve', '--role=coding', '--group=workers', '--task=implementation', `--brief=${brief}`, `--workdir=${workdir}`, `--final-output=${finalPath}`, '--format=json'];
-    const result = await modelsHandler.execute({ args, rawArgs: ['models', ...args], cwd, frameworkRoot });
+    const result = await handler.execute({ args, rawArgs: ['models', ...args], cwd, frameworkRoot });
     const output = String(log.mock.calls.at(-1)?.[0]); log.mockRestore(); return { result, output, plan: JSON.parse(output) };
   };
-  return { ...f, call, record, configDir, finalPath, installed, owner };
+  return { ...f, call, record, configDir, finalPath, installed, owner, cwd, frameworkRoot, signing };
 }
 
 describe('models resolve production installation loading', () => {
+  it('T-OG-15 keeps PATH prefixes eligible while rejecting executable and other environment drift', async () => {
+    const f = await productionFixture();
+    const { adapter, installation, binding } = f.record;
+    const profile = adapter.invocationProfiles![binding.profile];
+    const extra = path.join(f.installed, 'extra');
+    await mkdir(extra);
+    const originalPath = f.installed;
+    const prefixedPath = `${extra}${path.delimiter}${originalPath}`;
+    vi.stubEnv('PATH', originalPath);
+    vi.stubEnv('AIWG_SYNTHETIC_SETTING', 'qualified-value');
+    adapter.qualification.evidenceRef = WORKER_OPERATOR_APPROVAL;
+    installation.requiredControls = [];
+    adapter.invocation.envAllowlist = profile.envAllowlist = ['PATH', 'AIWG_SYNTHETIC_SETTING'];
+    installation.environment = { PATH: originalPath, AIWG_SYNTHETIC_SETTING: 'qualified-value' };
+    const configPath = path.join(f.cwd, '.aiwg/aiwg.config');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.parallelism.clis[f.record.cli].executable = path.basename(installation.executable);
+    await writeFile(configPath, JSON.stringify(config));
+    const scope = await f.owner.inspectWorkerInstallation(installation);
+    installation.evidence.scopeDigest = profile.installationQualification!.scopeDigest = scope.scopeDigest;
+    expect(await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd })).toMatchObject({ status: 'ENABLED' });
+    const stored = await readFile(path.join(f.configDir, 'worker-installations.json'), 'utf8');
+    expect(stored).not.toContain('qualified-value');
+    expect(JSON.parse(stored).registrations[0].installation.environmentNames).toContain('PATH');
+    const baseline = await f.call();
+    expect(baseline.plan.status, JSON.stringify(baseline.plan.diagnostics)).toBe('eligible');
+    // Freeze the loaded environment too: preparation must tolerate host PATH plumbing.
+    const loaded = await loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] });
+    vi.stubEnv('PATH', prefixedPath);
+    const prepared = await f.call(createModelsHandler({ load: async () => loaded }));
+    expect(prepared.plan.status, JSON.stringify(prepared.plan.diagnostics)).toBe('eligible');
+    const prefixed = await f.call();
+    expect(prefixed.plan.status, JSON.stringify(prefixed.plan.diagnostics)).toBe('eligible');
+    expect(prefixed.plan.invocation.argv[0]).toBe(scope.binary.realpath);
+    expect(prefixed.plan.invocation.selected.qualificationDigest).toBe(scope.scopeDigest);
+    expect(prefixed.plan.invocation.shellCommand).toContain('PATH="${PATH-}"');
+    expect(prefixed.plan.invocation.shellCommand).not.toContain(prefixedPath);
+    vi.stubEnv('AIWG_SYNTHETIC_SETTING', 'changed-value');
+    expect((await f.call()).plan.status).toBe('blocked');
+    expect((await f.call(createModelsHandler({ load: async () => loaded }))).plan.status).toBe('blocked');
+    vi.stubEnv('AIWG_SYNTHETIC_SETTING', 'qualified-value');
+    // Same CLI name, different realpath and bytes; never import or execute the shadow.
+    await writeFile(path.join(extra, path.basename(installation.executable)), '#!/bin/sh\nexit 91\n', { mode: 0o755 });
+    const shadowed = await f.call();
+    expect(shadowed.plan.status).toBe('blocked');
+    expect(shadowed.plan.invocation).toBeUndefined();
+    expect(shadowed.output).toContain('OG_ADAPTER_UNQUALIFIED');
+    await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+      .rejects.toMatchObject({ details: { rejections: [{ registration: 0, reason: 'binary-identity' }] } });
+    await rm(path.join(extra, path.basename(installation.executable)));
+    // Preserve realpath but alter bytes: the pinned hash must still reject it.
+    await writeFile(installation.executable, '#!/bin/sh\nexit 92\n');
+    expect((await f.call()).plan.status).toBe('blocked');
+    await expect(readFile(f.finalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['missing-file', 'missing-role', 'missing-field', 'null-effort'])('reports missing role effort before recorded policy digest and adapter loading (%s)', async kind => {
+    const f = await productionFixture();
+    // An existing approval lets policy diagnostics precede its now-stale
+    // policy digest; absent approvals must retain #3070's qualification error.
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+    const filename = path.join(f.cwd, 'models.json');
+    if (kind === 'missing-file') await rm(filename);
+    else {
+      const models = JSON.parse(await readFile(filename, 'utf8'));
+      if (kind === 'missing-role') delete models.defaults.workerSelection.roleGuidance.coding;
+      else if (kind === 'missing-field') delete models.defaults.workerSelection.roleGuidance.coding.initialEffort;
+      else Object.assign(models.defaults.workerSelection.roleGuidance.coding,
+        { initialEffort: null, effortLadder: [], allowNotApplicableEffort: true });
+      await writeFile(filename, JSON.stringify(models));
+    }
+    const result = await f.call();
+    expect(result.result.exitCode).toBe(2);
+    expect(result.plan.diagnostics).toContainEqual({ code: 'OG_CONFIG_REFERENCE',
+      pointer: '/defaults/workerSelection/roleGuidance/coding/initialEffort',
+      message: expect.stringContaining('models.json') });
+    expect(result.plan.invocation).toBeUndefined();
+  });
+
   it('qualifies its own single-link executable with trusted permissions', async () => {
     const f = await productionFixture();
     const executable = await stat(f.record.installation.executable);
@@ -116,7 +201,7 @@ describe('models resolve production installation loading', () => {
   });
 
   it.each([false, true])('loads literal fixture configuration (adapter frame: %s)', async adapterFrame => {
-    const root = await mkdtemp(path.join(os.tmpdir(), 'driver-literal-')); roots.push(root);
+    const root = mkdtempSync(path.join(os.tmpdir(), 'driver-literal-')); roots.push(root);
     const cli = `path with spaces; '" \\ newline\n`;
     const id = `adapter-'"; process.exit(9); //`;
     await writeFile(path.join(root, 'driver.mjs'), await readFile(path.resolve('test/fixtures/production-worker-driver.mjs')));
@@ -148,9 +233,10 @@ describe('models resolve production installation loading', () => {
     await writeFile(path.join(invocation.cwd, 'models.json'), '{broken worker model config');
     const input = { filename: invocation.briefPath, workspace: invocation.cwd, cli: invocation.selected.cli,
       adapterId: f.record.adapter.id, scopeDigest: invocation.selected.qualificationDigest,
-      briefDigest: invocation.briefDigest, storePath, storeDigest, policy: f.record.installation.policy };
+      briefDigest: invocation.briefDigest, storePath, storeDigest, policy: f.record.installation.policy, model: invocation.selected.model };
     vi.stubEnv('AIWG_CONFIG', invocation.cwd);
-    expect((await recordedWorkerStdinBytes(input))!.toString()).toBe(JSON.stringify({ message: await readFile(invocation.briefPath, 'utf8') }));
+    expect((await recordedWorkerStdinBytes(input))!.toString()).toBe(JSON.stringify({ message: await readFile(invocation.briefPath, 'utf8'), model: invocation.selected.model }));
+    expect(invocation.shellCommand).toContain(`'${invocation.selected.model}'`);
     await expect(recordedWorkerStdinBytes({ ...input, policy: {} })).rejects.toThrow(/qualification/);
     await expect(recordedWorkerStdinBytes({ ...input, adapterId: 'changed' })).rejects.toThrow(/binding changed/);
     await expect(recordedWorkerStdinBytes({ ...input, scopeDigest: qualificationDigest('changed') })).rejects.toThrow(/binding changed/);
@@ -171,8 +257,10 @@ describe('models resolve production installation loading', () => {
     await writeFile(path.join(f.installed, 'driver.mjs'), '// changed');
     expect((await f.call()).result.exitCode).toBe(2);
   });
-  it.each(['boundary', 'expired', 'negative-case', 'duplicate', 'worker-writable-store', 'hardlinked-store'])(
-    'refuses %s host records before loading the installed driver', async kind => {
+  it.each([
+    ['boundary', 'binding-mismatch'], ['expired', 'evidence'], ['negative-case', 'evidence'],
+    ['duplicate', 'record-identity'], ['worker-writable-store', 'store-untrusted'], ['hardlinked-store', 'store-untrusted'],
+  ])('refuses %s host records before loading the installed driver with reason %s', async (kind, reason) => {
       const f = await productionFixture();
       if (kind === 'boundary') f.record.binding.boundary = { ...f.record.binding.boundary!, digest: qualificationDigest('changed') };
       if (kind === 'expired') {
@@ -180,6 +268,7 @@ describe('models resolve production installation loading', () => {
         f.record.adapter.invocationProfiles![f.record.binding.profile].installationQualification!.verifiedAt = '2001-01-01T00:00:00Z';
       }
       if (kind === 'negative-case') f.record.installation.evidence.cases['forbidden-write'] = 'failed';
+      f.signing.sign(f.record);
       const records = kind === 'duplicate' ? [f.record, f.record] : [f.record];
       const storeDir = kind === 'worker-writable-store' ? f.record.installation.cwd : f.configDir;
       vi.stubEnv('AIWG_CONFIG', storeDir);
@@ -190,6 +279,36 @@ describe('models resolve production installation loading', () => {
       expect(result.plan.invocation).toBeUndefined();
       expect(hasInstalledProvider(f.record.adapter.id)).toBe(false);
       expect(result.output).toContain('OG_ADAPTER_UNQUALIFIED');
+      const rejections = (kind === 'duplicate' ? [0, 1] : [kind === 'worker-writable-store' || kind === 'hardlinked-store' ? null : 0])
+        .map(registration => ({ registration, reason }));
+      await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+        .rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', message: expect.stringContaining(reason), details: { rejections } });
+    });
+
+  it.each(['environment-name', 'effective-config-digest', 'module-registration', 'binary-identity', 'scope-digest', 'version', 'adapter-conflict'])(
+    'reports a secret-free %s registration refusal', async reason => {
+      const f = await productionFixture();
+      const privateText = 'synthetic-private-content';
+      const installation = f.record.installation;
+      if (reason === 'environment-name') installation.environment = { AIWG_SYNTHETIC_PRIVATE: privateText };
+      if (reason === 'effective-config-digest') installation.effectiveConfigDigest = qualificationDigest(privateText);
+      if (reason === 'module-registration') await writeFile(path.join(f.installed, 'driver.mjs'), privateText);
+      if (reason === 'binary-identity') await rm(installation.executable);
+      if (reason === 'scope-digest') await writeFile(installation.runtimeFiles[0], privateText);
+      if (reason === 'adapter-conflict') registerProvider(f.record.adapter.id, () => f.owner);
+      if (reason === 'version') {
+        f.record.adapter.invocation.versionArgv = ['-e', `console.log(${JSON.stringify(privateText)})`];
+        const scope = await f.owner.inspectWorkerInstallation(installation);
+        installation.evidence.scopeDigest = scope.scopeDigest;
+        f.record.adapter.invocationProfiles![f.record.binding.profile].installationQualification!.scopeDigest = scope.scopeDigest;
+      }
+      f.signing.sign(f.record);
+      await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+      const error = await loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }).catch(error => error);
+      expect(error).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: 0, reason }] } });
+      expect(error.message).toContain(reason);
+      expect(`${error.stack}${JSON.stringify(error)}`).not.toContain(privateText);
+      expect(`${error.stack}${JSON.stringify(error)}`).not.toContain(f.installed);
     });
 
   it('records bounded fake qualification without environment values, then resolves it', async () => {
@@ -208,21 +327,73 @@ describe('models resolve production installation loading', () => {
     const scope = await f.owner.inspectWorkerInstallation(f.record.installation);
     f.record.installation.evidence.scopeDigest = scope.scopeDigest;
     profile.installationQualification!.scopeDigest = scope.scopeDigest;
-    const qualified = await f.owner.recordWorkerInstallation(f.record);
+    const qualified = await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd });
     expect(qualified).toMatchObject({ status: 'ENABLED' });
     const stored = await readFile(path.join(f.configDir, 'worker-installations.json'), 'utf8');
     expect(stored).not.toContain(value);
     expect(JSON.parse(stored).registrations[0].installation.environmentNames).toEqual([name, 'AIWG_FAKE_WORKER_CONFIG']);
     expect(JSON.parse(stored).registrations[0].installation.environment).toBeUndefined();
+    expect(JSON.parse(stored).registrations[0].signature).toMatchObject({
+      keyid: f.signing.keyring.keys[0].keyid, sig: expect.any(String), signedAt: expect.any(String), projectDir: f.cwd,
+    });
+    expect(stored).not.toContain(await readFile(f.signing.keyPath, 'utf8'));
     const result = await f.call();
     expect(result.result.exitCode, result.output).toBe(0);
     expect(result.plan.invocation.envNames).toEqual([name, 'AIWG_FAKE_WORKER_CONFIG']);
   });
 
+  it.each(['unsigned', 'signature', 'keyid', 'edited-record', 'signing-time'])(
+    'rejects %s evidence with valid installation digests before importing an adapter', async kind => {
+      const f = await productionFixture();
+      if (kind === 'unsigned') delete (f.record as any).signature;
+      if (kind === 'signature') f.record.signature.sig = Buffer.alloc(64).toString('base64');
+      if (kind === 'keyid') f.record.signature.keyid = `sha256:${'0'.repeat(64)}`;
+      if (kind === 'edited-record') f.record.binding.endpointFingerprint = 'forged-but-digests-unchanged';
+      if (kind === 'signing-time') f.record.signature.signedAt = '2000-01-01T00:00:00.000Z';
+      await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+      const expectedReason = kind === 'unsigned' ? 'signature-missing' : kind === 'keyid' ? 'signature-unknown-keyid' : 'signature-invalid';
+      await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+        .rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: 0, reason: expectedReason }] } });
+      expect(hasInstalledProvider(f.record.adapter.id)).toBe(false);
+      const result = await f.call();
+      expect(result.plan.status).toBe('blocked');
+      expect(result.plan.invocation).toBeUndefined();
+      expect(result.output).toContain('aiwg doctor --probe-workers --qualify');
+      if (kind === 'unsigned') expect(result.output).toContain('one-time requalification');
+    });
+
+  it('fails closed without writing when the existing signing key is unavailable', async () => {
+    const f = await productionFixture();
+    await rm(f.signing.keyPath);
+    const result = await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd });
+    expect(result).toMatchObject({ status: 'DISABLED', reason: expect.stringContaining('effects.keyProvider') });
+    expect(result.reason).toContain('aiwg effect keys init');
+    expect(result.reason).toContain('aiwg doctor --probe-workers --qualify');
+    await expect(readFile(path.join(f.configDir, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('verifies existing approvals with public keys while the private key is unavailable', async () => {
+    const f = await productionFixture();
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1, registrations: [f.record] }), { mode: 0o600 });
+    await rm(f.signing.keyPath);
+    expect((await f.call()).result.exitCode).toBe(0);
+  });
+
+  it('keeps a forged peer disabled and retains its diagnostic while loading a signed approval', async () => {
+    const f = await productionFixture();
+    const forged = { ...structuredClone(f.record), cli: 'forged-cli' };
+    await writeFile(path.join(f.configDir, 'worker-installations.json'), JSON.stringify({ version: 1,
+      registrations: [f.record, forged] }), { mode: 0o600 });
+    const loaded = await loadRecordedWorkerInstallations({ registry: f.snapshot.registry, cwd: f.cwd,
+      policy: f.record.installation.policy });
+    expect(Object.keys(loaded.drivers)).toEqual([f.record.cli]);
+    expect(loaded.qualificationFailures).toEqual({ 'forged-cli': 'signature-invalid' });
+  });
+
   it('refuses to record missing negative qualification evidence', async () => {
     const f = await productionFixture();
     delete f.record.installation.evidence;
-    const result = await f.owner.recordWorkerInstallation(f.record);
+    const result = await f.owner.recordWorkerInstallation({ ...f.record, projectDir: f.cwd });
     expect(result.status).toBe('DISABLED');
     await expect(readFile(path.join(f.configDir, 'worker-installations.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -233,5 +404,7 @@ describe('models resolve production installation loading', () => {
     expect(result.result.exitCode).toBe(2);
     expect(result.output).toContain('aiwg doctor --probe-workers --qualify');
     expect(result.output).toContain('OG_ADAPTER_UNQUALIFIED');
+    await expect(loadWorkerInputs({ cwd: f.cwd, frameworkRoot: f.frameworkRoot, args: [], rawArgs: [] }))
+      .rejects.toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', details: { rejections: [{ registration: null, reason: 'no-records' }] } });
   });
 });

@@ -1,3 +1,7 @@
+import { withModelWrapper } from './model-wrapper.mjs';
+import { postDeploy } from './claude-post-deploy.mjs';
+export { postDeploy };
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Claude Code Provider
  *
@@ -19,7 +23,6 @@
  *   - Rules:         .claude/rules/          (platform-native)
  *   - Hooks/settings: .claude/               (platform-native)
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -29,6 +32,7 @@ import path from 'path';
 import { tmpdir } from 'os';
 import { classifyModelRole, modelForRole } from './model-role.mjs';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -41,7 +45,6 @@ import {
   pruneStaleAiwgSkills,
   computeAllKernelNames,
   parseFrontmatter,
-  initializeFrameworkWorkspace,
   filterAgentFiles,
   getAddonAgentFiles,
   getAddonCommandFiles,
@@ -49,9 +52,7 @@ import {
   getAddonRuleFiles,
   listOnDemandRuleFiles,
   writeOnDemandRuleIndex,
-  readRuleBudgetSidecar,
   reconcileInlineRuleBudget,
-  resolveRulesInlineBudgetTokens,
   assembleRulesIndex,
   normalizeDeploymentMode,
   collectFrameworkArtifacts,
@@ -61,11 +62,10 @@ import {
   buildRemotesTopologyBlock,
   interpolateContextTokens
 } from './base.mjs';
-
+import { writeContextFileSync } from './context-write.mjs';
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'claude';
 export const aliases = [];
 
@@ -162,7 +162,8 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
  * Transform agent content for Claude
  * Claude is the native format - minimal transformation needed
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('claude', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
 
   // Explicit overrides re-map every classified model, pinned or not.
@@ -393,34 +394,6 @@ export function createAgentsMd(target, srcRoot, dryRun) {
 // Post-Deployment
 // ============================================================================
 
-export async function postDeploy(targetDir, opts) {
-  // Initialize framework workspace structure
-  initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
-
-  // Claude-specific post-deployment (settings.json, etc.)
-  const claudeDir = path.join(targetDir, '.claude');
-  const settingsPath = path.join(claudeDir, 'settings.json');
-
-  // If settings.json doesn't exist, create a minimal one
-  if (!fs.existsSync(settingsPath) && !opts.dryRun) {
-    ensureDir(claudeDir);
-    const settings = {
-      version: '1.0',
-      created: new Date().toISOString(),
-      aiwg: {
-        enabled: true,
-        mode: opts.mode || 'all'
-      }
-    };
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
-    console.log('Created .claude/settings.json');
-  }
-
-  // Hook file architecture: write AIWG.md and wire @AIWG.md into CLAUDE.md
-  if (opts.srcRoot) {
-    deployHookFile(targetDir, opts);
-  }
-}
 
 /**
  * Deploy the AIWG.md hook file and add @AIWG.md directive to CLAUDE.md.
@@ -442,7 +415,7 @@ function interpolateHookTokens(content, counts, targetDir) {
   });
 }
 
-function deployHookFile(targetDir, opts) {
+export function deployHookFile(targetDir, opts) {
   const { srcRoot, dryRun, counts } = opts;
   const templatePath = path.join(srcRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'templates', 'project', 'AIWG.md');
   const hookDest = path.join(targetDir, 'AIWG.md');
@@ -473,7 +446,7 @@ function deployHookFile(targetDir, opts) {
   } else {
     let content = fs.readFileSync(templatePath, 'utf8');
     content = interpolateHookTokens(content, effectiveCounts, targetDir);
-    fs.writeFileSync(hookDest, content, 'utf8');
+    writeContextFileSync(hookDest, content, 'utf8');
     console.log('Created AIWG.md (hook file)');
   }
 
@@ -497,7 +470,7 @@ function deployHookFile(targetDir, opts) {
           }
         }
         lines.splice(insertAt, 0, '', directive, '');
-        fs.writeFileSync(claudeDest, lines.join('\n'), 'utf8');
+        writeContextFileSync(claudeDest, lines.join('\n'), 'utf8');
         console.log('Added @AIWG.md directive to CLAUDE.md');
       }
     }
@@ -521,6 +494,10 @@ export function getFileExtension(type) {
  * Orchestrates deployment of agents, commands, skills, and rules
  */
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,
@@ -620,7 +597,7 @@ export async function deploy(opts) {
   // Deploy based on flags — track counts for summary
   const counts = { agents: 0, commands: 0, skills: 0, rules: 0, souls: 0 };
 
-  if (!commandsOnly && !skillsOnly) {
+  if (!commandsOnly && !skillsOnly && !rulesOnly) {
     // Apply filters if specified
     const filteredAgents = filterAgentFiles(agentFiles, opts);
     if (verbose && (opts.filter || opts.filterRole)) {
@@ -665,17 +642,7 @@ export async function deploy(opts) {
     pruneStaleAiwgSkills(kernelDestDir, computeAllKernelNames(srcRoot), opts);
   }
 
-  const inlineBudgetTokens = resolveRulesInlineBudgetTokens();
-  let demotedRuleNames = [];
   if (shouldDeployRules || rulesOnly) {
-    // Inline budget (#2562): rules a previous pass already moved on demand are
-    // not re-inlined; the directory is reconciled against the budget after
-    // this pass deploys (see below).
-    const sidecar = readRuleBudgetSidecar(path.join(target, paths.rules));
-    if (sidecar && sidecar.budgetTokens === inlineBudgetTokens && sidecar.demoted.length > 0) {
-      const skip = new Set(sidecar.demoted);
-      ruleFiles = ruleFiles.filter((f) => !skip.has(path.basename(f).replace(/\.md$/, '')));
-    }
     // Try assembled rules index (combines all component indexes)
     const assembled = assembleRulesIndex(srcRoot);
     if (assembled) {
@@ -708,17 +675,8 @@ export async function deploy(opts) {
     // On-demand index (#1673): list the MEDIUM/LOW rules that were tier-gated
     // out of the always-on set so agents can fetch them via `aiwg show rule`.
     const rulesDestDir = path.join(target, paths.rules);
-    // Keep the always-on directory small enough that a subagent dispatch
-    // still fits (#2562). Demoted HIGH rules remain binding and are listed
-    // in RULES-ONDEMAND.md with their fetch hint.
-    const budget = reconcileInlineRuleBudget(rulesDestDir, inlineBudgetTokens, opts);
-    demotedRuleNames = budget.demoted;
-    if (budget.removed.length > 0 && !opts.quiet) {
-      console.log(`  Inline rule budget: ${budget.removed.length} HIGH rule(s) moved on demand to fit ${inlineBudgetTokens.toLocaleString()} tokens: ${budget.removed.join(', ')} (see RULES-ONDEMAND.md)`);
-    }
-    const onDemandCount = writeOnDemandRuleIndex(rulesDestDir, listOnDemandRuleFiles(srcRoot), {
-      ...opts, demotedNames: demotedRuleNames, inlineBudgetTokens,
-    });
+    reconcileInlineRuleBudget(rulesDestDir, undefined, opts);
+    const onDemandCount = writeOnDemandRuleIndex(rulesDestDir, listOnDemandRuleFiles(srcRoot), opts);
     if (verbose && onDemandCount > 0) {
       console.log(`  On-demand rules (not inlined): ${onDemandCount} → RULES-ONDEMAND.md`);
     }

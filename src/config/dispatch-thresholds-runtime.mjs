@@ -6,17 +6,22 @@ export const DEFAULT_DISPATCH_HOST_THRESHOLDS = Object.freeze({
   max_mem_psi_avg60: 10,
   // 08 brief/evidence retention: stop new admissions when less than 2 GiB free remains.
   min_free_disk_gb: 2,
+  max_workers: 5,
 });
 
 /**
- * Configured layers can only tighten one another and the conservative defaults;
- * minimums take MAX and maximums take MIN across build, admission and task.
+ * Layers tighten defaults: minimums take MAX and maximums take MIN.
+ * Exception: the first configured max_workers replaces its default (even above 5);
+ * configured worker caps still take MIN across build, admission and task.
  * Validate each layer before merging so an invalid value cannot be hidden.
  */
-export function resolveDispatchHostThresholds(buildDispatch, admissionHostResources, overlay) {
+export function resolveDispatchHostThresholds(buildDispatch, admissionHostResources, overlay, origins) {
   const configured = { ...DEFAULT_DISPATCH_HOST_THRESHOLDS };
-  const keys = [...Object.keys(DEFAULT_DISPATCH_HOST_THRESHOLDS), 'max_workers'];
-  for (const layer of [buildDispatch, admissionHostResources, overlay]) {
+  const keys = Object.keys(DEFAULT_DISPATCH_HOST_THRESHOLDS);
+  let workerCapConfigured = false;
+  if (origins) for (const key of Object.keys(configured)) origins[key] = ['default'];
+  for (const [layer, origin] of [[buildDispatch, 'project:build.resource_preflight.dispatch'],
+    [admissionHostResources, 'project:parallelism.admission.hostResources'], [overlay, 'task']]) {
     if (layer === undefined) continue;
     if (layer === null || typeof layer !== 'object' || Array.isArray(layer)) {
       throw new Error('OG_CONFIG_REFERENCE dispatch thresholds: must be an object');
@@ -30,8 +35,13 @@ export function resolveDispatchHostThresholds(buildDispatch, admissionHostResour
       if (key === 'max_workers' && (!Number.isInteger(value) || value < 1)) {
         throw new Error('OG_CONFIG_REFERENCE dispatch threshold max_workers: must be an integer >= 1 when set');
       }
-      configured[key] = configured[key] === undefined ? value
-        : key.startsWith('min_') ? Math.max(configured[key], value) : Math.min(configured[key], value);
+      const previous = key === 'max_workers' && !workerCapConfigured ? undefined : configured[key];
+      if (key === 'max_workers') workerCapConfigured = true;
+      configured[key] = previous === undefined ? value
+        : key.startsWith('min_') ? Math.max(previous, value) : Math.min(previous, value);
+      if (origins && configured[key] === value) {
+        origins[key] = previous === value ? [...origins[key], origin] : [origin];
+      }
     }
   }
   return { ...DEFAULT_DISPATCH_HOST_THRESHOLDS, ...configured };

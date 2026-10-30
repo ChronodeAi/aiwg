@@ -1,46 +1,14 @@
-# npm Package Publishing — Gitea registry only (npmjs.org publishes from GitHub)
-#
-# Publishes the package to Gitea's bundled npm registry when a version tag is
-# pushed. Uses CalVer versioning: vYYYY.M.PATCH
-#
-# npmjs.org is NOT published or verified from here. The public-registry publish
-# (OIDC trusted publishing + provenance) and its verification are owned by
-# .github/workflows/npm-publish.yml. GitHub Actions is the authority for
-# npmjs.org supply-chain distribution and verification; this Gitea workflow
-# owns the Gitea npm registry (local package management) only.
-#
-# REQUIRED TRACKER SECRETS:
-#   VAULT_CI_ROLE_ID, VAULT_CI_SECRET_ID - vault AppRole bootstrap pair.
-#
-# vault fetch spec:
-#   ci/vault-fetch.npm-publish.spec -> NODE_AUTH_TOKEN
-#
-# To publish a new version:
-#   1. Update version in package.json
-#   2. Commit: git commit -am "release: vYYYY.M.PATCH"
-#   3. Tag: tools/release/cut-tag.sh YYYY.M.PATCH
-#   4. Push: git push origin main --tags
-#
-# Note:
-# - Gitea release creation is handled by .gitea/workflows/gitea-release.yml
-# - GitHub release creation is handled by .gitea/workflows/github-mirror.yml
-
+# Manual mirror of already-published npmjs stable packages. The signed stable
+# tag identifies the version; public registry SRI and provenance are checked
+# before any Gitea publication. GitHub is the sole npmjs publisher.
 name: Publish to Gitea npm registry
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Dry run (do not publish)'
-        required: false
-        default: 'false'
-        type: boolean
       tag_to_publish:
-        description: 'Existing signed tag to publish or re-verify (for example v2026.7.19)'
-        required: false
+        description: 'Existing signed stable tag (dispatch with --ref set to the same tag)'
+        required: true
         type: string
 
 concurrency:
@@ -53,12 +21,12 @@ env:
 
 jobs:
   build-and-publish:
-    name: Build and Publish
-    if: ${{ !contains(github.ref, '-') && secrets.VAULT_CI_ROLE_ID != '' && secrets.VAULT_CI_SECRET_ID != '' }}
+    name: Mirror verified public stable packages
+    if: ${{ !contains(github.ref, '-') }}
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     # Stable publication is the only active npm publication lane.
-    timeout-minutes: 30
+    timeout-minutes: 50
     defaults:
       run:
         shell: bash
@@ -68,6 +36,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Resolve release tag
         id: release_tag
@@ -75,11 +45,7 @@ jobs:
           INPUT_TAG_TO_PUBLISH: ${{ github.event.inputs.tag_to_publish }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RELEASE_TAG="${INPUT_TAG_TO_PUBLISH:-}"
-          else
-            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
-          fi
+          RELEASE_TAG="${INPUT_TAG_TO_PUBLISH:-}"
           if ! echo "$RELEASE_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Stable release tag must match vYYYY.M.PATCH: ${RELEASE_TAG:-<empty>}"
             exit 1
@@ -87,11 +53,23 @@ jobs:
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "Resolved release tag: $RELEASE_TAG"
 
+      - name: Verify workflow identity is tag-bound
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.release_tag.outputs.release_tag }}'
+          EXPECTED_REF="refs/tags/${TAG}"
+          if [ "$GITHUB_REF" != "$EXPECTED_REF" ]; then
+            echo "Release publication requires a tag-bound workflow identity." >&2
+            echo "Observed GITHUB_REF: $GITHUB_REF" >&2
+            echo "Expected GITHUB_REF: $EXPECTED_REF" >&2
+            exit 1
+          fi
+
       - name: Fetch tag object for signature verification
         # Force-fetch the annotated tag object before signature verification.
         run: |
-          set -o pipefail
-          TAG="${{ steps.release_tag.outputs.release_tag }}"
+          set -euo pipefail
+          TAG='${{ steps.release_tag.outputs.release_tag }}'
           git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}" --depth=1
 
       - name: Verify signed tag (#1299 / A9 gate)
@@ -104,7 +82,11 @@ jobs:
         run: bash tools/ci/verify-signed-tag.sh
 
       - name: Checkout release tag
-        run: git checkout --detach "refs/tags/${{ steps.release_tag.outputs.release_tag }}"
+        run: |
+          set -euo pipefail
+          git checkout --detach "refs/tags/${{ steps.release_tag.outputs.release_tag }}"
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
 
       - name: Verify source-bound storage benchmark claims (#2191)
         run: npm run verify:storage-claims
@@ -121,52 +103,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Install mandatory SQLite session test backend
-        # Keep the stable publication gate aligned with ci.yml: the full test
-        # suite contains mandatory SQLite-backed session conformance tests.
-        # The locked install above remains age-gated; this exact-version,
-        # no-save follow-up disables re-resolution's age filter so it does not
-        # reject already-locked young packages such as @fortemi/core.
-        # --save-dev is required here because npm otherwise treats an explicitly
-        # requested optional peer already declared by the root package as satisfied
-        # without placing it in node_modules.
-        run: |
-          npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0
-          node -e "require('better-sqlite3')"
-
-      - name: Run type check
-        run: npm run typecheck
-
-      - name: Build TypeScript
-        # Build before tests because several tests assert on dist/ output
-        # (e.g. test/unit/cli/validate-metadata-import.test.ts asserts the
-        # import path resolves to dist/src/plugin/metadata-validator.js
-        # — regression test for #1001). The v2026.5.5 publish failed
-        # because tests ran before build; this ordering matches ci.yml.
-        run: npm run build
-
-      - name: Assemble lightweight CLI package
-        run: npm run package:cli
-
-      - name: Run tests
-        # Test failures must block stable publish. `continue-on-error: true`
-        # removed per #1280 (A2). The CLI perf gate is included here under
-        # parallel load — budgets in test/integration/cli-perf.test.ts
-        # accommodate the parallel-load measurement. See #1302 for the
-        # follow-up to investigate and tighten back toward isolated p50.
-        env:
-          # Shared-runner policy: paired Node baselines, median of 7 samples.
-          AIWG_PERF_BUDGET_VERSION_MS: "300"
-          AIWG_PERF_BUDGET_HELP_MS: "750"
-          AIWG_PERF_SAMPLE_COUNT: "7"
-        run: npm test -- --run
-
-      - name: Verify packaged SQLite feature installation (#182)
-        # Hard release gate: install the packed CLI without optional peers,
-        # verify the scoped native feature, and open an empty session catalog.
-        run: npm run test:sessions:feature-install
-
       - name: Extract and verify version
         id: version
         run: |
@@ -179,79 +115,6 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
-
-      - name: Check package contents
-        run: |
-          echo "=== Package contents ==="
-          npm pack --dry-run 2>&1 | tee pack-output.txt
-          echo ""
-          echo "=== Package size ==="
-          SIZE=$(grep -oE 'package size:[[:space:]]*[0-9.]+[[:space:]]*[kMG]?B' pack-output.txt || echo "unknown")
-          echo "Package size: $SIZE"
-
-      - name: Verify .aiwg/ excluded from package
-        run: |
-          npm pack --dry-run --json > pack-files.json
-          node <<'NODE'
-          const fs = require('fs');
-          const stdout = fs.readFileSync('pack-files.json', 'utf8');
-          function parseNpmPackJson(text) {
-            try {
-              return JSON.parse(text);
-            } catch {
-              const start = text.lastIndexOf('\n[');
-              if (start >= 0) return JSON.parse(text.slice(start + 1));
-              const first = text.indexOf('[');
-              if (first >= 0) return JSON.parse(text.slice(first));
-              throw new Error('no JSON array found in npm pack output');
-            }
-          }
-          const pack = parseNpmPackJson(stdout);
-          const files = pack?.[0]?.files ?? [];
-          const aiwgFiles = files
-            .map((file) => file.path)
-            .filter((path) => path === '.aiwg' || path.startsWith('.aiwg/'));
-          if (aiwgFiles.length > 0) {
-            console.error('FATAL: .aiwg/ found in npm package contents!');
-            console.error('.aiwg/ is project-local SDLC artifacts — must never be published.');
-            for (const file of aiwgFiles) console.error(file);
-            process.exit(1);
-          }
-          NODE
-          echo "✓ .aiwg/ correctly excluded from npm package"
-
-      - name: Verify Fortemi Core prebuilt index package (#1697)
-        # Runs npm pack through prepack, then verifies the Fortemi Core v2
-        # framework export + manifest are present in the tarball and match
-        # their checksum/schema contract.
-        run: npm run lint:fortemi-prebuilt-package
-
-      - name: Audit dep-graph signatures (#1288 / A12)
-        # Hard gate: `npm audit signatures` verifies every package in the
-        # dep graph against npmjs.org's signing keys. Time-bounded waivers
-        # live in ci/npm-audit-signatures-waivers.yaml; expired waivers
-        # fail. See .aiwg/architecture/adr-publish-time-evidence.md.
-        run: npm run lint:audit-signatures
-
-      - name: Scan known affected package feed (#1353)
-        run: |
-          if [ -n "${AIWG_AFFECTED_PACKAGES_CSV:-}" ] || [ -f /mnt/ops/users/roctinam/Downloads/22-packages.csv ]; then
-            npm run lint:affected-packages
-          else
-            echo "Skipping affected-package scan: no CSV source configured on this runner"
-          fi
-
-      - name: Audit tarball top-level entries (#1288 / A11)
-        # Hard gate: catches Mini Shai-Hulud-style new-file-at-tarball-root
-        # injection by diffing `npm pack --dry-run --json` top-level
-        # entries against ci/expected-tarball-top-level.txt.
-        run: npm run lint:tarball
-
-      - name: Check Cockpit package contents
-        run: npm pack ./apps/cockpit --dry-run
-
-      - name: Check lightweight CLI package contents
-        run: npm pack ./dist/packages/cli --dry-run
 
       - name: Install vault fetch dependencies
         run: |
@@ -267,120 +130,28 @@ jobs:
           VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
         run: bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec
 
-      - name: Publish to Gitea npm registry
-        if: ${{ github.event.inputs.dry_run != 'true' }}
+      - name: Fetch public stable tarballs and mirror them
         run: |
-          set -o pipefail
-          # Configure auth for Gitea registry
-          cat > .npmrc << 'NPMRC'
-          //git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}
-          NPMRC
+          set -euo pipefail
+          VERSION='${{ steps.version.outputs.version }}'
+          MIRROR_DIR=$(mktemp -d "$RUNNER_TEMP/stable-mirror.XXXXXX")
+          for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
+            npm pack "${PACKAGE}@${VERSION}" --ignore-scripts --registry https://registry.npmjs.org --pack-destination "$MIRROR_DIR"
+          done
+          printf '%s\n' '//git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}' > "$RUNNER_TEMP/.npmrc"
+          NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/.npmrc" node tools/release/direct-stable-publish.mjs --mirror --directory "$MIRROR_DIR" --version "$VERSION" --receipt "$RUNNER_TEMP/gitea-publication.json"
 
-          # Stable publishes deliberately omit `--tag` so npm's default
-          # behavior is to set the `latest` dist-tag. The explicit
-          # `npm dist-tag add ... latest` step below makes that promotion
-          # mandatory and self-healing on re-runs — do not collapse them.
-          # Allow re-runs: treat "version already exists" as success.
-          npm publish --registry=${{ env.GITEA_NPM_REGISTRY }} 2>&1 | tee publish-output.txt || {
-            if grep -qE "package version already exists|cannot publish over the previously published versions|EPUBLISHCONFLICT|409" publish-output.txt; then
-              echo "✓ Version already published to Gitea - treating as success"
-            else
-              echo "✗ Gitea publish failed"
-              cat publish-output.txt
-              exit 1
-            fi
-          }
-      - name: Publish Cockpit to Gitea npm registry
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        run: |
-          set -o pipefail
-          cat > .npmrc << 'NPMRC'
-          //git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}
-          NPMRC
-          npm publish ./apps/cockpit --registry=${{ env.GITEA_NPM_REGISTRY }} 2>&1 | tee cockpit-publish-output.txt || {
-            if grep -qE "package version already exists|cannot publish over the previously published versions|EPUBLISHCONFLICT|409" cockpit-publish-output.txt; then
-              echo "✓ @aiwg/cockpit version already published to Gitea - treating as success"
-            else
-              echo "✗ @aiwg/cockpit Gitea publish failed"
-              cat cockpit-publish-output.txt
-              exit 1
-            fi
-          }
-      - name: Publish lightweight CLI to Gitea npm registry
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        run: |
-          set -o pipefail
-          cat > .npmrc << 'NPMRC'
-          //git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}
-          NPMRC
-          npm publish ./dist/packages/cli --registry=${{ env.GITEA_NPM_REGISTRY }} 2>&1 | tee cli-publish-output.txt || {
-            if grep -qE "package version already exists|cannot publish over the previously published versions|EPUBLISHCONFLICT|409" cli-publish-output.txt; then
-              echo "✓ @aiwg/cli version already published to Gitea - treating as success"
-            else
-              echo "✗ @aiwg/cli Gitea publish failed"
-              cat cli-publish-output.txt
-              exit 1
-            fi
-          }
-      - name: Promote to latest on Gitea (idempotent)
-        # Explicit dist-tag write. Runs even when publish was skipped as
-        # "already exists" — this is the safety net that the user-reported
-        # 2026.5.0 → latest miss exposed. See #1247 follow-up.
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        run: |
-          set -o pipefail
-          cat > .npmrc << 'NPMRC'
-          //git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${NODE_AUTH_TOKEN}
-          NPMRC
-          VERSION="${{ steps.version.outputs.version }}"
-          for i in 1 2 3 4 5; do
-            if npm dist-tag add "aiwg@${VERSION}" latest --registry=${{ env.GITEA_NPM_REGISTRY }} 2>&1 | tee dist-tag-output.txt; then
-              break
-            fi
-            if grep -qiE "is not in the npm registry|not found|404" dist-tag-output.txt; then
-              echo "Attempt $i: version not yet visible on Gitea, retrying in 10s..."
-              sleep 10
-            else
-              echo "✗ Gitea latest promotion failed"; cat dist-tag-output.txt; exit 1
-            fi
-            if [ "$i" = "5" ]; then
-              echo "✗ Gitea latest promotion exhausted retries"; exit 1
-            fi
-          done
-          echo "Gitea dist-tags after promotion:"
-          npm dist-tag ls aiwg --registry=${{ env.GITEA_NPM_REGISTRY }}
-          for i in 1 2 3 4 5; do
-            if npm dist-tag add "@aiwg/cockpit@${VERSION}" latest --registry=${{ env.GITEA_NPM_REGISTRY }} 2>&1 | tee cockpit-dist-tag-output.txt; then
-              break
-            fi
-            if grep -qiE "is not in the npm registry|not found|404" cockpit-dist-tag-output.txt; then
-              echo "Attempt $i: @aiwg/cockpit version not yet visible on Gitea, retrying in 10s..."
-              sleep 10
-            else
-              echo "✗ @aiwg/cockpit Gitea latest promotion failed"; cat cockpit-dist-tag-output.txt; exit 1
-            fi
-            if [ "$i" = "5" ]; then
-              echo "✗ @aiwg/cockpit Gitea latest promotion exhausted retries"; exit 1
-            fi
-          done
-          npm dist-tag ls @aiwg/cockpit --registry=${{ env.GITEA_NPM_REGISTRY }}
-          for i in 1 2 3 4 5; do
-            if npm dist-tag add "@aiwg/cli@${VERSION}" latest --registry=${{ env.GITEA_NPM_REGISTRY }} 2>&1 | tee cli-dist-tag-output.txt; then
-              break
-            fi
-            if grep -qiE "is not in the npm registry|not found|404" cli-dist-tag-output.txt; then
-              echo "Attempt $i: @aiwg/cli version not yet visible on Gitea, retrying in 10s..."
-              sleep 10
-            else
-              echo "✗ @aiwg/cli Gitea latest promotion failed"; cat cli-dist-tag-output.txt; exit 1
-            fi
-            if [ "$i" = "5" ]; then
-              echo "✗ @aiwg/cli Gitea latest promotion exhausted retries"; exit 1
-            fi
-          done
-          npm dist-tag ls @aiwg/cli --registry=${{ env.GITEA_NPM_REGISTRY }}
+      - name: Preserve publication receipt
+        if: always()
+        uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20 (ci/digests.txt)
+        with:
+          name: gitea-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+                        ${{ runner.temp }}/gitea-publication.json
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Retire next on Gitea
-        if: ${{ github.event.inputs.dry_run != 'true' }}
         run: |
           set -euo pipefail
           cat > .npmrc << 'NPMRC'
@@ -411,21 +182,12 @@ jobs:
       # (OIDC + provenance); the formerly-disabled Gitea npmjs.org legs were
       # removed now that the OIDC path is proven in production (#1283 / A5).
 
-      - name: Dry run - would publish
-        if: ${{ github.event.inputs.dry_run == 'true' }}
-        run: |
-          echo "DRY RUN - Would publish version ${{ steps.version.outputs.version }}"
-          echo "Registry: Gitea (npmjs.org publishes from GitHub Actions OIDC)"
-          npm pack
-          npm pack ./dist/packages/cli
-          ls -la *.tgz
 
   verify-install:
     name: Verify Installation
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 (see ci/digests.txt)
     needs: build-and-publish
-    if: ${{ github.event.inputs.dry_run != 'true' }}
     timeout-minutes: 10
     defaults:
       run:

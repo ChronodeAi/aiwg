@@ -4,7 +4,7 @@ AIWG provider context is generated as a three-tier loading model so default agen
 
 ## Tier 1: Always-Loaded Orientation
 
-Tier 1 is the provider-facing bridge: `AGENTS.md`, `WARP.md`, `.hermes.md`, `.github/copilot-instructions.md`, root `AIWG.md` hooks, and the normalized `.aiwg/AIWG.md` finalization block.
+Tier 1 is the provider-facing bridge: `AGENTS.md`, `WARP.md`, `.hermes.md`, `.github/copilot-instructions.md`, and the single generated root `AIWG.md` context. Optional `.aiwg/AIWG.md` holds operator notes only; regenerate folds those notes into root `AIWG.md`.
 
 Tier 1 may contain:
 

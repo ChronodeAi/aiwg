@@ -14,6 +14,7 @@
  */
 
 import { z } from 'zod';
+import { integer, dateTime, url } from '../schema/zod-validation.mjs';
 import {
   PlatformCompatibilitySchema,
   DeploymentConfigSchema,
@@ -87,7 +88,7 @@ const ArtifactListsSchema = z.object({
   gatePacks: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
-const EntryPathsSchema = z.object({
+const EntryPathsSchema = z.strictObject({
   agents: safeRelativePath.optional(),
   skills: safeRelativePath.optional(),
   rules: safeRelativePath.optional(),
@@ -97,41 +98,41 @@ const EntryPathsSchema = z.object({
   commands: safeRelativePath.optional(),
   behaviors: safeRelativePath.optional(),
   gatePacks: safeRelativePath.optional(),
-}).strict();
+});
 
-export const AddonConfigSchema = z.object({
+export const AddonConfigSchema = z.strictObject({
   entry: EntryPathsSchema.optional(),
   ...ArtifactListsSchema.shape,
   core: z.boolean().optional(),
   autoInstall: z.boolean().optional(),
-}).strict();
+});
 
-export const FrameworkConfigSchema = z.object({
+export const FrameworkConfigSchema = z.strictObject({
   path: safeRelativePath.optional(),
   files: z.array(safeRelativePath).max(100).optional(),
   ignore: z.array(safeRelativePath).max(100).optional(),
   gatePacks: z.array(z.string().min(1).max(128)).max(50).optional(),
-  entry: z.object({
+  entry: z.strictObject({
     gatePacks: safeRelativePath.optional(),
-  }).strict().optional(),
-  contextContributions: z.object({
+  }).optional(),
+  contextContributions: z.strictObject({
     hookFragment: safeRelativePath.optional(),
     sectionsDir: safeRelativePath.optional(),
     sectionsManifest: safeRelativePath.optional(),
-    priority: z.number().int().min(0).max(100).optional(),
+    priority: integer().min(0).max(100).optional(),
     description: z.string().max(512).optional(),
-  }).strict().optional(),
-}).strict();
+  }).optional(),
+});
 
-export const ExtensionConfigSchema = z.object({
+export const ExtensionConfigSchema = z.strictObject({
   entry: EntryPathsSchema.optional(),
   ...ArtifactListsSchema.shape,
-}).strict();
+});
 
-export const PluginConfigSchema = z.object({
+export const PluginConfigSchema = z.strictObject({
   payloadType: z.enum(['addon', 'framework', 'extension']),
   payloadPath: safeRelativePath,
-}).strict();
+});
 
 const ProviderCapabilityFeatureSchema = z.enum([
   'cron',
@@ -152,12 +153,12 @@ const ProviderCapabilityEmulationSchema = z.enum([
   'external-trigger',
 ]).nullable();
 
-const ProviderCapabilityOverridesSchema = z.object({
-  nativeFeatures: z.record(ProviderCapabilityFeatureSchema, z.boolean()).optional(),
-  emulation: z.record(ProviderCapabilityFeatureSchema, ProviderCapabilityEmulationSchema).optional(),
-}).strict();
+const ProviderCapabilityOverridesSchema = z.strictObject({
+  nativeFeatures: z.partialRecord(ProviderCapabilityFeatureSchema, z.boolean()).optional(),
+  emulation: z.partialRecord(ProviderCapabilityFeatureSchema, ProviderCapabilityEmulationSchema).optional(),
+});
 
-export const ProviderConfigSchema = z.object({
+export const ProviderConfigSchema = z.strictObject({
   extends: z.enum([
     'claude',
     'codex',
@@ -179,7 +180,7 @@ export const ProviderConfigSchema = z.object({
   displayName: z.string().min(1).max(128).optional(),
   aliases: z.array(z.string().min(1).max(64)).max(20).optional(),
   capabilities: ProviderCapabilityOverridesSchema.optional(),
-}).strict();
+});
 
 /**
  * Review attestation for one gate metric provider (#2831).
@@ -190,11 +191,11 @@ export const ProviderConfigSchema = z.object({
  * registration refuses absent attestations and digest mismatches. Null or
  * unknown digests never verify: they fail closed.
  */
-export const GateProviderReviewSchema = z.object({
+export const GateProviderReviewSchema = z.strictObject({
   reviewer: z.string().min(1).max(128),
-  reviewedAt: z.string().datetime(),
+  reviewedAt: dateTime(),
   codeDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/, 'must be a sha256 digest'),
-}).strict();
+});
 
 export type GateProviderReview = z.infer<typeof GateProviderReviewSchema>;
 
@@ -206,7 +207,7 @@ export type GateProviderReview = z.infer<typeof GateProviderReviewSchema>;
  * providers remain the default; this field is optional and disabled unless
  * the caller explicitly enables bundle providers.
  */
-export const GateProviderEntrySchema = z.object({
+export const GateProviderEntrySchema = z.strictObject({
   id: z.string().min(1).max(128).regex(
     /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/,
     'must be a namespaced provider id <scope>/<name> (alphanumeric plus . _ -)',
@@ -216,22 +217,22 @@ export const GateProviderEntrySchema = z.object({
   description: z.string().min(1).max(512),
   review: GateProviderReviewSchema.optional(),
   reviewFile: safeJsonFile.optional(),
-}).strict().refine(
+}).refine(
   (entry) => (entry.review !== undefined) !== (entry.reviewFile !== undefined),
-  { message: 'exactly one of review or reviewFile is required' },
+  { error: 'exactly one of review or reviewFile is required' },
 );
 
 export type GateProviderEntry = z.infer<typeof GateProviderEntrySchema>;
 
 export const GateProvidersSchema = z.array(GateProviderEntrySchema).max(20).refine(
   (entries) => new Set(entries.map((entry) => entry.id)).size === entries.length,
-  { message: 'gate provider ids must be unique within a bundle' },
+  { error: 'gate provider ids must be unique within a bundle' },
 ).refine(
   (entries) => new Set(entries.map((entry) => entry.module)).size === entries.length,
-  { message: 'gate provider modules must be unique within a bundle' },
+  { error: 'gate provider modules must be unique within a bundle' },
 );
 
-export const CliCommandsSchema = z.object({
+export const CliCommandsSchema = z.strictObject({
   namespace: z.string()
     .min(1)
     .max(64)
@@ -243,7 +244,7 @@ export const CliCommandsSchema = z.object({
       .min(1)
       .max(64)
       .regex(bundleNamePattern, 'kebab-case alphanumeric, no leading/trailing hyphen'),
-    z.object({
+    z.strictObject({
       file: safeModuleFile,
       description: z.string().min(1).max(512),
       hook_event: z.enum([
@@ -254,17 +255,17 @@ export const CliCommandsSchema = z.object({
         'PostToolUse',
         'FeatureComplete',
       ]).optional(),
-    }).strict(),
+    }),
   ).refine((commands) => Object.keys(commands).length > 0, {
-    message: 'at least one CLI subcommand is required',
+    error: 'at least one CLI subcommand is required',
   }),
-}).strict();
+});
 
 // ============================================
 // Top-level BundleManifestSchema
 // ============================================
 
-export const BundleManifestSchema = z.object({
+export const BundleManifestSchema = z.strictObject({
   // Required core fields
   id: z.string()
     .min(1)
@@ -282,7 +283,7 @@ export const BundleManifestSchema = z.object({
   // Optional standard metadata
   author: z.string().max(128).optional(),
   license: z.string().max(64).optional(),
-  repository: z.string().url().max(512).optional(),
+  repository: url().max(512).optional(),
 
   // Type-discriminated nested config (exactly one matches `type`)
   addonConfig: AddonConfigSchema.optional(),
@@ -310,7 +311,6 @@ export const BundleManifestSchema = z.object({
   // providers remain the default when this field is absent.
   gateProviders: GateProvidersSchema.optional(),
 })
-  .strict()
   .refine(
     (m) => {
       // Discriminator alignment: type must match the present *Config block(s)
@@ -328,7 +328,7 @@ export const BundleManifestSchema = z.object({
       }
       return presentCount === 1 && present[m.type as keyof typeof present];
     },
-    { message: 'type must match its corresponding *Config block (addon→addonConfig, framework→frameworkConfig, plugin→pluginConfig, provider→providerConfig; extension may omit extensionConfig)' }
+    { error: 'type must match its corresponding *Config block (addon→addonConfig, framework→frameworkConfig, plugin→pluginConfig, provider→providerConfig; extension may omit extensionConfig)' }
   );
 
 export type BundleManifest = z.infer<typeof BundleManifestSchema>;
@@ -358,13 +358,48 @@ export interface ManifestValidationError {
  */
 export function zodErrorToValidationErrors(
   err: z.ZodError,
-  manifestPath: string
+  manifestPath: string,
+  input?: unknown,
 ): ManifestValidationError[] {
-  return err.errors.map((issue) => ({
-    path: manifestPath,
-    field: issue.path.join('.') || '(root)',
-    expected: issue.message,
-    actual: 'received' in issue ? String((issue as { received: unknown }).received) : 'invalid',
-    severity: 'error',
-  }));
+  const hasInput = arguments.length >= 3;
+  const issues = err.issues.flatMap(issue => {
+    // Partial enum maps report unknown keys at the map in v4; discovery's
+    // existing field contract identifies each rejected capability key.
+    if (issue.code === 'unrecognized_keys'
+      && issue.path.length === 3 && issue.path[0] === 'providerConfig'
+      && issue.path[1] === 'capabilities'
+      && ['nativeFeatures', 'emulation'].includes(String(issue.path[2]))) {
+      return issue.keys.map(key => ({ ...issue, path: [...issue.path, key], keys: [key] }));
+    }
+    return [issue];
+  });
+  return issues.map((issue) => {
+    let actual = 'invalid';
+    if (issue.code === 'unrecognized_keys') {
+      // Name each rejected key so doctor/use output identifies the culprit
+      // (#3724: a typo'd or unknown platform key must not vanish into
+      // a bare "invalid").
+      const keys = issue.keys.map((key) => `"${String(key)}"`).join(', ');
+      actual = `unknown key(s): ${keys}`;
+    }
+    if (issue.code === 'invalid_type' && hasInput) {
+      let value: unknown = input;
+      for (const segment of issue.path) {
+        value = value !== null && typeof value === 'object' && Object.hasOwn(value, segment)
+          ? (value as Record<PropertyKey, unknown>)[segment] : undefined;
+      }
+      // Emit only the former type classification, never rejected values.
+      actual = value === null ? 'null' : Array.isArray(value) ? 'array'
+        : typeof value === 'number' && Number.isNaN(value) ? 'nan'
+        : (issue.expected as string) === 'int' && typeof value === 'number' ? 'float'
+        : typeof value;
+    }
+    return {
+      path: manifestPath,
+      field: issue.path.join('.') || '(root)',
+      expected: issue.message,
+      actual,
+      severity: 'error',
+    };
+  });
 }

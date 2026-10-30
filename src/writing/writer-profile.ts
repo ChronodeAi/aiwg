@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 import { redactText } from '../governance/redaction.js';
 import { validateLegacyWriterProfile } from './writer-profile-legacy.js';
 import type { OutputModeProfile } from '../output-modes/types.js';
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 const id = z.string().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/);
-const provenance = z.object({ source: z.string().min(1).max(2000), license: z.string().min(1).max(200) }).strict();
-const evidence = z.object({ sampleId: id, start: z.number().int().nonnegative(), end: z.number().int().positive() }).strict();
+const provenance = z.strictObject({ source: z.string().min(1).max(2000), license: z.string().min(1).max(200) });
+const evidence = z.strictObject({ sampleId: id, start: integer().nonnegative(), end: integer().positive() });
 /** Closed expression controls exclude identity, personality and generated signature phrases. */
 export const writerPreferenceValues = {
   dialect: ['unspecified', 'en-US', 'en-GB', 'en-AU', 'en-CA', 'fr-FR', 'fr-CA'],
@@ -25,30 +26,30 @@ export const writerPreferenceValues = {
 } as const;
 export type WriterPreferenceKey = keyof typeof writerPreferenceValues;
 const preferenceKey = z.enum(Object.keys(writerPreferenceValues) as [WriterPreferenceKey, ...WriterPreferenceKey[]]);
-const preference = z.object({
+const preference = z.strictObject({
   id, key: preferenceKey, value: z.string(), origin: z.enum(['explicit', 'inferred']),
-  confidence: z.enum(['low', 'moderate', 'high']), evidence: z.array(evidence).default([]),
+  confidence: z.enum(['low', 'moderate', 'high']), evidence: z.array(evidence).prefault([]),
   task: z.string().max(120).optional(), status: z.enum(['accepted', 'rejected']).default('accepted'),
-}).strict();
-const override = z.object({ key: preferenceKey, action: z.enum(['set', 'reject', 'reset']), value: z.string().optional(), task: z.string().max(120).optional() }).strict();
-const sample = z.object({
+});
+const override = z.strictObject({ key: preferenceKey, action: z.enum(['set', 'reject', 'reset']), value: z.string().optional(), task: z.string().max(120).optional() });
+const sample = z.strictObject({
   id, text: z.string().max(1_000_000).optional(), sha256: z.string().regex(/^[a-f0-9]{64}$/), approved: z.boolean(),
   status: z.enum(['active', 'revoked']), provenance,
-  rights: z.object({ useForVoice: z.boolean(), shareText: z.boolean() }).strict(),
+  rights: z.strictObject({ useForVoice: z.boolean(), shareText: z.boolean() }),
   sensitivity: z.enum(['public', 'private', 'secret']),
-}).strict();
-export const legacyProfileAttachmentSchema = z.object({
+});
+export const legacyProfileAttachmentSchema = z.strictObject({
   format: z.enum(['yaml', 'json']),
   kind: z.enum(['addon-template', 'python-generated', 'python-analyzed', 'python-blended', 'ts-analyzer', 'ts-calibration']),
-  raw: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/), payload: z.unknown(),
-}).strict();
+  raw: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/), payload: z.unknown().optional(),
+});
 
-export const writerProfileSchema = z.object({
-  schemaVersion: z.literal(1), revision: z.number().int().positive().default(1), metadataSharingApproved: z.boolean().default(false), id: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,79}$/).refine(v => !v.includes('..')), version: z.string().regex(/^\d+\.\d+\.\d+$/), name: z.string().min(1).max(200), provenance,
-  samples: z.array(sample), preferences: z.array(preference), overrides: z.array(override).default([]),
-  counterexamples: z.array(evidence).default([]), legacy: legacyProfileAttachmentSchema.optional(),
-  cacheEpoch: z.number().int().nonnegative().default(0),
-}).strict().superRefine((p, ctx) => {
+export const writerProfileSchema = z.strictObject({
+  schemaVersion: z.literal(1), revision: integer().positive().default(1), metadataSharingApproved: z.boolean().default(false), id: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,79}$/).refine(v => !v.includes('..')), version: z.string().regex(/^\d+\.\d+\.\d+$/), name: z.string().min(1).max(200), provenance,
+  samples: z.array(sample), preferences: z.array(preference), overrides: z.array(override).prefault([]),
+  counterexamples: z.array(evidence).prefault([]), legacy: legacyProfileAttachmentSchema.optional(),
+  cacheEpoch: integer().nonnegative().default(0),
+}).superRefine((p, ctx) => {
   const problem = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message });
   if (new Set(p.samples.map(s => s.id)).size !== p.samples.length) problem('Duplicate sample IDs');
   if (new Set(p.preferences.map(s => s.id)).size !== p.preferences.length) problem('Duplicate preference IDs');

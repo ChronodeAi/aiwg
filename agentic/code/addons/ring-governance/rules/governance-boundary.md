@@ -1,3 +1,12 @@
+---
+enforcement: high
+activation: bound
+summary: Inventory and protect governance-defining surfaces before autonomous work can alter acceptance, promotion, or routing.
+bound_to:
+  agents: [governance-skeptic]
+  skills: [evolution-surface-review, governance-corpus-inventory, governance-escape-hatch-audit]
+---
+
 # Governance Boundary
 
 **Enforcement Level**: HIGH

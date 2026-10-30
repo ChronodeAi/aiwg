@@ -1,13 +1,21 @@
 /** #3035: real addon deploy pipeline with synthetic sources and isolated homes. */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileWithCapture as execFileSync } from '../../../helpers/exec-file-capture.js';
+import { existsSync, readdirSync, symlinkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { emptyConfig, readAiwgConfig, writeAiwgConfig } from '../../../../src/config/aiwg-config.js';
 
-const { afterDeploy } = vi.hoisted(() => ({ afterDeploy: vi.fn() }));
+const { afterDeploy, afterVerification, host } = vi.hoisted(() => ({ afterDeploy: vi.fn(), afterVerification: vi.fn(), host: { fallback: false } }));
+
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, statSync: (...args: Parameters<typeof actual.statSync>) => {
+    if (host.fallback && String(args[0]).startsWith('/proc/self/fd/')) throw Object.assign(new Error('synthetic missing procfs'), { code: 'ENOENT' });
+    return actual.statSync(...args);
+  } };
+});
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const PROVIDERS = [
@@ -36,9 +44,10 @@ vi.mock('../../../../src/channel/manager.mjs', () => ({
 
 // Exercise the checkout's deployer while use resolves tiny synthetic addons.
 vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
-  createScriptRunner: () => ({
+  createScriptRunner: (sourceRoot: string) => ({
     run: async (script: string, args: string[] = []) => {
       try {
+        if (!args.includes('--source')) args = [...args, '--source', sourceRoot];
         const targetIndex = args.indexOf('--target');
         execFileSync(process.execPath, [join(REPO_ROOT, script), ...args], {
           cwd: args[targetIndex + 1], stdio: 'pipe', env: process.env, timeout: 60_000,
@@ -52,6 +61,16 @@ vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
     },
   }),
 }));
+
+async function interceptVerification(): Promise<void> {
+  const verification = await import('../../../../src/cli/services/deployment-verification.js');
+  const original = verification.verifyProviderDeployment;
+  vi.spyOn(verification, 'verifyProviderDeployment').mockImplementation(async options => {
+    const result = await original(options);
+    await afterVerification(result);
+    return result;
+  });
+}
 
 // Redirect every provider config/home override, including overrides belonging
 // to adapters eagerly imported by the deployer. Never inspect the real home.
@@ -118,6 +137,7 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
     for (const name of UNSET_ENV) vi.stubEnv(name, undefined);
   });
   afterEach(() => {
+    host.fallback = false;
     vi.unstubAllEnvs();
     rmSync(tempRoot, { recursive: true, force: true });
   });
@@ -130,6 +150,7 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
     const { USER_SCOPE_PATHS } = await import('../../../../src/cli/scope-resolver.js');
     const { recordUserDeploy, userRegistryPath } = await import('../../../../src/config/user-registry.js');
     const { resolveIndexDir } = await import('../../../../src/artifacts/index-reader.js');
+    const { getFrameworkIndexBaseDir } = await import('../../../../src/artifacts/framework-index-paths.js');
     const { removeHandler } = await import('../../../../src/cli/handlers/subcommands.js');
     const home = process.env.HOME!;
     const expected = {
@@ -155,7 +176,57 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
       expect(result.message).toContain(join(roots.user, 'legacy'));
     }
     expect(userRegistryPath()).toBe(join(home, '.aiwg/installed.json'));
-    expect(resolveIndexDir(project, 'framework')).toBe(join(process.env.XDG_DATA_HOME!, 'aiwg/index/framework'));
+    expect(resolveIndexDir(project, 'framework')).toBe(join(getFrameworkIndexBaseDir(project), 'framework'));
+  });
+
+  it.each(['local', 'fortemi-core'] as const)('alternates use/show/discover between two package roots in one HOME (%s)', { timeout: 60000 }, async backend => {
+    vi.resetModules();
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const { showArtifact, discoverCapability } = await import('../../../../src/artifacts/query-engine.js');
+    const { getGraphIndexDir } = await import('../../../../src/artifacts/types.js');
+    const { getFortemiCoreSyncStatus } = await import('../../../../src/artifacts/fortemi-core-sync.js');
+    const roots = [join(tempRoot, 'runtime'), join(tempRoot, 'edge')];
+    for (const root of roots) {
+      writeSources(root);
+      write(root, 'package.json', '{"name":"aiwg","version":"1.0.0"}');
+      for (const kind of ['extensions', 'agents', 'behaviors']) mkdirSync(join(root, 'agentic/code', kind), { recursive: true });
+      write(root, 'agentic/code/addons/decision-engine/skills/de-check/SKILL.md',
+        `---\nname: de-check\ndescription: synthetic decision check\nplatforms: [all]\n---\nDecision check from ${root}.\n`);
+    }
+    await writeAiwgConfig(project, emptyConfig(['claude']));
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const snapshots = new Map<string, string>();
+    try {
+      for (const root of [...roots, ...roots]) {
+        vi.stubEnv('AIWG_ROOT', root);
+        const args = ['decision-engine', '--provider', 'claude', '--target', project];
+        const result = await useHandler.execute({ cwd: project, frameworkRoot: root, rawArgs: ['use', ...args], args });
+        expect(result.exitCode, result.message).toBe(0);
+        output.mockClear();
+        await showArtifact(project, { name: 'de-check', typeFilter: ['skill'], backend, json: true });
+        const shown = JSON.parse(output.mock.calls.map(call => call[0]).join(''));
+        expect(shown.path).toBe(join(root, 'agentic/code/addons/decision-engine/skills/de-check/SKILL.md'));
+        expect(shown.content).toBeUndefined();
+        expect(shown.description).toBe('synthetic decision check');
+        output.mockClear();
+        await showArtifact(project, { name: 'de-check', typeFilter: ['skill'], backend, json: true, body: true });
+        const body = JSON.parse(output.mock.calls.map(call => call[0]).join(''));
+        expect(body.path).toBe(shown.path);
+        expect(body.content).toBe(readFileSync(shown.path, 'utf8'));
+        expect(body.content).toContain(`Decision check from ${root}.`);
+        output.mockClear();
+        await discoverCapability(project, { phrase: 'synthetic decision check', backend, json: true });
+        const found = JSON.parse(output.mock.calls.map(call => call[0]).join(''));
+        expect(found.results.length).toBeGreaterThan(0);
+        expect(found.results.every((entry: { path: string }) => entry.path.startsWith(`${root}/`))).toBe(true);
+        const dir = getGraphIndexDir(project, 'framework');
+        const metadata = readFileSync(join(dir, 'metadata.json'), 'utf8');
+        if (snapshots.has(root)) expect(metadata).toBe(snapshots.get(root));
+        else snapshots.set(root, metadata);
+        expect(getFortemiCoreSyncStatus(project, 'framework').stale).toBe(false);
+      }
+      expect(getGraphIndexDir(roots[0], 'framework')).not.toBe(getGraphIndexDir(roots[1], 'framework'));
+    } finally { output.mockRestore(); }
   });
 
   for (const provider of PROVIDERS) {
@@ -205,14 +276,170 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
       }
       if (provider === 'openclaw' || provider === 'openhuman') {
         expect(existsSync(join(project, 'WORKSPACE.md'))).toBe(true);
-        expect(existsSync(join(project, '.aiwg/AIWG.md'))).toBe(true);
-        expect(existsSync(join(project, 'AIWG.md'))).toBe(false);
+        expect(existsSync(join(project, '.aiwg/AIWG.md'))).toBe(false);
+        expect(existsSync(join(project, 'AIWG.md'))).toBe(true);
         expect(result.message).not.toContain('Required canonical context file is missing: AIWG.md');
       }
       expect(process.env.AIWG_ROOT).toBeUndefined();
       expect(process.env.AIWG_HOME).toBeUndefined();
     });
   }
+
+  const rollbackProviders = [...PROVIDERS, 'antigravity', 'claude', 'codex', 'cursor', 'factory', 'hermes', 'omp', 'warp'];
+  it.each(rollbackProviders.flatMap(provider => ['decision-engine', 'sdlc'].map(bundle => ({ provider, bundle }))))('rolls back every context output after late $bundle verification failure for $provider', { timeout: 60000 }, async ({ provider, bundle }) => {
+    const sourceRoot = join(tempRoot, 'rollback-sources');
+    writeSources(sourceRoot);
+    if (provider === 'omp') {
+      write(sourceRoot, 'package.json', JSON.stringify({ name: 'aiwg', version: '1.0.0' }));
+      symlinkSync(join(REPO_ROOT, 'tools'), join(sourceRoot, 'tools'), 'dir');
+      symlinkSync(join(REPO_ROOT, 'dist'), join(sourceRoot, 'dist'), 'dir');
+      write(sourceRoot, 'agentic/code/providers/omp/aiwg-bridge.ts', '// synthetic OMP extension bridge\n');
+    }
+    write(sourceRoot, 'agentic/code/frameworks/sdlc-complete/manifest.json', JSON.stringify({ id: 'sdlc', name: 'SDLC', version: '1.0.0', modeAliases: ['sdlc'], keywords: ['sdlc'] }));
+    write(sourceRoot, 'agentic/code/frameworks/sdlc-complete/skills/framework-probe/SKILL.md', '---\nname: framework-probe\nplatforms: [all]\n---\nSynthetic framework probe.\n');
+    await writeAiwgConfig(project, emptyConfig([provider]));
+    const originals = new Map<string, Buffer>();
+    for (const name of ['WORKSPACE.md', 'AIWG.md', 'AGENTS.md', 'CLAUDE.md', 'WARP.md', '.hermes.md',
+      '.aiwg/AIWG.md', '.github/copilot-instructions.md', '.windsurfrules', '.windsurf/rules/aiwg-orchestration.md', '.omp/AGENTS.md']) {
+      const file = join(project, name);
+      const bytes = Buffer.from(`# Operator\r\n<!-- aiwg-managed -->\r\n${name} before deploy\r\n`);
+      write(project, name, bytes.toString());
+      originals.set(file, bytes);
+    }
+    const before = new Map<string, Buffer>();
+    const inventory = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const file = join(dir, entry.name);
+        if (entry.isDirectory()) inventory(file);
+        else if (entry.isFile()) before.set(file, readFileSync(file));
+      }
+    };
+    inventory(tempRoot);
+    afterVerification.mockImplementation(result => { result.outcome = 'failed'; });
+    vi.resetModules();
+    await interceptVerification();
+    // Wrapper correctness has its own suite; this fixture targets the later
+    // context/final-verification boundary with a tiny synthetic corpus.
+    const wrappers = await import('../../../../src/models/wrapper-deployment.js');
+    vi.spyOn(wrappers, 'verifyModelWrapperDeployment').mockResolvedValue({ supported: false, valid: true,
+      agentsPath: null, found: [], missing: [], mismatches: [] });
+    const manager = await import('../../../../src/channel/manager.mjs');
+    vi.mocked(manager.getFrameworkRoot).mockResolvedValue(sourceRoot);
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const args = [bundle, '--provider', provider, '--target', project, '--json',
+      ...(['grokbot', 'omp'].includes(provider) ? ['--scope', 'user'] : [])];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot: sourceRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(1);
+    expect(afterVerification).toHaveBeenCalled();
+    const structured = JSON.parse(result.message!);
+    expect(structured.contextFiles.length, result.message).toBeGreaterThan(0);
+    expect(structured.contextRollback.conflicts).toEqual([]);
+    expect(structured.contextRollback.restored.length).toBeGreaterThan(0);
+    for (const [file, bytes] of originals) expect(readFileSync(file), file).toEqual(bytes);
+    for (const file of structured.contextRollback.restored) {
+      if (before.has(file)) expect(readFileSync(file), file).toEqual(before.get(file));
+      else expect(existsSync(file), file).toBe(false);
+    }
+  });
+
+  it.each([false, true])('returns JSON rollback conflicts and keeps edits made at verification (fallback=%s)', { timeout: 60000 }, async fallback => {
+    host.fallback = fallback;
+    await writeAiwgConfig(project, emptyConfig(['claude']));
+    const file = join(project, 'WORKSPACE.md');
+    afterVerification.mockImplementation(result => {
+      writeFileSync(file, 'operator edit during verification');
+      result.outcome = 'failed';
+    });
+    vi.resetModules();
+    await interceptVerification();
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const args = ['decision-engine', '--provider', 'claude', '--target', project, '--json'];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode).toBe(1);
+    const structured = JSON.parse(result.message!);
+    expect(structured.contextRollback.conflicts).toEqual([{ path: file, reason: 'Context changed since deployment wrote it' }]);
+    expect(readFileSync(file, 'utf8')).toBe('operator edit during verification');
+  });
+
+  it.each([false, true])('rolls back completed generator writes even when the generator throws (fallback=%s)', { timeout: 60000 }, async fallback => {
+    host.fallback = fallback;
+    await writeAiwgConfig(project, emptyConfig(['claude']));
+    const file = join(project, 'WORKSPACE.md');
+    const original = '# Operator workspace\n';
+    writeFileSync(file, original);
+    vi.resetModules();
+    const pipeline = await import('../../../../src/smiths/context-pipeline/index.js');
+    const generate = pipeline.generate;
+    vi.spyOn(pipeline, 'generate').mockImplementation(async options => {
+      await generate(options);
+      throw new Error('after completed generator writes');
+    });
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const args = ['decision-engine', '--provider', 'claude', '--target', project, '--json'];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(1);
+    const structured = JSON.parse(result.message!);
+    expect(structured.schema).toBe('aiwg.use.result.v1');
+    expect(structured.contextRollback.conflicts).toEqual([]);
+    expect(structured.contextRollback.restored.length).toBeGreaterThan(0);
+    expect(readFileSync(file, 'utf8')).toBe(original);
+    expect(existsSync(join(project, '.aiwg/AIWG.md'))).toBe(false);
+  });
+
+  it('shares one journal across provider passes and restores both after final verification', { timeout: 60000 }, async () => {
+    await writeAiwgConfig(project, emptyConfig(['claude', 'codex']));
+    const files = ['WORKSPACE.md', 'AGENTS.md', 'CLAUDE.md'];
+    for (const file of files) write(project, file, `# ${file}\r\n<!-- aiwg-managed -->\r\noperator bytes\r\n`);
+    vi.resetModules();
+    await interceptVerification();
+    afterVerification.mockImplementation(result => { if (result.provider === 'codex') result.outcome = 'failed'; });
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const args = ['decision-engine', '--providers', 'claude,codex', '--target', project, '--json'];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(1);
+    const structured = JSON.parse(result.message!);
+    expect(structured.contextFiles.length).toBeGreaterThanOrEqual(2);
+    expect(structured.contextRollback.conflicts).toEqual([]);
+    for (const file of files) expect(readFileSync(join(project, file), 'utf8')).toBe(`# ${file}\r\n<!-- aiwg-managed -->\r\noperator bytes\r\n`);
+  });
+
+  it('restores context written by a provider step that throws before returning', { timeout: 60000 }, async () => {
+    await writeAiwgConfig(project, emptyConfig(['windsurf']));
+    const file = join(project, '.windsurfrules');
+    writeFileSync(file, 'operator original');
+    afterDeploy.mockImplementation(() => { throw new Error('after provider writes'); });
+    vi.resetModules();
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const args = ['decision-engine', '--provider', 'windsurf', '--target', project, '--json'];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(1);
+    const structured = JSON.parse(result.message!);
+    expect(structured.contextRollback.conflicts).toEqual([]);
+    expect(structured.contextRollback.restored).toContain(file);
+    expect(readFileSync(file, 'utf8')).toBe('operator original');
+    expect(existsSync(join(project, '.windsurf/rules/aiwg-orchestration.md'))).toBe(false);
+  });
+
+  it('rebuilds a recent shared graph from another source before verifying an addon', async () => {
+    vi.resetModules();
+    const { buildIndex } = await import('../../../../src/artifacts/index-builder.js');
+    const { loadGraphIndexFile } = await import('../../../../src/artifacts/index-reader.js');
+    const { useHandler } = await import('../../../../src/cli/handlers/use.js');
+    const partialRoot = join(tempRoot, 'partial-runtime');
+    write(partialRoot, 'agentic/code/frameworks/other/skills/unrelated/SKILL.md',
+      '---\nname: unrelated\n---\n# Unrelated\n');
+    await buildIndex(partialRoot, { graph: 'framework', quiet: true });
+    const before = loadGraphIndexFile<any>(project, 'metadata.json', 'framework');
+    expect(Object.keys(before.entries)).toHaveLength(1);
+    afterDeploy.mockImplementation(() => buildIndex(partialRoot, { graph: 'framework', quiet: true }));
+    // A fresh timestamp (or a reconcile receipt) cannot prove bundle coverage.
+    const args = ['decision-engine', '--provider', 'claude', '--target', project];
+    const result = await useHandler.execute({ cwd: project, frameworkRoot, rawArgs: ['use', ...args], args });
+    expect(result.exitCode, result.message).toBe(0);
+    const after = loadGraphIndexFile<any>(project, 'metadata.json', 'framework');
+    expect(after.entries['agentic/code/addons/decision-engine/skills/de-check/SKILL.md']).toBeDefined();
+    expect(after.entries['agentic/code/frameworks/other/skills/unrelated/SKILL.md']).toBeUndefined();
+  });
 
   it('cleans removed standard skills and bundle-root support files on addon redeploy', { timeout: 60000 }, async () => {
     const sourceRoot = join(tempRoot, 'sources');

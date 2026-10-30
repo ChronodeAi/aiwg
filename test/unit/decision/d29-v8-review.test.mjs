@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveProjectFloors } from '../../../src/gates/floors.js';
 import { prepareV7, buildReport } from '../../../tools/decision/studies/d29.mjs';
-import { freezeAdmissionClock, PREPARE_HOOK_TIMEOUT } from './d29-test-support.mjs';
+import { offlineD29GateInputs, freezeAdmissionClock, PREPARE_HOOK_TIMEOUT } from './d29-test-support.mjs';
 
 freezeAdmissionClock();
 
@@ -53,7 +53,7 @@ function run({ ceiling = 'PROMOTE', mutate, heldoutMut = heldout => heldout, gat
   const metadata = integrity();
   return buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout, integrity: metadata,
     trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(EVALUATED_AT),
-    firstTestAccessAt: FIRST_ACCESS, calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
+    ...offlineD29GateInputs(prepared, analysis, FIRST_ACCESS), calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
     projectRoot: PROJECT_ROOT, ...gate });
 }
 
@@ -176,7 +176,7 @@ describe('D29 v8 reviewer probes (ceiling raised to PROMOTE)', () => {
       splits: analysis.splits, samples: samplesOf() };
     const result = buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout,
       integrity: metadata, trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(EVALUATED_AT),
-      firstTestAccessAt: FIRST_ACCESS, calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
+      ...offlineD29GateInputs(prepared, analysis, FIRST_ACCESS), calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
       projectRoot: PROJECT_ROOT });
     expect(result.decision).toBe('ROLLBACK');
   });
@@ -187,7 +187,7 @@ describe('D29 v8 reviewer probes (ceiling raised to PROMOTE)', () => {
     const metadata = integrity();
     expect(() => buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout: null,
       integrity: { ...metadata, integrity_state: 'compromised' }, trustedIntegrityDigest: heldoutDigest(metadata),
-      nowEpochMs: Date.parse(EVALUATED_AT), firstTestAccessAt: FIRST_ACCESS,
+      nowEpochMs: Date.parse(EVALUATED_AT), ...offlineD29GateInputs(prepared, analysis, FIRST_ACCESS),
       calibrationAttestation: { id: 'staged-calibration-artifact', passed: true }, projectRoot: PROJECT_ROOT }))
       .toThrow(/digest does not match|report-anchor/);
   });
@@ -288,4 +288,14 @@ describe('D29 v7 dataset freeze (drift guard vs 9d30ab348)', () => {
       expect(study.corpus.rows.filter(row => row.split === 'test')).toHaveLength(1500);
     }
   }, 120_000);
+});
+
+it('preserves D29 binding, upstream and native-ceiling verdict tables (#2829)', () => {
+  for (const upstream of ['PROMOTE', 'HOLD', 'ROLLBACK']) for (const missing of [false, true]) {
+    const metadata = integrity();
+    metadata.release_gate.decision = upstream;
+    const observed = run({ heldoutMut: missing ? () => null : value => value,
+      gate: { integrity: metadata, trustedIntegrityDigest: heldoutDigest(metadata) } });
+    expect(observed.decision).toBe(upstream === 'ROLLBACK' ? 'ROLLBACK' : upstream === 'HOLD' || missing ? 'HOLD' : 'PROMOTE');
+  }
 });

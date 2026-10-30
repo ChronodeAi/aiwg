@@ -10,7 +10,8 @@ import type { GraphFlowRequest, GraphFlowResponse } from './graph-flow-adapter.j
 export interface GraphFlowReport {
   runId: string; status: string; stopReason: string;
   trace: Array<{ type: string; from?: string; to?: string; active?: boolean;
-    nodeId?: string; nodeRunId?: string; invocationKey?: string; attempt?: number; activation?: number; sequence?: number }>;
+    nodeId?: string; nodeRunId?: string; invocationKey?: string; attempt?: number; activation?: number; sequence?: number;
+    message?: string }>;
   results: Record<string, { outputs: Record<string, unknown>; usage: { tokens: number; costUsd: number; timeMs: number } }>;
   checkpoint: { skipped: string[]; completed: string[]; failed?: string[] };
   realizedResources: { tokens: number; costUsd: number; nodeRuns: number };
@@ -117,6 +118,15 @@ export function finalizeDecisionGraphRun(graph: DecisionGraph, plan: GraphPlan, 
       report.realizedResources.nodeRuns !== flowRecords.length + approvedGates ||
       report.realizedResources.tokens !== flowRecords.reduce((sum, item) => sum + item.response.usage.tokens, 0) ||
       Math.abs(report.realizedResources.costUsd - flowRecords.reduce((sum, item) => sum + item.response.usage.costUsd, 0)) > 1e-9) {
+    // Admission or settlement can reject (for example after a wall-clock deadline)
+    // before the adapter emits an observation. Flow retains that failure in its
+    // trace; surface the cause instead of misdiagnosing it as lost evidence.
+    // Still reject the run: an unobserved invocation cannot produce a receipt.
+    const failure = report.status === 'failed' && report.trace.find(event =>
+      event.type === 'node-attempt-failed' && event.nodeId && !observed.has(event.nodeId) &&
+      graph.nodes.some(node => node.id === event.nodeId) &&
+      report.checkpoint.failed?.includes(event.nodeId) && typeof event.message === 'string');
+    if (failure) throw new DecisionGraphError(`Flow graph node '${failure.nodeId}' failed before observation: ${failure.message}`);
     throw new DecisionGraphError('missing Flow graph observation');
   }
   const candidates = graph.terminals.filter(id => observed.get(id)?.status === 'ok');

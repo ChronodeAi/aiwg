@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import { runAiwgCli, mcpError, mcpJson } from '../helpers.mjs';
 import { registerFlowToolset, registerMissionToolset } from './orchestration.mjs';
 import { registerWorkerInvokeToolset, WORKERS_TOOLSET_NAME } from './worker-invoke.mjs';
@@ -187,7 +188,7 @@ function registerActivityLogToolset(server) {
     inputSchema: {
       since: z.string().optional().describe('Filter by date YYYY-MM-DD'),
       operation: z.string().optional().describe('Filter by operation token (e.g. "create", "deploy")'),
-      limit: z.number().int().min(1).max(1000).default(100),
+      limit: integer().min(1).max(1000).default(100),
     },
     readOnly: true,
     buildArgs: ({ since, operation, limit }) => {
@@ -256,7 +257,7 @@ function registerIndexToolset(server) {
     inputSchema: {
       keyword: z.string().optional().describe('Keyword query'),
       type: z.string().optional().describe('Artifact type filter'),
-      limit: z.number().int().min(1).max(500).default(50),
+      limit: integer().min(1).max(500).default(50),
     },
     readOnly: true,
     buildArgs: ({ keyword, type, limit }) => {
@@ -310,7 +311,7 @@ function registerRalphToolset(server) {
     inputSchema: {
       task: z.string().describe('Task description'),
       completion: z.string().describe('Measurable completion criteria (verification command)'),
-      max_cycles: z.number().int().min(1).max(500).default(20),
+      max_cycles: integer().min(1).max(500).default(20),
       confirmed: z.boolean().default(false).describe('Required (Ralph is long-running)'),
     },
     annotations: { destructiveHint: true },
@@ -415,13 +416,13 @@ function registerMcToolset(server) {
       session_id: z.string().describe('Session id'),
       objective: z.string().describe('Mission objective'),
       completion: z.string().optional().describe('Completion criteria'),
-      max_iterations: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
-      max_total_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
-      max_output_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
-      max_tool_calls: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
+      max_iterations: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Ralph iteration cap'),
+      max_total_tokens: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative token ceiling'),
+      max_output_tokens: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative output-token ceiling'),
+      max_tool_calls: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Hard cumulative tool-call ceiling'),
       max_total_cost: z.number().positive().finite().optional().describe('Hard cumulative provider-reported spend ceiling'),
       max_wall_clock_minutes: z.number().positive().finite().optional().describe('Hard cumulative runtime ceiling'),
-      exploration_quota: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
+      exploration_quota: integer().positive().max(Number.MAX_SAFE_INTEGER).optional().describe('Require structural variant after this many flat cycles (off unless declared; no default K)'),
       budget_stop_policy: z.enum(['completion-wins', 'budget-wins']).optional().describe('Stop semantics when the completing iteration crosses a ceiling (default: completion-wins)'),
     },
     buildArgs: ({

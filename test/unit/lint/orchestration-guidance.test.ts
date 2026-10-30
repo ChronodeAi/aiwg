@@ -5,15 +5,16 @@
  * These pin the guidance contracts that generated-context and skill tests
  * do not cover: concrete check-in numbers in the Tier 0 procedure,
  * Jev-first checkpoints with LLM fallback and no hard dependency, the
- * per-checkpoint `--caller` tags now that #2946 landed, and the absence of
- * unimplemented flags/tags the lane verified as missing in code (rule
- * summary/bound activation from #2942/#2645/#2646; doctor --groups /
- * steward --group).
+ * per-checkpoint `--caller` tags now that #2946 landed, and the supported
+ * summary/bound_to activation contract after the #2945 migration.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { validateDecisionAskInput, DecisionAskUsageError } from '../../../src/decision/ask.js';
+import { parseRuleFrontmatter } from '../../../src/rules/activation.mjs';
+import { parseWorkerCommandArgs, resolveWorkerEffectiveHealth } from '../../../src/serve/worker-invocation.js';
+import { parseWorkerLaunchArgs, parseWorkerStatusArgs } from '../../../tools/ralph-external/index.mjs';
 
 const ROOT = process.cwd();
 const read = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -27,6 +28,100 @@ const CODING_WRAPPER = 'agentic/code/addons/aiwg-utils/agents/aiwg-model-coding-
 const REASONING_WRAPPER = 'agentic/code/addons/aiwg-utils/agents/aiwg-model-reasoning-worker.md';
 
 describe('Tier 0 check-in guidance (#2914)', () => {
+  const walkthrough = () => read(SCOPING).split('#### Shell-only conductor check-in walkthrough (UC-OG-12)')[1]
+    .split('**Tier 0 brief/result/receipt templates**')[0];
+
+  it('shell-only walkthrough commands parse through the current CLI grammars (UC-OG-12)', () => {
+    // These examples use single-token paths; strip only shell continuations and
+    // capture/job operators, then pass the documented argv to the real parsers.
+    const commands = [...walkthrough().matchAll(/```sh\n([\s\S]*?)```/g)].map((match) =>
+      match[1].replace(/\\\n/g, ' ').trim().split(/\s+(?:>|2>|&)/)[0].split(/\s+/));
+    expect(commands).toHaveLength(8);
+    const [resolve, launch, startup, watch, diagnosis, stop, retry, commonCause] = commands;
+    expect(resolve.slice(0, 3)).toEqual(['aiwg', 'models', 'resolve']);
+    expect(parseWorkerCommandArgs(resolve.slice(3))).toEqual({
+      role: 'coding', task: 'implementation', group: 'qualified-group',
+      brief: '/absolute/worker-tree/.handoff/brief.md', workdir: '/absolute/worker-tree',
+      final_output: '/absolute/worker-tree/.handoff/final-1.json', transport: 'shell', format: 'json',
+    });
+    // The resolver only accepts a brief inside the qualified input root (default:
+    // --workdir) and a final output inside the worker-writable roots; an ad hoc
+    // JSON brief is refused, so the documented example must be plain text.
+    const parsed = parseWorkerCommandArgs(resolve.slice(3));
+    expect(parsed.brief.startsWith(`${parsed.workdir}/`)).toBe(true);
+    expect(parsed.final_output.startsWith(`${parsed.workdir}/`)).toBe(true);
+    expect(parsed.brief).not.toMatch(/\.json$/);
+    expect(launch.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
+    expect(parseWorkerLaunchArgs(launch.slice(2))).toEqual({
+      invocationPath: '/absolute/private/conductor/plan-1.json',
+      runDir: '/absolute/private/conductor/runs/attempt-1',
+    });
+    expect(retry.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
+    expect(parseWorkerLaunchArgs(retry.slice(2))).toEqual({
+      invocationPath: '/absolute/private/conductor/plan-2.json',
+      runDir: '/absolute/private/conductor/runs/attempt-2',
+      retryOf: { runDir: '/absolute/private/conductor/runs/attempt-1' },
+    });
+    const statuses = [startup, watch, diagnosis, stop, commonCause].map(command => {
+      expect(command.slice(0, 2)).toEqual(['aiwg', 'ralph-external']);
+      return parseWorkerStatusArgs(command.slice(2));
+    });
+    expect(statuses).toEqual([
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: false, observe: false, json: true },
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: true, observe: false, json: true, deadlineSeconds: 45 },
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: false, observe: false, json: true },
+      { runDir: '/absolute/private/conductor/runs/attempt-1', watch: false, observe: false, json: true },
+      { runsRoot: '/absolute/private/conductor/runs', watch: false, observe: false, json: true },
+    ]);
+  });
+
+  it('routes conductors through launcher/MCP and installed fail-closed verification', () => {
+    const text = read(SCOPING);
+    expect(text).toContain('Raw resolved-shell launch is for operators only');
+    expect(text).toContain('conductors use the launcher or MCP worker-invoke');
+    expect(text).toContain('aiwg ralph-external --verify-worker');
+    expect(text).toContain('ISOLATION_UNAVAILABLE');
+    expect(text).toContain('never hand-import a verifier from the task checkout');
+    expect(text).toContain('no degraded override');
+    expect(walkthrough()).toContain('--retry-of-run-dir');
+    expect(walkthrough()).not.toContain('PREDECESSOR_INVOCATION_ID');
+  });
+
+  it('walkthrough allowances match effective health defaults and retain resolved-window authority', () => {
+    const text = walkthrough();
+    const health = resolveWorkerEffectiveHealth(undefined, {
+      role: 'coding', effort: null, modelKey: 'fixture/model', profileRef: 'fixture',
+      wallSeconds: 1800, stepEnforcement: 'unavailable',
+    });
+    expect(text).toContain(`default ${health.checkSeconds}s`);
+    expect(text).toContain(`startup allowance is ${health.startupSeconds}s`);
+    expect(text).toContain(`${health.quietSeconds}s/${health.stallSeconds}s`);
+    expect(text).toContain(`diagnostic grace (default ${health.diagnosticGraceSeconds}s)`);
+    expect(text).toContain('Honor the resolved');
+    expect(text).toContain('thresholds.origins');
+    expect(text).toContain('truncatedWindows');
+    expect(text).toContain('xhigh/max');
+  });
+
+  it('walkthrough orders diagnosis, owned stop, quarantine and common-cause pause without expanding authority', () => {
+    const text = walkthrough();
+    const stages = ['**Resolve.', '**Launch once', '**Confirm startup.', '**Poll in short',
+      '**Diagnose quiet/stalled', '**Confirm the owned stop', '**Pause the common cause.'];
+    const positions = stages.map(stage => text.indexOf(stage));
+    expect(positions.every(position => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    for (const requirement of [
+      'no MCP, Mission/MC session', 'process-only', 'health.handshakeAt',
+      'maxCheckGapSeconds', 'do not prove progress', 'stale observer',
+      '`quiet` keeps waiting', '`stalled`', '`hung` after grace',
+      '`termination: confirmed`', 'Uncertain descendant termination blocks another writer',
+      'Quarantine by retaining the old worktree', 'verify any salvaged artifact independently',
+      'preserve model/effort pins and cumulative maxAttempts/time/step',
+      'one corrected startup', 'no automatic retry', 'account/quota/host scope',
+      'Status is diagnostic; the conductor owns this pause',
+    ]) expect(text, requirement).toContain(requirement);
+  });
+
   it('subagent-scoping Rule 9 states concrete cadence and thresholds', () => {
     const text = read(SCOPING);
     expect(text).toContain('Check every 15s');
@@ -168,12 +263,48 @@ describe('worker boundary wrappers (#2893)', () => {
   }
 });
 
-describe('unsupported surfaces stay unadvertised (#2943 / #2946 prerequisites)', () => {
-  it('no orchestration rule claims summary/bound activation', () => {
-    for (const file of [SCOPING]) {
-      const text = read(file);
-      expect(text).not.toMatch(/activation:\s*summary/);
-      expect(text).not.toMatch(/bound:/);
-    }
+describe('supported orchestration activation (#2945)', () => {
+  it('uses summary delivery with validated bindings and no obsolete bound field', () => {
+    // ADR 98–100, 256: subagent-scoping is summary with orchestration bindings;
+    // validate the declared contract instead of forbidding the migrated mode.
+    const result = parseRuleFrontmatter(read(SCOPING));
+    expect(result.diagnostics).toEqual([]);
+    expect(result.valid).toBe(true);
+    if (!result.valid) return;
+    expect(result.rule.activation).toBe('summary');
+    expect(Object.values(result.rule.bound_to).flat().length).toBeGreaterThan(0);
+    expect(result.data).not.toHaveProperty('bound');
+  });
+});
+
+// #3311 owns the kernel discovery rule and its mirrors; keep that explicit exception
+// until its companion migration lands. All other body-loading guidance is checked.
+function implicitShowBodies(text: string): string[] {
+  return text.split('\n').filter(line => /aiwg show/.test(line)
+    && !/--(?:body|section)\b/.test(line)
+    && /(?:streams? .*(?:body|content)|fetch(?:es)? (?:the |its |a )?(?:full |selected |artifact |skill |rule )*(?:body|bodies)|(?:body|bodies) (?:via|with|as fetched)|load(?:s)? .*before applying)/i.test(line));
+}
+describe('show metadata-card guidance (#3306)', () => {
+  it('rejects instructions that promise implicit body output', () => {
+    expect(implicitShowBodies('aiwg show skill demo # streams the SKILL.md body')).toHaveLength(1);
+    expect(implicitShowBodies('Fetch its body with `aiwg show skill demo`')).toHaveLength(1);
+    expect(implicitShowBodies('aiwg show skill demo --body # streams the body')).toEqual([]);
+    expect(implicitShowBodies('aiwg show skill demo --section "Steps" # fetch the body')).toEqual([]);
+    expect(implicitShowBodies('aiwg show skill demo # metadata card')).toEqual([]);
+  });
+  it('keeps source rule, skill, agent, and quickref instructions explicit about body access', () => {
+    const failures: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+        const relative = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(relative);
+        else if (entry.name.endsWith('.md') && !entry.name.startsWith('skill-discovery')
+          && /(?:rules|skills|agents)\//.test(relative.replaceAll('\\', '/'))) {
+          for (const line of implicitShowBodies(read(relative))) failures.push(`${relative}: ${line}`);
+        }
+      }
+    };
+    walk('agentic/code');
+    expect(failures).toEqual([]);
   });
 });

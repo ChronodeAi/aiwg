@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/memory/memory-record.v1.schema.json",
+  "title": "AIWG memory record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "sourcePath",
+    "digest",
+    "version",
+    "aliases",
+    "supersedes",
+    "mergedFrom",
+    "splitFrom",
+    "scope",
+    "placement",
+    "lifecycle",
+    "authority",
+    "observation"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "aiwg.memory-record.v1"
+    },
+    "id": {
+      "$ref": "#/$defs/digest"
+    },
+    "sourcePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\r\\n\\u0000]+$"
+    },
+    "digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "supersedes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "mergedFrom": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "splitFrom": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "scope": {
+      "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/scope"
+    },
+    "placement": {
+      "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/placement"
+    },
+    "lifecycle": {
+      "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/lifecycle"
+    },
+    "authority": {
+      "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/authority"
+    },
+    "observation": {
+      "$ref": "https://aiwg.io/schemas/memory/memory-taxonomy.v1.schema.json#/$defs/observation"
+    },
+    "sourceWorkspaceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tombstone": {
+      "$ref": "#/$defs/tombstone"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "digest",
+        "disposition",
+        "reason",
+        "reviewer",
+        "at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "disposition": {
+          "enum": [
+            "superseded",
+            "retired",
+            "quarantined",
+            "purged"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "successor": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "const": "retired"
+          }
+        },
+        "required": [
+          "lifecycle"
+        ]
+      },
+      "then": {
+        "required": [
+          "tombstone"
+        ],
+        "properties": {
+          "tombstone": {
+            "$ref": "#/$defs/tombstone"
+          }
+        }
+      }
+    }
+  ]
+}

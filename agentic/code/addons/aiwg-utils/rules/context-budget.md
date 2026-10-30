@@ -1,5 +1,89 @@
 ---
 enforcement: medium
+activation: bound
+summary: Check AIWG_CONTEXT_WINDOW and provider caps before dispatch; use the smallest applicable cap and batch work within the available context budget.
+bound_to:
+  skills:
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - artifact-orchestration
+    - chunk
+    - fanout
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+    - mission-control
+    - orchestrate-project
+    - parallel-dispatch
+    - ralph
+    - ralph-external
+    - ralph-resume
+    - rlm-batch
+    - rlm-mode
+    - rlm-prep
+    - rlm-query
+    - rlm-search
+    - rlm-status
+  agents:
+    - aiwg-orchestrator
+    - executive-orchestrator
+    - recovery-orchestrator
+    - rlm-agent
+    - ralph-loop
+    - ralph-verifier
+    - consortium-coordinator
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
 ---
 
 # Context Window Budget Rules

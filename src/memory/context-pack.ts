@@ -1,5 +1,8 @@
 import {
+  closeSync,
   existsSync,
+  openSync,
+  readSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -8,6 +11,7 @@ import {
 import { createHash } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
 import { loadFortemiCoreMetadataEntries } from '../artifacts/fortemi-core-query-adapter.js';
+import { load as loadYaml } from 'js-yaml';
 
 export type ContextTier = 'line' | 'wiki';
 export type ContextState = 'active' | 'stale' | 'contradicted' | 'superseded' | 'revoked' | 'origin-unavailable';
@@ -70,7 +74,7 @@ const EXCLUDED_STATES = new Set<ContextState>([
   'contradicted', 'superseded', 'revoked', 'origin-unavailable',
 ]);
 
-function sha256(value: string): string {
+export function sha256(value: string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
@@ -126,8 +130,16 @@ function lineCandidates(root: string, taskTerms: readonly string[]): ContextCand
     const parsed = JSON.parse(readFileSync(metadataPath, 'utf8')) as { entries?: Record<string, Record<string, unknown>> };
     entries = parsed.entries ?? {};
   }
-  return values.map<ContextCandidate>((text, index) => {
-    const entry = Object.values(entries).find(candidate => candidate.value === text && candidate.status === 'active');
+  const activeEntry = (entry: Record<string, unknown>): boolean => {
+    const maintenance = entry.maintenance as { placement?: string; lifecycle?: string } | undefined;
+    return entry.status === 'active' && (!maintenance?.placement || maintenance.placement === 'resident')
+      && (!maintenance?.lifecycle || maintenance.lifecycle === 'active');
+  };
+  return values.filter(text => {
+    const matching = Object.values(entries).filter(entry => entry.value === text);
+    return matching.length === 0 || matching.some(activeEntry);
+  }).map<ContextCandidate>((text, index) => {
+    const entry = Object.values(entries).find(candidate => candidate.value === text && activeEntry(candidate));
     const sources = Array.isArray(entry?.sources) ? entry.sources : [];
     const score = lexicalScore(taskTerms, text);
     return {
@@ -155,6 +167,44 @@ function markdownText(raw: string): string {
     .trim();
 }
 
+const WIKI_HEAD_BYTES = 64 * 1024;
+
+function readWikiHead(target: string): string {
+  const descriptor = openSync(target, 'r');
+  try {
+    const buffer = Buffer.alloc(WIKI_HEAD_BYTES);
+    const length = readSync(descriptor, buffer, 0, buffer.length, 0);
+    return buffer.toString('utf8', 0, length);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/** Canonical dispositions override a stale local or remote index snapshot. */
+function ordinaryWikiSource(raw: string, locator: string, indexed?: { lifecycle: string; placement: string }): boolean {
+  if (indexed && (indexed.lifecycle !== 'active' || indexed.placement === 'archived')) return false;
+  const frontmatter = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!frontmatter) {
+    if (/^---\r?\n/.test(raw) && Buffer.byteLength(raw) >= WIKI_HEAD_BYTES) {
+      console.warn(`context-pack: ${locator}: frontmatter exceeds the 64 KiB scan limit; disposition cannot be verified`);
+      return false;
+    }
+    if (/^---\r?\n/.test(raw)) {
+      console.warn(`context-pack: ${locator}: malformed frontmatter without a closing delimiter; including page`);
+      return true;
+    }
+    return !indexed;
+  }
+  try {
+    const data = loadYaml(frontmatter[1]) as { memoryRecord?: { lifecycle?: string; placement?: string } } | null;
+    const record = data?.memoryRecord;
+    return record ? record.lifecycle === 'active' && record.placement !== 'archived' : !indexed;
+  } catch (error) {
+    console.warn(`context-pack: ${locator}: malformed frontmatter; including page (${error instanceof Error ? error.message : String(error)})`);
+    return true;
+  }
+}
+
 function wikiCandidates(root: string, taskTerms: readonly string[], maxFiles: number): ContextCandidate[] {
   const wikiRoot = resolve(root, '.aiwg/wiki');
   if (!existsSync(wikiRoot)) return [];
@@ -176,7 +226,8 @@ function wikiCandidates(root: string, taskTerms: readonly string[], maxFiles: nu
       if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name === 'index.md') continue;
       visited += 1;
       const locator = projectLocator(root, target);
-      const raw = readFileSync(target, 'utf8').slice(0, 65536);
+      const raw = readWikiHead(target);
+      if (!ordinaryWikiSource(raw, locator)) continue;
       const text = markdownText(raw).slice(0, 1200);
       const score = lexicalScore(taskTerms, text);
       if (score <= 0) continue;
@@ -212,7 +263,8 @@ function fortemiWikiCandidates(
     const target = resolve(root, entry.path);
     if (!existsSync(target)) continue;
     const locator = projectLocator(root, target);
-    const raw = readFileSync(target, 'utf8').slice(0, 65536);
+    const raw = readWikiHead(target);
+    if (!ordinaryWikiSource(raw, locator, entry.memoryRecord)) continue;
     const text = markdownText(raw).slice(0, 1200);
     const score = lexicalScore(taskTerms, [entry.title, entry.summary, text].join(' '));
     if (score <= 0) continue;

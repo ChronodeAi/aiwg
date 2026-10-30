@@ -12,6 +12,10 @@ import {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { frameworkSourceDigest } from '../../src/artifacts/framework-source-digest.ts';
+import { buildPrebuiltRelations } from '../../src/artifacts/prebuilt-relations.ts';
+import { getGraphIndexDir } from '../../src/artifacts/types.ts';
+import { PREBUILT_RELATIONS_DIR } from '../../src/artifacts/relations.ts';
 import { acquireDirectoryLock } from '../../src/artifacts/prebuilt-build-lock.ts';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -22,7 +26,7 @@ const generatedAt = process.env.AIWG_PREBUILT_INDEX_GENERATED_AT ?? '1970-01-01T
 
 process.env.AIWG_ROOT ??= repoRoot;
 
-const releaseLock = await acquireDirectoryLock(lockRoot);
+const releaseLock = await acquireDirectoryLock(lockRoot, { reclaimDeadOwner: true });
 let nextRoot;
 let previousRoot;
 let size = 0;
@@ -36,6 +40,17 @@ try {
   nextRoot = mkdtempSync(path.join(prebuiltRoot, '.framework-next-'));
 
   await buildIndex(repoRoot, { graph: 'framework', force: true, explicit: true });
+
+  const metadata = JSON.parse(readFileSync(path.join(getGraphIndexDir(repoRoot, 'framework'), 'metadata.json'), 'utf8'));
+  const tables = buildPrebuiltRelations(repoRoot, Object.values(metadata.entries));
+  const relationDir = path.join(repoRoot, PREBUILT_RELATIONS_DIR);
+  mkdirSync(relationDir, { recursive: true });
+  // Manifest is published last: partial writes fail checksum validation.
+  for (const [file, text] of Object.entries(tables)) {
+    const temp = path.join(relationDir, `${file}.${process.pid}.tmp`);
+    writeFileSync(temp, text);
+    renameSync(temp, path.join(relationDir, file));
+  }
 
   const exported = buildAiwgFortemiIndexExport(repoRoot, {
     graph: 'framework',
@@ -78,6 +93,12 @@ try {
     delete item.chunks;
   }
 
+  const sourceStats = JSON.parse(readFileSync(path.join(getGraphIndexDir(repoRoot, 'framework'), 'stats.json'), 'utf8'));
+  sourceStats.builtAt = generatedAt;
+  sourceStats.buildTimeMs = 0;
+  const sourceStatsJson = JSON.stringify(sourceStats) + '\n';
+  writeFileSync(path.join(nextRoot, 'source-stats.json'), sourceStatsJson, 'utf8');
+
   const exportJson = JSON.stringify(exported) + '\n';
   const checksum = createHash('sha256').update(exportJson).digest('hex');
   const exportPath = path.join(nextRoot, 'aiwg-fortemi-index-v2.json');
@@ -93,6 +114,9 @@ try {
     export_checksum: checksum,
     item_count: exported.items.length,
     privacy: 'public',
+    package_version: JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8')).version,
+    source_digest: frameworkSourceDigest(repoRoot, false),
+    source_stats_checksum: createHash('sha256').update(sourceStatsJson).digest('hex'),
   };
   writeFileSync(path.join(nextRoot, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
 

@@ -40,28 +40,40 @@ export function canDeploySkill(receipt, skillSource, { force = false } = {}) {
 
 /** Remove unchanged recorded files, allowing symlinks above (but never inside) the skill root. */
 export function pruneRecordedSkillFiles(skillDir, managed, desired, opts = {}) {
-  if (opts.dryRun) return;
+  const root = path.resolve(skillDir);
   for (const [relative, record] of Object.entries(managed || {})) {
-    if (desired.has(relative)) continue;
     const target = path.resolve(skillDir, relative);
-    if (!target.startsWith(`${path.resolve(skillDir)}${path.sep}`)) continue;
+    let action = 'preserve';
+    let reason = 'modified or unverifiable managed file';
+    if (desired.has(relative)) reason = 'retained managed file';
+    else if (!target.startsWith(`${root}${path.sep}`)) reason = 'path outside skill directory';
+    else {
+      try {
+        const expected = path.resolve(fs.realpathSync(skillDir), relative);
+        let current = target;
+        let symlink = false;
+        while (current !== root) {
+          if (fs.lstatSync(current).isSymbolicLink()) { symlink = true; break; }
+          current = path.dirname(current);
+        }
+        if (symlink) reason = 'symlink preserved';
+        else if (fs.realpathSync(target) === expected && fs.lstatSync(target).isFile()
+          && `sha256:${createHash('sha256').update(fs.readFileSync(target)).digest('hex')}` === record?.hash) {
+          action = 'remove';
+          reason = 'unchanged managed file';
+        }
+      } catch { reason = 'missing or unreadable path; cannot verify'; }
+    }
+    opts.plan?.push({ path: target, action, reason });
+    if (opts.dryRun || action !== 'remove') continue;
     try {
-      const expected = path.resolve(fs.realpathSync(skillDir), relative);
-      let current = target;
-      let symlink = false;
-      while (current !== path.resolve(skillDir)) {
-        if (fs.lstatSync(current).isSymbolicLink()) { symlink = true; break; }
-        current = path.dirname(current);
-      }
-      if (symlink || fs.realpathSync(target) !== expected || !fs.lstatSync(target).isFile()) continue;
-      if (`sha256:${createHash('sha256').update(fs.readFileSync(target)).digest('hex')}` !== record.hash) continue;
       fs.unlinkSync(target);
       let parent = path.dirname(target);
-      while (parent !== path.resolve(skillDir)) {
+      while (parent !== root) {
         try { fs.rmdirSync(parent); } catch { break; }
         parent = path.dirname(parent);
       }
-    } catch { /* missing, modified, or unreadable files are left alone */ }
+    } catch { /* Files that cannot be removed are left alone. */ }
   }
 }
 
@@ -80,9 +92,15 @@ export function releaseSkillOwnership(skillDir, owner, opts = {}) {
     && !path.isAbsolute(path.relative(path.resolve(owner.sourceRoot), path.resolve(receipt.skillSource)));
   if (!insideRoot && (slug ? slug !== owner.frameworkSlug
     : !owner.skillSource || !sameSkillOwner(receipt, owner.skillSource, null))) return null;
-  if (opts.dryRun) return false;
   pruneRecordedSkillFiles(skillDir, receipt.managed, new Set(), opts);
-  fs.rmSync(manifestPath, { force: true });
-  fs.rmSync(path.join(skillDir, '.aiwg-managed'), { force: true });
+  for (const target of [manifestPath, path.join(skillDir, '.aiwg-managed')]) {
+    // Metadata is released even when operator files keep the directory alive.
+    try {
+      fs.lstatSync(target);
+      opts.plan?.push({ path: path.resolve(target), action: 'remove', reason: 'ownership metadata released' });
+    } catch { /* Missing metadata has nothing to remove. */ }
+    if (!opts.dryRun) fs.rmSync(target, { force: true });
+  }
+  if (opts.dryRun) return false;
   try { fs.rmdirSync(skillDir); return true; } catch { return false; }
 }

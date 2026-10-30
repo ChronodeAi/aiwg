@@ -20,12 +20,20 @@ import {
 } from '../../../src/artifacts/index-builder.js';
 import { discoverCapability } from '../../../src/artifacts/query-engine.js';
 import type { ArtifactIndex } from '../../../src/artifacts/types.js';
-import { GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifacts/types.js';
+import { getGraphIndexDir, GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifacts/types.js';
 
 let tmpRoot: string;
 let cwd: string;
 
+function markRuntimeRoot(root: string): void {
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'aiwg' }));
+  for (const kind of ['frameworks', 'addons', 'extensions', 'agents', 'behaviors']) {
+    fs.mkdirSync(path.join(root, 'agentic/code', kind), { recursive: true });
+  }
+}
+
 function writeSkill(slug: string, framework: string, body: string): string {
+  markRuntimeRoot(cwd);
   const dir = path.join(cwd, 'agentic', 'code', 'frameworks', framework, 'skills', slug);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'SKILL.md');
@@ -253,13 +261,8 @@ describe('buildIndex → type inference', () => {
     consoleSpy.mockRestore();
     consoleErrSpy.mockRestore();
 
-    const indexDir = path.join(process.env.XDG_DATA_HOME as string, 'aiwg', 'index', 'framework');
+    const indexDir = getGraphIndexDir(cwd, 'framework');
     const metadataPath = path.join(indexDir, 'metadata.json');
-    if (!fs.existsSync(metadataPath)) {
-      // Test environment may have a different writer; skip the rest
-      // gracefully rather than failing on env drift.
-      return;
-    }
     const idx: ArtifactIndex = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
     const byPath = new Map<string, string>();
     for (const e of Object.values(idx.entries)) {
@@ -877,6 +880,7 @@ describe('discoverCapability — Flow documents surface in default discover (#15
     // A declarative Flow doc under the framework tree — parseFlowDoc must
     // classify it `type: flow`, and `flow` must be in DEFAULT_DISCOVER_TYPES
     // so it surfaces without an explicit `--type flow` filter (#1540).
+    markRuntimeRoot(cwd);
     const flowDir = path.join(cwd, 'agentic', 'code', 'frameworks', 'fx', 'flows');
     fs.mkdirSync(flowDir, { recursive: true });
     fs.writeFileSync(
@@ -1035,6 +1039,7 @@ describe('discoverCapability — deployed commands are discoverable (#1541)', ()
   // so the cwd-only auto-build never fired.
 
   function writeFrameworkCommand(root: string, slug: string, desc: string): void {
+    markRuntimeRoot(root);
     const dir = path.join(root, 'agentic', 'code', 'frameworks', 'fx', 'commands');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${slug}.md`), `---\ndescription: ${desc}\n---\n\n# ${slug}\n`, 'utf8');

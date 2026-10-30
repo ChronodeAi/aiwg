@@ -4,17 +4,12 @@
  * Assertions:
  *  - Token enforcement: authenticate() returns false for missing/wrong token
  *  - Loopback default: first register from loopback is the happy path
- *  - Non-loopback first-register triggers token rotation (per ADR §9)
- *    → rotated token differs from original
- *    → old token rejected
- *    → new token accepted
- *  - Token persistence across registry restart (identity store)
+ *  - Authenticated re-registration preserves the issued token
+ *  - Missing/wrong credentials cannot reclaim an existing identity
  *
- * Note: token rotation on non-loopback is implemented in the serve.ts
- * HTTP handler (it detects the remote address). The ExecutorRegistry itself
- * preserves the token invariant (re-register reclaims prior token). The
- * conformance test for non-loopback rotation exercises the fixture assertions
- * and the registry's token reclaim guarantee.
+ * Historical token-rotation fixture assertions remain hash-pinned below.
+ * Runtime registry checks use the current authenticated reclaim contract;
+ * the caller's source address never substitutes for its bearer credential.
  *
  * @level Core
  * @issue #1183
@@ -44,6 +39,7 @@ describe('[Core] Auth — fixture integrity', () => {
 
 describe('[Core] Auth — token enforcement', () => {
   let registry;
+  let issuedToken;
   const executorId = 'c3d4e5f6-a7b8-9012-cdef-345678901234';
 
   beforeAll(async () => {
@@ -51,14 +47,17 @@ describe('[Core] Auth — token enforcement', () => {
 
     const fixture = loadFixture('auth-token-rotation');
     // Register from phase_1 (loopback)
-    registry.register(fixture.phase_1_initial_loopback_register.request.body);
+    const result = registry.register(fixture.phase_1_initial_loopback_register.request.body, issuedToken);
+    expect(result).not.toHaveProperty('error');
+    issuedToken = result.token;
   });
 
   afterAll(() => { try { registry.shutdown(); } catch { /* ignore */ } });
 
   it('authenticate returns true for correct token', () => {
     const fixture = loadFixture('auth-token-rotation');
-    const { token } = registry.register(fixture.phase_1_initial_loopback_register.request.body);
+    const { token } = registry.register(fixture.phase_1_initial_loopback_register.request.body, issuedToken);
+    expect(token).toBe(issuedToken);
     expect(registry.authenticate(executorId, token)).toBe(true);
   });
 
@@ -84,14 +83,14 @@ describe('[Core] Auth — loopback registration (happy path)', () => {
 
   beforeAll(async () => {
     ({ registry } = await createRegistryForTest());
-    const result = registry.register(fixture.phase_1_initial_loopback_register.request.body);
+    const result = registry.register(fixture.phase_1_initial_loopback_register.request.body, issuedToken);
     issuedToken = result.token;
   });
 
   afterAll(() => { try { registry.shutdown(); } catch { /* ignore */ } });
 
   it('loopback registration returns 201-shape (no error)', () => {
-    const result = registry.register(fixture.phase_1_initial_loopback_register.request.body);
+    const result = registry.register(fixture.phase_1_initial_loopback_register.request.body, issuedToken);
     expect(result).not.toHaveProperty('error');
     expect(result).toHaveProperty('executor_id');
     expect(result).toHaveProperty('token');
@@ -99,7 +98,7 @@ describe('[Core] Auth — loopback registration (happy path)', () => {
   });
 
   it('register_response validates against schema', () => {
-    const result = registry.register(fixture.phase_1_initial_loopback_register.request.body);
+    const result = registry.register(fixture.phase_1_initial_loopback_register.request.body, issuedToken);
     const { valid, errors } = validateSchema(
       'executor.aiwg.io/v1#/$defs/register_response',
       result
@@ -126,7 +125,7 @@ describe('[Core] Auth — token persistence on re-register', () => {
     const body = fixture.phase_1_initial_loopback_register.request.body;
 
     const first  = registry.register(body);
-    const second = registry.register(body);
+    const second = registry.register(body, first.token);
 
     expect(second.token).toBe(first.token);
     expect(first).not.toHaveProperty('error');
@@ -134,17 +133,18 @@ describe('[Core] Auth — token persistence on re-register', () => {
   });
 
   it('re-register with different source does not change token (registry invariant)', async () => {
-    // The token rotation on non-loopback is a serve.ts HTTP layer concern.
-    // The registry itself always reclaims the prior token.
+    // A different source must still authenticate to reclaim the prior token.
     ({ registry } = await createRegistryForTest());
 
     const loopbackBody = fixture.phase_1_initial_loopback_register.request.body;
     const nonLoopbackBody = fixture.phase_2_non_loopback_register.request.body;
 
     const first  = registry.register(loopbackBody);
-    const second = registry.register(nonLoopbackBody);
+    const second = registry.register(nonLoopbackBody, first.token);
 
-    // Registry reclaims token (token rotation is a serve.ts concern)
+    expect(first).not.toHaveProperty('error');
+    expect(second).not.toHaveProperty('error');
+    // Authenticated registration preserves identity regardless of source.
     expect(second.token).toBe(first.token);
   });
 });

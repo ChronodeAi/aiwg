@@ -17,6 +17,7 @@
  */
 
 import * as fs from 'fs';
+import { refIdFromFilename } from '../../research/identity.js';
 import * as path from 'path';
 import { load as loadYaml } from 'js-yaml';
 
@@ -100,8 +101,7 @@ export function loadIntegrityPatterns(root: string): CompiledPattern[] {
 const SEVERITY_RANK: Record<Severity, number> = { none: 0, low: 1, medium: 2, high: 3, critical: 4 };
 
 function refFromPath(p: string): string {
-  const m = p.match(/REF-\d{3,}[a-z]?/);
-  return m ? m[0] : 'NO-REF';
+  return refIdFromFilename(path.basename(p), path.extname(p)) ?? 'NO-REF';
 }
 
 function excerpt(line: string, limit = 220): string {
@@ -175,7 +175,7 @@ function scoreFindings(findings: Finding[]): Record<string, RefSummary> {
 }
 
 export interface ScanOptions {
-  /** Limit to paths containing this REF id (e.g. "REF-888"). */
+  /** Limit to files with this exact REF id (e.g. "REF-888"). */
   ref?: string;
   /** Explicit target files/dirs (relative to root or absolute). Defaults to the corpus text dirs. */
   targets?: string[];
@@ -189,7 +189,7 @@ export function scanCorpus(root: string, opts: ScanOptions = {}): ScanResult {
 
   const findings: Finding[] = [];
   for (const file of iterFiles(targets)) {
-    if (opts.ref && !file.includes(opts.ref)) continue;
+    if (opts.ref && refFromPath(file) !== opts.ref) continue;
     findings.push(...scanFile(root, file, patterns));
   }
   return { findings, summary: scoreFindings(findings) };

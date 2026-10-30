@@ -9,6 +9,9 @@ triggers:
   - mine governance corpus
   - archive governance baseline
   - migration inventory for governance addon
+commandHint:
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Governance Corpus Inventory

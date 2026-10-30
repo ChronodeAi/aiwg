@@ -80,7 +80,7 @@ Map user requests to marketing workflows:
 
 #### 2. Resolve Canonical Skills Through Discovery
 
-Use `marketing-quickref`, then `aiwg discover "<marketing need>"` and `aiwg show skill <name>`. Canonical marketing skills define:
+Use `marketing-quickref`, then `aiwg discover "<marketing need>"` and `aiwg show skill <name> --body`. Canonical marketing skills define:
 
 - **Artifacts to generate**: What documents/deliverables
 - **Agent assignments**: Who creates, who reviews

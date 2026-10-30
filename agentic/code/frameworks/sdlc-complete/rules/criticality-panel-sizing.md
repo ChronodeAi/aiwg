@@ -1,5 +1,15 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Size review panels and agreement thresholds by task criticality; include required reviewers, escalate low confidence, and log justified human overrides."
+bound_to:
+  agents: ["code-reviewer", "executive-orchestrator", "quality-assessor", "security-auditor"]
+  skills: ["artifact-orchestration", "flow-gate-check", "flow-security-review-cycle", "gate-evaluation", "pr-review"]
+  flows: ["flow-gate-check", "flow-security-review-cycle"]
+triggers:
+  - "choose review panel size by criticality"
+  - "ensemble review agreement threshold"
+  - "log review criticality override"
 ---
 
 # Criticality-Based Panel Sizing Rules

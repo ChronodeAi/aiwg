@@ -12,6 +12,8 @@
  */
 
 import type { CommandMetadata, Extension, SkillMetadata } from '../types.js';
+import { daemonCommand, behaviorCommand, daemonInitCommand, housekeeperCommand } from './daemon.js';
+export { daemonCommand, behaviorCommand, daemonInitCommand, housekeeperCommand } from './daemon.js';
 
 // ============================================
 // Individual Command Definitions
@@ -209,6 +211,25 @@ export const decisionCommand: Extension = {
     type: 'command',
     template: 'utility',
     argumentHint: '<capabilities|patterns|validate|evaluate|setup> [options]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
+export const rulesCommand: Extension = {
+  id: 'rules',
+  type: 'command',
+  name: 'Rule Pins',
+  description: 'Pin installed rules to every request and manage reusable capability groups',
+  version: '1.0.0',
+  capabilities: ['cli', 'rules', 'configuration', 'activation'],
+  keywords: ['rules', 'pin', 'unpin', 'pinned', 'tier', 'capability', 'group'],
+  category: 'config',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<pin|unpin|pinned|group> [rules...] [--tier tiers] [--capability ids] [--group name] [--all] [--dry-run] [--json]',
     allowedTools: ['Read', 'Write', 'Bash'],
   } satisfies CommandMetadata,
 };
@@ -699,6 +720,7 @@ export const initCommand: Extension = {
     triggerPhrases: ['init project', 'setup project config', 'configure providers'],
     commandHint: {
       template: 'utility',
+      argumentHint: '[--scope project|user] [--intent code|docs|ops|mixed] [--credential <provider>=stdin|file:PATH|store:NAME|env:NAME] [--jev enable|decline|defer]',
       allowedTools: ['Read', 'Write'],
     },
   } satisfies SkillMetadata,
@@ -731,7 +753,7 @@ export const setupCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: 'project [--yes] [--dry-run] [--target <dir>]',
+      argumentHint: 'project [--yes] [--dry-run] [--review] [--apply] [--plan <id>] [--target <dir>] [--scope project|user] [--workspace <root>] [--monorepo root|package] [--package <root>] [--scan-roots <dir>] [--intent code|docs|ops|mixed] [--credential <provider>=stdin|file:PATH|store:NAME|env:NAME] [--jev enable|decline|defer]',
       allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,
@@ -1711,14 +1733,14 @@ export const discoverCommand: Extension = {
 };
 
 // Show: companion to `discover`. Where `discover` ranks candidates,
-// `show` fetches the full body of one specific artifact (#1218). This
+// `show` returns a metadata card with explicit section/body drill-ins. This
 // closes the loop so consumers never need to navigate AIWG's storage
 // paths themselves — the CLI is the access point.
 export const showCommand: Extension = {
   id: 'show',
   type: 'skill',
   name: 'Show',
-  description: 'Print the full text of a specific AIWG skill, agent, command, or rule by name',
+  description: 'Show an AIWG artifact metadata card; use --section or --body for content',
   version: '1.0.0',
   capabilities: ['cli', 'discovery', 'read', 'capability', 'skills'],
   keywords: ['show', 'cat', 'read skill', 'print skill', 'get skill content', 'aiwg show'],
@@ -1742,7 +1764,7 @@ export const showCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '<type> <name> [--json] [--first] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]   # type: skill | agent | command | rule',
+      argumentHint: '<type> <name> [--body] [--section <heading>] [--rules] [--resources] [--json] [--first] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]   # type: skill | agent | command | rule',
       allowedTools: ['Read'],
     },
   } satisfies SkillMetadata,
@@ -3252,96 +3274,6 @@ export const reproducibilityValidateCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
-export const behaviorCommand: Extension = {
-  id: 'behavior',
-  type: 'skill',
-  name: 'Behavior',
-  description: 'Manage behavior YAML bundles that bind directives and toolsets to agent types',
-  version: '1.0.0',
-  capabilities: ['cli', 'behavior', 'daemon', 'configuration'],
-  keywords: ['behavior', 'directive', 'toolset', 'daemon', 'ops', 'agent-type'],
-  category: 'daemon',
-  platforms: {
-    claude: 'full',
-    factory: 'full',
-    codex: 'full',
-    generic: 'full',
-  },
-  deployment: {
-    pathTemplate: '.{platform}/commands/{id}.md',
-    core: false,
-  },
-  metadata: {
-    type: 'skill',
-    triggerPhrases: ['behavior', 'list behaviors', 'apply behavior', 'manage behaviors'],
-    commandHint: {
-      template: 'utility',
-      argumentHint: '<list|info|apply|remove> [name] [--to <agent>] [--from <agent>]',
-      allowedTools: ['Read', 'Bash', 'Write'],
-    },
-  } satisfies SkillMetadata,
-};
-
-export const daemonCommand: Extension = {
-  id: 'daemon',
-  type: 'skill',
-  name: 'Daemon',
-  description: 'Manage the AIWG daemon and its subsystems',
-  version: '1.0.0',
-  capabilities: ['cli', 'daemon', 'background-agent', 'automation'],
-  keywords: ['daemon', 'start', 'stop', 'status', 'logs', 'background', 'automation'],
-  category: 'daemon',
-  platforms: {
-    claude: 'full',
-    factory: 'full',
-    codex: 'full',
-    generic: 'full',
-  },
-  deployment: {
-    pathTemplate: '.{platform}/commands/{id}.md',
-    core: false,
-  },
-  metadata: {
-    type: 'skill',
-    triggerPhrases: ['daemon', 'daemon start', 'daemon status', 'daemon logs', 'manage daemon'],
-    commandHint: {
-      template: 'utility',
-      argumentHint: '<init|start|stop|status|logs|restart|attach|chat|task|rooms|autonomous|schedule|memory|pty> [options]',
-      allowedTools: ['Bash', 'Read', 'Write'],
-    },
-  } satisfies SkillMetadata,
-};
-
-export const daemonInitCommand: Extension = {
-  id: 'daemon-init',
-  type: 'skill',
-  name: 'Daemon Init',
-  description: 'Initialize daemon config from a profile template (default: manager)',
-  version: '1.0.0',
-  capabilities: ['cli', 'daemon', 'configuration', 'scaffolding'],
-  keywords: ['daemon', 'init', 'profile', 'manager', 'orchestrator', 'config'],
-  category: 'daemon',
-  platforms: {
-    claude: 'full',
-    factory: 'full',
-    codex: 'full',
-    generic: 'full',
-  },
-  deployment: {
-    pathTemplate: '.{platform}/commands/{id}.md',
-    core: false,
-  },
-  metadata: {
-    type: 'skill',
-    triggerPhrases: ['daemon init', 'init daemon', 'initialize daemon', 'daemon setup'],
-    commandHint: {
-      template: 'utility',
-      argumentHint: '[profile-name] [--force]',
-      allowedTools: ['Bash', 'Read', 'Write'],
-    },
-  } satisfies SkillMetadata,
-};
-
 // Config Commands
 
 export const configCommand: Extension = {
@@ -3517,7 +3449,7 @@ export const memoryCommand: Extension = {
   id: 'memory',
   type: 'skill',
   name: 'Memory',
-  description: 'Storage operations on the AIWG memory subsystem, plus user-level project memory registry commands under ~/.aiwg/projects',
+  description: 'Read-only memory audit/cost/recommend/verify, reviewed plan/apply/restore, storage and project memory registry commands',
   version: '1.0.0',
   capabilities: ['cli', 'memory', 'semantic-memory', 'storage', 'pkm', 'project-memory', 'user-registry'],
   keywords: ['memory', 'semantic-memory', 'project-memory', 'registry', 'reflections', 'pages'],
@@ -3535,11 +3467,16 @@ export const memoryCommand: Extension = {
     triggerPhrases: ['where is memory', 'memory path', 'list memory', 'project memory', 'aiwg memory'],
     commandHint: {
       template: 'utility',
-      argumentHint: '<path|list|get|put|delete|append-log|project> [options]',
+      argumentHint: '<audit|cost|recommend|plan|apply|verify|restore|path|list|get|put|delete|append-log|project> [options]',
       allowedTools: ['Bash', 'Read'],
       executionSteps: [
         'Parse subcommand and arguments',
-        'Resolve storage adapter for memory subsystem',
+        'For audit, parse --scope global|project|provider, --provider <id>, --json, --cost strictly; default to workspace and perform a bounded read-only inventory',
+        'For cost, run the same read-only inventory through the resident-cost view (--demote, --startup-measurement, --usage only read; nothing is written)',
+        'For recommend and verify, run read-only reports; verify --plan checks existing owner receipts, retained history and published end states without refresh',
+        'For plan/apply/restore, show project targeting, diff, owner review and next-session limits; mutation requires exact reviewed owner plans',
+        'Use maintenance exit codes 0 success, 1 findings, 2 usage, 3 stale or failed',
+        'Resolve storage adapter for storage operations only',
         'Read/write/list/delete/append-log via the adapter or manage project-memory mappings',
         'Print result',
       ],
@@ -3948,7 +3885,7 @@ export const rlmCacheCommand: Extension = {
  * - SDLC Orchestration (1): sdlc-accelerate
  * - Index (1): index
  * - Reproducibility (4): execution-mode, snapshot, checkpoint, reproducibility-validate
- * - Daemon (2): behavior, daemon-init
+ * - Daemon (4): daemon, behavior, daemon-init, housekeeper
  * - Config (1): config
  * - Ops (1): ops
  * - Agentic Tools (5): chunk, fanout, rlm-prep, rlm-search, rlm-status
@@ -3963,6 +3900,7 @@ export const commandDefinitions: Extension[] = [
   updateCommand,
   installationCommand,
   decisionCommand,
+  rulesCommand,
   gatesCommand,
   refreshCommand,
   regenerateCommand,
@@ -4101,10 +4039,11 @@ export const commandDefinitions: Extension[] = [
   checkpointCommand,
   reproducibilityValidateCommand,
 
-  // Daemon (3)
+  // Daemon (4)
   daemonCommand,
   behaviorCommand,
   daemonInitCommand,
+  housekeeperCommand,
 
   // Config (1)
   configCommand,

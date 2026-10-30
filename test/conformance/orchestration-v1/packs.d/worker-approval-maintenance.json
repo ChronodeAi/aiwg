@@ -1,0 +1,8 @@
+{
+  "T-OG-12": {
+    "testFiles": [
+      "test/unit/cli/doctor-worker-approvals.test.ts",
+      "test/unit/models/worker-installation-store.test.ts"
+    ]
+  }
+}

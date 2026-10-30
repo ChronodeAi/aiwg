@@ -3,16 +3,19 @@
 > **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
 AIWG is connected to the target project and your provider session can read the deployed context.
 
-Before installing AIWG, ensure you have the following requirements.
+Before installing AIWG, ensure you have the following requirements. Each section starts with what you can ask your assistant, then gives the command reference.
 
 ## Required
 
+> "Check whether this computer meets the AIWG prerequisites. Do not change anything yet, just report Node, npm, platform, and Git."
+
+Your assistant checks the installed versions against the requirements below and reports what is missing before changing anything.
+
 ### Node.js ≥24
 
-```bash
-node --version  # Should show v24.x.x or higher
-npm --version
-```
+> "Check my Node.js and npm versions against the AIWG floor and tell me the safest next step if they fall short."
+
+Your assistant compares `node --version` and `npm --version` against the Node 24 floor and points to the platform-specific install guide.
 
 AIWG requires Node 24 or newer. Node 24 is the standard runtime for all installs.
 
@@ -34,7 +37,22 @@ macOS users should start with the [macOS Install Guide](macos-install.md).
 npm's own documentation recommends a Node version manager on macOS to avoid
 global-package permission errors such as `EACCES` under `/usr/local/lib/node_modules`.
 
+Refinement prompt:
+
+> "Node and npm come from different installations. Tell me which PATH entries conflict and the safest supported fix."
+
+### Command reference
+
+```bash
+node --version  # Should show v24.x.x or higher
+npm --version
+```
+
 ### AI Platform (Choose One or More)
+
+> "I have Node 24. Which AI platform should I use with AIWG, and where do I get it?"
+
+Your assistant matches your tools to a platform below and points to its install source.
 
 | Platform | Best For | Install |
 |----------|----------|---------|
@@ -48,6 +66,8 @@ After Node and an AI platform are available, continue with
 [Install, Connect, and Verify](install-connect-verify.md). Teams that use more
 than one provider can repeat the deployment step for each provider:
 
+### Command reference
+
 ```bash
 aiwg use all --provider claude
 aiwg use all --provider warp
@@ -56,6 +76,10 @@ aiwg use all --provider cursor
 ```
 
 ## Provider Deployment Surface
+
+> "Which provider surface does my AI tool use, and what files will AIWG write for it?"
+
+Your assistant names the deployment surface below for your platform and what AIWG connects on `aiwg use`.
 
 | Platform | Notes |
 |----------|-------|
@@ -70,6 +94,10 @@ aiwg use all --provider cursor
 
 ## Operating Systems
 
+> "Is my operating system supported for AIWG?"
+
+Your assistant confirms support from the matrix below.
+
 | OS | Status |
 |----|--------|
 | **macOS** (Intel + Apple Silicon) | ✅ Supported |
@@ -81,7 +109,13 @@ aiwg use all --provider cursor
 
 ### Git
 
+> "Do I need Git for AIWG, and how do I check it?"
+
+Your assistant checks `git --version` and reports whether scaffolding and version control need it.
+
 Required for `aiwg -new` project scaffolding and version control.
+
+### Command reference
 
 ```bash
 git --version
@@ -93,6 +127,12 @@ git --version
 ```
 
 ## Quick Compatibility Check
+
+> "Run the AIWG compatibility check and tell me what to install next."
+
+Your assistant runs each check below and names the next install step for anything missing.
+
+### Command reference
 
 ```bash
 # Check Node.js and npm

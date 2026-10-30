@@ -1,12 +1,26 @@
 ---
 enforcement: high
+activation: paths
+summary: Pin model variants in agent definitions and follow provider deployment formats, tool requirements, and agent isolation conventions.
+bound_to:
+  skills:
+    - use
+    - aiwg-refresh
+    - aiwg-regenerate
+    - add-agent
+    - devkit-create-agent
+    - deploy-gen
+  agents:
+    - aiwg-steward
+    - aiwg-developer
 paths:
-  - ".claude/agents/**"
-  - ".factory/droids/**"
-  - ".codex/agents/**"
-  - ".opencode/agent/**"
-  - "agentic/**"
-  - "AGENTS.md"
+  - .claude/agents/**
+  - .factory/droids/**
+  - .codex/agents/**
+  - .opencode/agent/**
+  - agentic/**
+  - AGENTS.md
+  - tools/agents/providers/**
 ---
 
 # Agent Deployment Rules

@@ -87,10 +87,61 @@ const DRIFT_WARNING = 'installation identity drift detected';
 const CLI_TEST_TIMEOUT = 90_000;
 
 describe('installation drift gate (#2559)', () => {
+  it('keeps public reporting entrypoints read-only on a fresh home while ordinary changes initialize state', { timeout: CLI_TEST_TIMEOUT }, () => {
+    const root = tempDir('public-report-readonly');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(project);
+    const commands = [
+      ['doctor', '--decision-offload', '--json'],
+      ['steward', 'decision-offload', '--json'],
+      ['rules', 'inventory', '--json'],
+      ['rules', 'list', '--json'],
+    ];
+    for (const [index, args] of commands.entries()) {
+      const user = path.join(root, `user-${index}`);
+      const env = { ...process.env, HOME: path.join(user, 'home'), XDG_CONFIG_HOME: path.join(user, 'xdg'),
+        AIWG_CONFIG: path.join(user, 'config'), AIWG_USER_REGISTRY_PATH: path.join(user, 'registry.json'),
+        NO_UPDATE_NOTIFIER: '1', AIWG_NO_UPDATE_CHECK: '1', AIWG_TELEMETRY_DISABLED: '1' };
+      delete env.AIWG_ROOT;
+      delete env.AIWG_DECISION_JEV_API_KEY;
+      delete env.JEV_API_KEY;
+      const result = spawnSync(process.execPath, [BIN, ...args], { cwd: project, env, encoding: 'utf8', timeout: 30_000 });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(() => JSON.parse(result.stdout)).not.toThrow();
+      expect(fs.existsSync(user) ? fs.readdirSync(user, { recursive: true }) : []).toEqual([]);
+      expect(fs.readdirSync(project)).toEqual([]);
+    }
+    const user = path.join(root, 'mutating-user');
+    const env = { ...process.env, HOME: path.join(user, 'home'), XDG_CONFIG_HOME: path.join(user, 'xdg'),
+      AIWG_CONFIG: path.join(user, 'config'), NO_UPDATE_NOTIFIER: '1', AIWG_TELEMETRY_DISABLED: '1' };
+    delete env.AIWG_ROOT;
+    const result = spawnSync(process.execPath, [BIN, 'config', 'set', '--project', 'parallelism.worker_dispatch', 'false'],
+      { cwd: project, env, encoding: 'utf8', timeout: 30_000 });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.existsSync(path.join(user, 'config', 'installation.json'))).toBe(true);
+    expect(fs.existsSync(path.join(project, '.aiwg', 'aiwg.config'))).toBe(true);
+  });
+
   describe.each([
     ['npm recorded, source executing', npmRecordedSourceActual, 'actual method source differs from canonical method npm'],
     ['source recorded elsewhere, this checkout executing', sourceRecordedElsewhere, 'differs from canonical root'],
   ])('%s', (_label, makeConfig, expectedReason) => {
+    it('allows the scoped reports through drift without modifying installation identity', { timeout: CLI_TEST_TIMEOUT }, () => {
+      const configDir = makeConfig();
+      const identity = fs.readFileSync(path.join(configDir, 'installation.json'));
+      for (const args of [['doctor', '--decision-offload', '--json'], ['steward', 'decision-offload', '--json'], ['rules', 'inventory', '--json']]) {
+        const result = runCli(args, configDir);
+        expect(result.stderr).toContain(DRIFT_WARNING);
+        expect(result.stderr).not.toContain('update and refresh are blocked');
+        // An absent registered source can still make the report itself fail;
+        // the recovery gate must let it run without rewriting the identity.
+        if (_label === 'npm recorded, source executing') expect(result.exitCode, result.stderr).toBe(0);
+        if (result.exitCode === 0) expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(fs.readFileSync(path.join(configDir, 'installation.json'))).toEqual(identity);
+      }
+    });
     it('keeps aiwg version reachable and names the drift', { timeout: CLI_TEST_TIMEOUT }, () => {
       const result = runCli(['version'], makeConfig());
       expect(result.exitCode).toBe(0);

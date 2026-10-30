@@ -7,7 +7,7 @@ Standard pattern for artifact generation using coordinated agents.
 ```
 Primary Author (opus) → Creates initial draft
         ↓
-Parallel Reviewers (sonnet) → Independent review
+Parallel Reviewers (sonnet) → Separate initial judgments
   - Security review
   - Technical review
   - Standards review
@@ -17,6 +17,10 @@ Synthesizer (sonnet) → Merges feedback into final
         ↓
 Archive → .aiwg/[category]/
 ```
+
+## Review evidence
+
+Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `$AIWG_ROOT/docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.
 
 ## Implementation
 
@@ -98,6 +102,10 @@ Each reviewer should produce:
 # [Review Type] Review
 
 **Reviewer**: [Agent Name]
+**Observed evaluator model/vendor/family**: [Runtime identity or unknown]
+**Acceptance criteria reference**: [Version/digest]
+**Disagreements**: [Generator and evaluator positions, check/acceptance references]
+**Re-review of**: [Earlier review reference after material fixes]
 **Artifact**: [What was reviewed]
 **Date**: [Timestamp]
 

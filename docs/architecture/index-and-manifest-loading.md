@@ -189,7 +189,7 @@ Authoritative source paths for every piece of the index/manifest pipeline:
 
 1. **Graph config resolution** — `BUILTIN_GRAPH_CONFIGS` is the base; `loadModuleGraphConfigs()` merges manifests from installed frameworks; `loadUserGraphConfigs()` merges `.aiwg/config.yaml`. Each call writes into the shared `GRAPH_CONFIGS` object.
 2. **Build** — `index-builder.ts` iterates `GRAPH_CONFIGS`, walks each graph's `scanDirs`, diffs file hashes against the previous `checksum-manifest.json`, and re-parses only the changed files. Writes the five JSON files into the resolved output directory.
-3. **Query** — `query-engine.ts` loads `metadata.json` from one or more graphs, scores nodes against the query (keyword + capability + frontmatter tags), and returns ranked `{path, type, score}` envelopes. `aiwg discover` is this with a ranking emphasis; `aiwg show` is the same lookup followed by streaming the file body.
+3. **Query** — `query-engine.ts` loads `metadata.json` from one or more graphs, scores nodes against the query (keyword + capability + frontmatter tags), and returns ranked `{path, type, score}` envelopes. `aiwg discover` is this with a ranking emphasis; `aiwg show` uses the compact relationship sidecar for local cards and reads only the selected artifact for its outline. Full body output requires `--body`, and section output requires `--section`.
 4. **Refresh** — Two triggers keep the index honest: post-commit rebuild for project/codebase graphs (incremental, fast), and post-deploy rebuild for the framework graph (triggered inside `useHandler`).
 
 ### Why agents never navigate the filesystem

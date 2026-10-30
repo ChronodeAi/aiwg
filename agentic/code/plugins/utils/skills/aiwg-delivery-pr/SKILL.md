@@ -18,6 +18,6 @@ This is an explicit alias for `aiwg-pr`. Existing `aiwg-pr` callers remain valid
 
 ## Route
 
-1. Read `aiwg-pr` with `aiwg show skill aiwg-pr`.
+1. Read `aiwg-pr` with `aiwg show skill aiwg-pr --body`.
 2. Apply its delivery-policy and shared threat-assessment gates exactly.
 3. If the request is generic repository PR work, stop and route to ordinary git/Gitea/GitHub PR creation instead.

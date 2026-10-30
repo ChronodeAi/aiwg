@@ -20,6 +20,7 @@ const EXEMPTIONS: Exemption[] = [
   { path: /^src\/channel\/manager\.mjs$/, text: /npm (?:run build|install -g aiwg)/, classification: 'bootstrap', rationale: 'channel switching and source checkout builds are the distribution mechanism' },
   { path: /^src\/update\/checker\.mjs$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'self-update fallback repairs the base package itself' },
   { path: /^src\/update\/service\.mjs$/, text: /npm ci && npm run build/, classification: 'contributor', rationale: 'a source checkout must be built by its owner' },
+  { path: /^src\/artifacts\/prebuilt-relations\.ts$/, text: /npm run release:fortemi-index/, classification: 'contributor', rationale: 'immutable relationship tables are release-package outputs regenerated only from a source checkout' },
   { path: /^src\/cli\/handlers\/session\.ts$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'session recovery can repair a broken base install' },
   { path: /^src\/cli\/handlers\/use\.ts$/, text: /^'  npm install -g aiwg',$/, classification: 'bootstrap', rationale: 'switching from the corpus-free @aiwg/cli distribution to full aiwg requires package installation; self-update retains the current distribution' },
   { path: /^tools\/cli\/doctor\.mjs$/, text: /(?:npm install -g aiwg|npx aiwg)/, classification: 'bootstrap', rationale: 'doctor must recover when the public CLI install is missing or broken' },
@@ -27,7 +28,7 @@ const EXEMPTIONS: Exemption[] = [
   { path: /^tools\/cli\/doctor\.mjs$/, text: /npm run (?:build:cli|release:fortemi-index)/, classification: 'contributor', rationale: 'source and release-package maintenance only' },
   { path: /^src\/cli\/handlers\/ralph-launcher\.ts$/, text: /npm run build.*dev repo/, classification: 'contributor', rationale: 'explicit development-checkout recovery' },
   { path: /^src\/cli\/git-hooks\.ts$/, text: /node tools\/cli\/aiwg\.mjs workflow/, classification: 'embedded-dispatch', rationale: 'generated Git hook uses a repository-local deterministic entrypoint, not operator guidance' },
-  { path: /^src\/smiths\/context-pipeline\/workspace-context\.ts$/, text: /npm run/, classification: 'embedded-dispatch', rationale: 'reports scripts owned by the target project; it does not remediate AIWG' },
+  { path: /^src\/smiths\/context-pipeline\/workspace-extraction\.ts$/, text: /npm run/, classification: 'embedded-dispatch', rationale: 'reports scripts owned by the target project; it does not remediate AIWG' },
   { path: /^src\/mcp\/cli\.mjs$/, text: /--command npx --args/, classification: 'external-command', rationale: 'example of an explicitly configured third-party MCP command' },
   { path: /^src\/cli\/handlers\/run\.ts$/, text: /modeled on `npm run`/, classification: 'analogy', rationale: 'describes AIWG script semantics and is not executable guidance' },
   { path: /^docs\/agents\/cli-reference\.md$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'documents base-package installation and recovery' },
@@ -45,7 +46,8 @@ function walk(directory: string): string[] {
 function candidates(): Array<{ path: string; line: number; text: string }> {
   const files = [
     ...walk(join(ROOT, 'src')).filter((file) => /\.(?:ts|mjs)$/.test(file) && !/\.(?:test|spec)\./.test(file)),
-    join(ROOT, 'tools', 'cli', 'doctor.mjs'),
+    ...['doctor.mjs', 'doctor-context-firewall.mjs', 'doctor-worker-probe.mjs']
+      .map(file => join(ROOT, 'tools', 'cli', file)),
     join(ROOT, 'docs', 'security', 'context-memory-firewall.md'),
     join(ROOT, 'docs', 'agents', 'cli-reference.md'),
   ];
@@ -76,7 +78,8 @@ describe('public remediation contract', () => {
   });
 
   it('resolves every context-firewall remediation emitted by doctor', () => {
-    const doctor = readFileSync(join(ROOT, 'tools', 'cli', 'doctor.mjs'), 'utf8');
+    const doctor = ['doctor.mjs', 'doctor-context-firewall.mjs']
+      .map(file => readFileSync(join(ROOT, 'tools', 'cli', file), 'utf8')).join('\n');
     const commands = [...doctor.matchAll(/\\?`(aiwg context-firewall .*?)\\?`/g)]
       .map((match) => match[1]);
     expect(commands).toContain('aiwg context-firewall baseline --plan');

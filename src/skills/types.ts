@@ -1,3 +1,5 @@
+import type { AgentSkillProviderExtensions } from './provider-extensions.js';
+import type { AgentSkillCollisionOrigin, AgentSkillDiagnostic } from './agent-skills.js';
 /**
  * Skills Registry Types
  *
@@ -28,6 +30,9 @@ export interface SkillResult {
 
   /** Whether the skill is installed locally */
   installed?: boolean;
+  /** Local collision ownership and diagnostics for the selected skill. */
+  origin?: AgentSkillCollisionOrigin;
+  diagnostics?: AgentSkillDiagnostic[];
 }
 
 /**
@@ -205,6 +210,7 @@ export interface AgentSkillExportResult {
   sourceDigest: string;
   exportDigest: string;
   omittedAiwgFields: string[];
+  providers?: AgentSkillProviderExtensions;
   fileCount: number;
   totalBytes: number;
   exportedAt: string;

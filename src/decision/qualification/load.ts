@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../../security/artifact-trust.js';
 import { AdmissionError, DecisionAdmissionRegistry } from '../admission.js';
-import type { DecisionAdmissionEvidence, DecisionAdmissionLimits, DecisionSchedulerPolicy } from '../types.js';
+import type { AdapterObservation, DecisionAdmissionEvidence, DecisionAdmissionLimits, DecisionSchedulerPolicy } from '../types.js';
+
+import { verifyDecisionStagedLoadRecord, type DecisionLoadManifestV3, type DecisionStagedLoadRecord, type DecisionStagedLoadRecordV1 } from './load-staged.js';
+export * from './load-staged.js';
+
+export type DecisionLoadManifest = DecisionLoadManifestV2 | DecisionLoadManifestV3;
 
 /** Preregistered D05 load manifest. Bounds are inputs; a changed bound needs a new version. */
 export interface DecisionLoadManifestV2 {
@@ -71,7 +76,7 @@ export interface DecisionLoadOutcome {
 
 export interface DecisionLoadDriverContext {
   clock: DecisionLoadClock;
-  manifest: DecisionLoadManifestV2;
+  manifest: DecisionLoadManifest;
   /** Simulated provider call. Counts active calls and ends early when the signal aborts. */
   dispatch(serviceMs: number, signal: AbortSignal): Promise<'completed' | 'aborted'>;
 }
@@ -112,8 +117,8 @@ export interface DecisionLoadComparison { bound: keyof DecisionLoadManifestV2['b
 
 export interface DecisionLoadResultRecord {
   schema: 'decision-load-result/v1';
-  manifest: { schema: DecisionLoadManifestV2['schema']; version: string; digest: string };
-  mode: DecisionLoadManifestV2['mode'];
+  manifest: { schema: DecisionLoadManifest['schema']; version: string; digest: string };
+  mode: DecisionLoadManifest['mode'];
   target: 'admission-controller' | 'evaluator';
   window: { seconds: number };
   environment: { node: string; platform: string; arch: string };
@@ -141,7 +146,7 @@ function seeded(seed: number): () => number {
 }
 
 /** Seeded bursty Poisson arrivals for the manifest's load, spike, and soak phases. */
-export function decisionLoadArrivals(manifest: DecisionLoadManifestV2, windowSeconds?: number): DecisionLoadArrival[] {
+export function decisionLoadArrivals(manifest: DecisionLoadManifest, windowSeconds?: number): DecisionLoadArrival[] {
   const model = manifest.arrivalModel;
   const random = seeded(model.seed);
   const total = manifest.duration.loadSeconds + manifest.duration.spikeSeconds + manifest.duration.soakSeconds;
@@ -172,7 +177,7 @@ export function decisionLoadArrivals(manifest: DecisionLoadManifestV2, windowSec
 }
 
 /** Scheduler policy the manifest declares for one principal. */
-export function decisionLoadPolicy(manifest: DecisionLoadManifestV2, workspaceId: string, principalId: string): DecisionSchedulerPolicy {
+export function decisionLoadPolicy(manifest: DecisionLoadManifest, workspaceId: string, principalId: string): DecisionSchedulerPolicy {
   const principal = manifest.principals.find(candidate => candidate.id === principalId)!;
   return {
     enabled: true, profileVersion: manifest.profileVersion,
@@ -183,8 +188,16 @@ export function decisionLoadPolicy(manifest: DecisionLoadManifestV2, workspaceId
 }
 
 /** Drives each arrival straight through a registry-owned `DecisionAdmissionController`. */
-export function admissionControllerLoadDriver(manifest: DecisionLoadManifestV2, clock: DecisionLoadClock,
-  registry = new DecisionAdmissionRegistry()): { driver: DecisionLoadDriver; sample: () => { active: number; queued: number } } {
+export function admissionControllerLoadDriver(manifest: DecisionLoadManifest, clock: DecisionLoadClock,
+  registry = new DecisionAdmissionRegistry(), hooks: {
+    onStateChange?: () => void;
+    onDriverError?: () => void;
+    estimateCost?: (arrival: DecisionLoadArrival) => number;
+    backend?: (arrival: DecisionLoadArrival, signal: AbortSignal, context: DecisionLoadDriverContext, attempt: number) => Promise<AdapterObservation>;
+    beforeDispatch?: (arrival: DecisionLoadArrival, attempt: number) => boolean;
+    onAdmission?: (arrival: DecisionLoadArrival, attempt: number, evidence: DecisionAdmissionEvidence) => void;
+    onObservation?: (arrival: DecisionLoadArrival, attempt: number, evidence: DecisionAdmissionEvidence, observation: AdapterObservation) => void;
+  } = {}): { driver: DecisionLoadDriver; sample: () => { active: number; queued: number } } {
   const workspaceId = 'load-harness';
   for (const principal of manifest.principals) registry.register(decisionLoadPolicy(manifest, workspaceId, principal.id), clock.now);
   const controller = registry.controller(workspaceId)!;
@@ -195,31 +208,60 @@ export function admissionControllerLoadDriver(manifest: DecisionLoadManifestV2, 
       attempts += 1;
       let lease;
       try {
-        lease = await controller.acquire({ budgetId: `load-${arrival.ordinal}`, principalId: arrival.principalId,
+        const pendingLease = controller.acquire({ budgetId: `load-${arrival.ordinal}`, principalId: arrival.principalId,
           workspaceId, providerId: arrival.providerId, signal,
-          estimate: { tokens: arrival.tokens, attempts: 1, batchSize: 1, items: 1, costUsd: 0, retainedWork: 1 },
+          estimate: { tokens: arrival.tokens, attempts: 1, batchSize: 1, items: 1, costUsd: hooks.estimateCost?.(arrival) ?? 0, retainedWork: 1 },
           deadlineEpochMs: clock.now() + manifest.workspace.maxQueueWaitMs! + arrival.serviceMs });
+        hooks.onStateChange?.();
+        lease = await pendingLease;
       } catch (error) {
-        if (!(error instanceof AdmissionError)) throw error;
+        if (!(error instanceof AdmissionError)) { hooks.onDriverError?.(); controller.releaseBudget(`load-${arrival.ordinal}`); throw error; }
         controller.releaseBudget(`load-${arrival.ordinal}`);
         return { attempts, outcome: error.evidence.reason === 'cancelled' ? 'cancelled' : 'shed',
           admissionReason: error.evidence.reason, queueDelaysMs, settledAtMs: clock.now() };
       }
-      queueDelaysMs.push(lease.evidence.queueDelayMs);
-      const dispatched = await context.dispatch(arrival.serviceMs, signal);
-      const failed = arrival.failsFirstAttempt && retry === 0;
-      lease.release({ success: dispatched === 'completed' && !failed });
-      if (dispatched === 'aborted') {
-        controller.releaseBudget(`load-${arrival.ordinal}`);
-        return { attempts, outcome: 'cancelled', queueDelaysMs, settledAtMs: clock.now() };
-      }
-      if (!failed) {
-        controller.releaseBudget(`load-${arrival.ordinal}`);
-        return { attempts, outcome: 'completed', queueDelaysMs, settledAtMs: clock.now() };
-      }
-      if (retry < manifest.arrivalModel.maxRetries) {
-        await new Promise<void>(done => setTimeout(done, manifest.arrivalModel.retryBackoffMs));
-      }
+      try {
+        queueDelaysMs.push(lease.evidence.queueDelayMs);
+        if (signal.aborted || hooks.beforeDispatch?.(arrival, retry + 1) === false) {
+          lease.release();
+          controller.releaseBudget(`load-${arrival.ordinal}`);
+          return { attempts: retry, outcome: 'cancelled', queueDelaysMs, settledAtMs: clock.now() };
+        }
+        hooks.onAdmission?.(arrival, retry + 1, lease.evidence);
+        let observation: AdapterObservation | undefined;
+        let dispatched: 'completed' | 'aborted';
+        try {
+          if (hooks.backend) {
+            observation = await hooks.backend(arrival, signal, context, retry + 1);
+            dispatched = signal.aborted ? 'aborted' : 'completed';
+          } else dispatched = await context.dispatch(arrival.serviceMs, signal);
+        } catch {
+          observation = { status: 'error', reason: 'executor-unavailable', actualModel: null, uncertainty: null,
+            requestId: null, usage: { inputTokens: null, outputTokens: null, costUsd: null } };
+          dispatched = signal.aborted ? 'aborted' : 'completed';
+        }
+        const failed = observation ? observation.status !== 'success' : arrival.failsFirstAttempt && retry === 0;
+        lease.release({ success: dispatched === 'completed' && !failed, ...(observation?.retryAfterMs === undefined ? {} : { retryAfterMs: observation.retryAfterMs }) });
+        if (observation) hooks.onObservation?.(arrival, retry + 1, lease.evidence, observation);
+        if (dispatched === 'aborted') {
+          controller.releaseBudget(`load-${arrival.ordinal}`);
+          return { attempts, outcome: 'cancelled', queueDelaysMs, settledAtMs: clock.now() };
+        }
+        if (!failed) {
+          controller.releaseBudget(`load-${arrival.ordinal}`);
+          return { attempts, outcome: 'completed', queueDelaysMs, settledAtMs: clock.now() };
+        }
+        if (observation && !['service-error', 'rate-limited', 'network-transient', 'timeout'].includes(observation.reason)) break;
+        if (signal.aborted) break;
+        if (retry < manifest.arrivalModel.maxRetries) {
+          await new Promise<void>(done => {
+            const finish = (): void => { clearTimeout(timer); signal.removeEventListener('abort', finish); done(); };
+            const timer = setTimeout(finish, manifest.arrivalModel.retryBackoffMs);
+            if (signal.aborted) finish(); else signal.addEventListener('abort', finish, { once: true });
+          });
+        }
+      } catch (error) { hooks.onDriverError?.(); controller.releaseBudget(`load-${arrival.ordinal}`); throw error; }
+      finally { lease.release(); hooks.onStateChange?.(); }
     }
     controller.releaseBudget(`load-${arrival.ordinal}`);
     return { attempts, outcome: 'failed', queueDelaysMs, settledAtMs: clock.now() };
@@ -233,11 +275,14 @@ export function admissionControllerLoadDriver(manifest: DecisionLoadManifestV2, 
  * host-dependent memory and CPU measurements.
  */
 export async function runDecisionLoadHarness(options: {
-  manifest: DecisionLoadManifestV2;
+  manifest: DecisionLoadManifest;
   clock: DecisionLoadClock;
   driver: DecisionLoadDriver;
   sample: () => { active: number; queued: number };
   windowSeconds?: number;
+  signal?: AbortSignal;
+  /** Preserve the entire declared window, even after the last arrival settles. */
+  fullWindow?: boolean;
 }): Promise<{ observations: DecisionLoadObservations; resources: DecisionLoadResourceObservations }> {
   const { manifest, clock, driver, sample } = options;
   const arrivals = decisionLoadArrivals(manifest, options.windowSeconds);
@@ -274,25 +319,45 @@ export async function runDecisionLoadHarness(options: {
       if (signal.aborted) aborted(); else signal.addEventListener('abort', aborted, { once: true });
     }),
   };
+  const advance = async (ms: number): Promise<void> => {
+    if (!options.signal) { await clock.advance(ms); return; }
+    const end = clock.now() + ms;
+    while (clock.now() < end && !options.signal.aborted) await clock.advance(Math.min(1000, end - clock.now()));
+  };
   const outcomes: Array<Promise<{ arrival: DecisionLoadArrival; result: DecisionLoadOutcome; abortedAtMs: number | null }>> = [];
   for (const arrival of arrivals) {
+    if (options.signal?.aborted) break;
     const due = start + arrival.atMs - clock.now();
-    if (due > 0) await clock.advance(due);
+    if (due > 0) await advance(due);
+    if (options.signal?.aborted) break;
     const controller = new AbortController();
     const cancellation = { abortedAtMs: null as number | null };
+    let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
     if (arrival.cancelAtMs !== null) {
-      setTimeout(() => { cancellation.abortedAtMs = clock.now(); controller.abort(); }, arrival.cancelAtMs - arrival.atMs);
+      cancellationTimer = setTimeout(() => { cancellation.abortedAtMs = clock.now(); controller.abort(); }, arrival.cancelAtMs - arrival.atMs);
     }
-    outcomes.push(driver(arrival, controller.signal, context)
-      .then(result => ({ arrival, result, abortedAtMs: cancellation.abortedAtMs })));
+    const combined = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+    const pending = driver(arrival, combined, context)
+      .then(result => ({ arrival, result, abortedAtMs: cancellation.abortedAtMs }))
+      .finally(() => clearTimeout(cancellationTimer));
+    // Observe rejection immediately; allSettled below retains it for the caller.
+    void pending.catch(() => {});
+    outcomes.push(pending);
     observe();
     if (arrival.ordinal % 500 === 0) sampleMemory();
   }
   let settled = false;
-  const all = Promise.all(outcomes).then(values => { settled = true; return values; });
+  const all = Promise.allSettled(outcomes).then(values => { settled = true; return values; });
   const drainStep = manifest.arrivalModel.serviceTimeMs.maximum + manifest.arrivalModel.retryBackoffMs;
   while (!settled) await clock.advance(drainStep);
-  const results = await all;
+  const settledResults = await all;
+  const failure = settledResults.find(result => result.status === 'rejected');
+  if (failure?.status === 'rejected') throw failure.reason;
+  const results = settledResults.map(result => (result as PromiseFulfilledResult<{ arrival: DecisionLoadArrival; result: DecisionLoadOutcome; abortedAtMs: number | null }>).value);
+  if (options.fullWindow && !options.signal?.aborted) {
+    const windowMs = (options.windowSeconds ?? manifest.duration.loadSeconds + manifest.duration.spikeSeconds + manifest.duration.soakSeconds) * 1000;
+    if (start + windowMs > clock.now()) await advance(start + windowMs - clock.now());
+  }
   sampleMemory();
   const threadUsage = process.threadCpuUsage(cpuStart);
   const cpuMicros = threadUsage.user + threadUsage.system;
@@ -319,10 +384,10 @@ export async function runDecisionLoadHarness(options: {
   const ratio = (value: number, total: number): number => total ? Number((value / total).toFixed(6)) : 1;
   return {
     observations: {
-      arrivals: arrivals.length, attempts, completed, failed, shed, cancelled,
+      arrivals: results.length, attempts, completed, failed, shed, cancelled,
       shedReasons: Object.fromEntries(Object.entries(shedReasons).sort(([left], [right]) => left.localeCompare(right))),
       maximumActiveCalls: maximumActive, maximumQueuedCalls: maximumQueued, maximumEligibleLaneWaitMs: laneWait,
-      retryAmplificationRatio: ratio(attempts, arrivals.length), maximumCancellationLatencyMs: cancellationLatency,
+      retryAmplificationRatio: ratio(attempts, results.length), maximumCancellationLatencyMs: cancellationLatency,
       quietPrincipalAdmissionRatio: ratio(admitted.quiet, submitted.quiet),
       noisyPrincipalAdmissionRatio: ratio(admitted.noisy, submitted.noisy),
       virtualDurationMs,
@@ -336,7 +401,7 @@ export async function runDecisionLoadHarness(options: {
   };
 }
 
-export function compareDecisionLoadBounds(manifest: DecisionLoadManifestV2, observations: DecisionLoadObservations,
+export function compareDecisionLoadBounds(manifest: DecisionLoadManifest, observations: DecisionLoadObservations,
   resources: DecisionLoadResourceObservations): DecisionLoadComparison[] {
   const bounds = manifest.bounds;
   const atMost = (bound: keyof typeof bounds, observed: number): DecisionLoadComparison =>
@@ -364,7 +429,7 @@ export function compareDecisionLoadBounds(manifest: DecisionLoadManifestV2, obse
 
 /** Build a digest-bound result record. The manifest digest must be computed from its exact bytes. */
 export function decisionLoadResultRecord(input: {
-  manifest: DecisionLoadManifestV2; manifestDigest: string; target: DecisionLoadResultRecord['target']; windowSeconds: number;
+  manifest: DecisionLoadManifest; manifestDigest: string; target: DecisionLoadResultRecord['target']; windowSeconds: number;
   observations: DecisionLoadObservations; resources: DecisionLoadResourceObservations;
 }): DecisionLoadResultRecord {
   const comparisons = compareDecisionLoadBounds(input.manifest, input.observations, input.resources);
@@ -385,18 +450,16 @@ export function verifyDecisionLoadResultRecord(record: DecisionLoadResultRecord,
     && digest === decisionLoadManifestDigest(canonicalJson(body));
 }
 
-/**
- * G5 evidence flags. Offline fake-provider records can prove the harness and
- * the admission path, but only a passing staged-provider record bound to its
- * manifest may set `load-manifest-qualified`.
- */
-export function decisionLoadEvidenceFlags(records: readonly DecisionLoadResultRecord[], manifestDigest: string): Record<string, boolean> {
-  const bound = records.filter(record => verifyDecisionLoadResultRecord(record, manifestDigest));
+/** Historical offline evidence stays separate from verified, exact-commit v3 G5 artifacts. */
+export function decisionLoadEvidenceFlags(records: readonly (DecisionLoadResultRecord | DecisionStagedLoadRecord | DecisionStagedLoadRecordV1)[], manifestDigest: string,
+  sourceCommit?: string): Record<string, boolean> {
+  const legacy = records.filter((record): record is DecisionLoadResultRecord => 'schema' in record);
+  const bound = legacy.filter(record => verifyDecisionLoadResultRecord(record, manifestDigest));
   const offline = bound.filter(record => record.mode === 'offline-fake-provider');
   return {
-    'load-manifest-offline-passed': offline.length > 0 && offline.length === records.filter(record => record.mode === 'offline-fake-provider').length
+    'load-manifest-offline-passed': offline.length > 0 && offline.length === legacy.filter(record => record.mode === 'offline-fake-provider').length
       && offline.every(record => record.passed),
-    'load-manifest-qualified': bound.some(record => record.mode === 'staged-provider' && record.passed)
-      && bound.length === records.length && bound.every(record => record.passed),
+    'load-manifest-qualified': records.length > 0 && records.every(record => 'schemaVersion' in record
+      && record.manifestDigest === manifestDigest && verifyDecisionStagedLoadRecord(record, sourceCommit)),
   };
 }

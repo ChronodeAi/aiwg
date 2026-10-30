@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -6,17 +6,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findPackageRoot } from '../cli/find-package-root.js';
 import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 import { getUserStateDir } from '../config/user-state.js';
-import { collectGraphIndexFiles } from './index-files.js';
+import { resolveIndexWorkers } from './index-preparation.js';
+import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
 import { collectIndexStatus } from './index-status.js';
+import { graphIndexDigest, indexAdapterRegistry, selectIndexAdapters, indexFreshnessSnapshot,
+  indexAdapterDigest, recordIndexVerification, type IndexFreshness } from './index-adapters.js';
 import { getFortemiCoreSyncStatus, syncFortemiCoreIndex } from './fortemi-core-sync.js';
 import { acquireDirectoryLock, DirectoryLockContentionError } from './prebuilt-build-lock.js';
 import { resolveImportExclusions } from '../sessions/import-exclusions.js';
 import { resolveImportLimits } from '../sessions/import-limits.js';
 import type { BatchImportReceipt } from '../sessions/batch-import.js';
 import {
-  BUILTIN_GRAPH_CONFIGS, GRAPH_CONFIGS, INDEX_EXTRACTOR_VERSION, INDEX_VERSION,
-  getGraphIndexDir, graphBuildOrder, loadGlobalGraphConfigs, loadUserGraphConfigs,
-  resolveGraphBackendType, resolveGraphScanDir,
+  GRAPH_CONFIGS,
+  getGraphIndexDir, graphBuildOrder, loadWorkspaceGraphs,
+  resolveGraphScanDir,
 } from './types.js';
 
 export interface RefreshOptions {
@@ -24,7 +27,8 @@ export interface RefreshOptions {
   workspaces?: string[];
   root?: string | string[];
   full?: boolean;
-  only?: 'graphs' | 'sessions' | 'caches' | 'runtime' | 'models' | 'issues';
+  workers?: number;
+  only?: string;
   dryRun?: boolean;
   lockWaitMs?: number;
   signal?: AbortSignal;
@@ -39,9 +43,11 @@ export type RefreshJob = {
   wallMs: number;
   reason?: string;
   error?: string;
+  diagnostics?: string[];
   sessionImport?: BatchImportReceipt;
   sessionImports?: BatchImportReceipt[];
   noManifest?: number;
+  freshness?: IndexFreshness;
 } & ({ kind: 'models'; scope: 'host'; workspace?: never }
   | { kind: 'graph' | 'cache' | 'sessions' | 'runtime' | 'issues'; scope?: 'workspace'; workspace: string });
 
@@ -52,6 +58,7 @@ export interface RefreshReport {
   mode: 'incremental' | 'full';
   reason?: string;
   messages: string[];
+  indices?: Array<IndexFreshness & { workspace: string }>;
   jobs: RefreshJob[];
   totals: { jobs: number; ok: number; skipped: number; deferred: number; errors: number; noManifest: number; excluded: number; wallMs: number };
 }
@@ -85,14 +92,6 @@ function writeJson(file: string, value: unknown): void {
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(temporary, file);
-}
-
-/** The registry is process-global; reload it per workspace to avoid cross-project leakage. */
-function loadWorkspaceGraphs(workspace: string): void {
-  for (const name of Object.keys(GRAPH_CONFIGS)) delete GRAPH_CONFIGS[name];
-  Object.assign(GRAPH_CONFIGS, structuredClone(BUILTIN_GRAPH_CONFIGS));
-  loadUserGraphConfigs(workspace);
-  loadGlobalGraphConfigs();
 }
 
 function workspacePaths(options: RefreshOptions): Map<string, string[]> {
@@ -165,31 +164,36 @@ function planWorkspaceRefresh(options: RefreshOptions, workspaces: Map<string, s
       loadWorkspaceGraphs(workspace);
       const graphs = collectIndexStatus(workspace).graphs
         .sort((a, b) => graphBuildOrder(a.name, GRAPH_CONFIGS[a.name]) - graphBuildOrder(b.name, GRAPH_CONFIGS[b.name]) || a.name.localeCompare(b.name));
-      if (!options.only || options.only === 'graphs') {
+      const adapters = indexAdapterRegistry(workspace);
+      const selected = selectIndexAdapters(adapters, options.only);
+      const includes = (name: string) => selected.some(adapter => adapter.name === name);
+      if (!options.only || options.only === 'all' || options.only === 'graphs' || selected.some(adapter => adapter.group === 'graphs')) {
         for (const graph of graphs) {
-          if (graph.built || graph.defaultBuild || graph.origin === 'registered') {
+          if (selected.some(adapter => adapter.group === 'graphs' && adapter.graph === graph.name)
+            && (graph.built || graph.defaultBuild || graph.origin === 'registered'
+              || (options.only && options.only !== 'all' && options.only !== 'graphs'))) {
             jobs.push({ kind: 'graph', workspace, graph: graph.name, status: 'planned', wallMs: 0 });
           }
         }
       }
-      if (!options.only || options.only === 'caches') {
+      if (!options.only || options.only === 'all' || options.only === 'caches' || options.only?.startsWith('caches:')) {
         for (const graph of graphs) {
           // Refresh only local, opted-in caches; never create a new cache from a packaged prebuilt.
-          if (fs.existsSync(getFortemiCoreSyncStatus(workspace, graph.name).location)) {
+          if (includes(`caches:${graph.name}`) && fs.existsSync(getFortemiCoreSyncStatus(workspace, graph.name).location)) {
             jobs.push({ kind: 'cache', workspace, graph: graph.name, status: 'planned', wallMs: 0 });
           }
         }
       }
-      if ((!options.only || options.only === 'sessions') && fs.existsSync(path.join(workspace, '.aiwg/sessions/catalog.sqlite'))) {
+      if (includes('sessions') && fs.existsSync(path.join(workspace, '.aiwg/sessions/catalog.sqlite'))) {
         jobs.push({ kind: 'sessions', workspace, status: 'planned', wallMs: 0, noManifest: 0 });
       }
       for (const kind of ['runtime', 'issues'] as const) {
-        if (options.only && options.only !== kind) continue;
+        if (!includes(kind)) continue;
         if (kind === 'issues' && !fs.existsSync(projectAiwgPath(workspace, 'issues'))) continue;
         jobs.push({ kind, workspace, status: 'planned', wallMs: 0 });
       }
     }
-    if (!options.only || options.only === 'models') {
+    if (!options.only || options.only === 'all' || options.only === 'models') {
       jobs.push({ kind: 'models', scope: 'host', status: 'planned', wallMs: 0 });
     }
     return jobs;
@@ -214,25 +218,10 @@ export async function refreshResourceGate(workspace: string, live?: Record<strin
     admissionHostResources: config?.parallelism?.admission?.hostResources,
     overlay: { max_load_ratio: 0.8 },
   });
+  // An index refresh is not a worker launch, so the worker cap never gates it.
+  delete thresholds.max_workers;
   const result = preflight.evaluateDispatchGate(live ?? preflight.readLiveHostResources({ paths: [workspace] }), thresholds);
   return { ok: result.ok, reason: result.failures.map((failure: { reason: string }) => failure.reason).join('; ') || undefined };
-}
-
-async function graphFingerprint(workspace: string, graph: string): Promise<string> {
-  const files = await collectGraphIndexFiles(workspace, graph);
-  // Source import resolution also depends on the compiler/package configuration.
-  if (graph === 'source') {
-    for (const file of ['tsconfig.json', 'package.json']) {
-      if (fs.existsSync(path.join(workspace, file))) files.push(path.join(workspace, file));
-    }
-  }
-  const stats = [...new Set(files)].sort().map(file => {
-    const stat = fs.statSync(file);
-    return [file, stat.mtimeMs, stat.ctimeMs, stat.size];
-  });
-  return createHash('sha256').update(JSON.stringify([
-    INDEX_VERSION, INDEX_EXTRACTOR_VERSION, GRAPH_CONFIGS[graph], resolveGraphBackendType(graph), stats,
-  ])).digest('hex');
 }
 
 interface SharedRuntime {
@@ -287,31 +276,48 @@ async function refreshWorkspaceRuntime(workspace: string, full: boolean, runtime
 async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: string[], runtime: () => Promise<SharedRuntime>): Promise<void> {
   const workspace = job.workspace ?? process.env.HOME ?? homedir();
   if (job.kind === 'graph') {
+    const graphStart = Date.now();
     const graph = job.graph!;
     const config = GRAPH_CONFIGS[graph];
-    if (!config.scanDirs.some(dir => fs.existsSync(resolveGraphScanDir(workspace, dir)))) {
+    const sourceWorkspace = graph === 'framework' ? resolveFrameworkIndexRoot(workspace) : workspace;
+    if (!config.scanDirs.some(dir => fs.existsSync(resolveGraphScanDir(sourceWorkspace, dir)))) {
       job.status = 'skipped';
       job.reason = 'scan directories missing';
       return;
     }
     const directory = getGraphIndexDir(workspace, graph);
     const markerPath = path.join(directory, 'refresh-state.json');
+    const fingerprint = await graphIndexDigest(sourceWorkspace, graph);
     const marker = readJson<{ fingerprint: string; builtAt: string }>(markerPath);
     const metadata = readJson<{ builtAt: string }>(path.join(directory, 'metadata.json'));
-    const fingerprint = await graphFingerprint(workspace, graph);
-    const outputs = ['metadata.json', 'dependencies.json', 'tags.json', 'stats.json'];
-    if (resolveGraphBackendType(graph) === 'sqlite') outputs.push('graph.db');
-    if (!options.full && marker?.fingerprint === fingerprint && metadata?.builtAt === marker.builtAt
-      && outputs.every(file => fs.existsSync(path.join(directory, file)))) {
-      job.status = 'skipped';
-      job.reason = 'unchanged';
-      return;
+    const adapter = indexAdapterRegistry(workspace).find(item => item.name === graph)!;
+    if (!options.full && marker?.fingerprint === fingerprint && marker.builtAt === metadata?.builtAt
+      && indexFreshnessSnapshot(adapter, workspace).pendingWork === 0) {
+      const release = await acquireDirectoryLock(`${directory}.build.lock`, {
+        timeoutMs: options.lockWaitMs ?? 0, reclaimDeadOwner: true,
+      });
+      try {
+        const current = await graphIndexDigest(sourceWorkspace, graph);
+        if (current === fingerprint && indexFreshnessSnapshot(adapter, workspace).pendingWork === 0) {
+          recordIndexVerification(adapter, workspace, { before: fingerprint, after: current, wallMs: Date.now() - graphStart });
+          job.status = 'skipped'; job.reason = 'unchanged';
+          return;
+        }
+      } finally { await release(); }
     }
+    const beforeOutput = outputStamp(path.join(directory, 'metadata.json'));
     const { buildIndex } = await import('./index-builder.js');
-    await buildIndex(workspace, { graph, force: Boolean(options.full), explicit: false, quiet: true });
+    await buildIndex(sourceWorkspace, { graph, force: Boolean(options.full), explicit: false, quiet: true, workers: options.workers, lockWaitMs: options.lockWaitMs ?? 0,
+      onDiagnostic: message => (job.diagnostics ??= []).push(message) });
     const built = readJson<{ builtAt: string }>(path.join(directory, 'metadata.json'));
     if (!built) throw new Error(`graph did not produce metadata: ${graph}`);
-    writeJson(markerPath, { fingerprint, builtAt: built.builtAt });
+    const verification = readJson<{ lastVerifiedDigest?: string; pendingWork?: number }>(path.join(directory, 'freshness.json'));
+    if (!options.full && beforeOutput && beforeOutput === outputStamp(path.join(directory, 'metadata.json'))) {
+      job.status = 'skipped'; job.reason = 'unchanged';
+    }
+    if (!verification?.pendingWork && verification?.lastVerifiedDigest === fingerprint) {
+      writeJson(markerPath, { fingerprint, builtAt: built.builtAt });
+    }
   } else if (job.kind === 'cache') {
     const status = getFortemiCoreSyncStatus(workspace, job.graph);
     if (!options.full && status.built && !status.stale && !status.sourceIndexNewer) {
@@ -371,7 +377,7 @@ async function executeJob(job: RefreshJob, options: RefreshOptions, aliases: str
       }
     }
   }
-  job.status = 'ok';
+  if (job.status !== 'skipped') job.status = 'ok';
 }
 
 function outputStamp(file: string): string | undefined {
@@ -394,6 +400,7 @@ export async function refreshIndexes(
   options: RefreshOptions = {},
   dependencies: RefreshDependencies = {},
 ): Promise<RefreshReport> {
+  options = { ...options, workers: resolveIndexWorkers(options.workers) };
   const start = Date.now();
   const workspaces = workspacePaths(options);
   const jobs = planWorkspaceRefresh(options, workspaces);
@@ -403,6 +410,13 @@ export async function refreshIndexes(
     totals: { jobs: jobs.length, ok: 0, skipped: 0, deferred: 0, errors: 0, noManifest: 0, excluded: 0, wallMs: 0 },
   };
   const finish = () => {
+    for (const job of jobs) {
+      for (const receipt of job.sessionImports ?? (job.sessionImport ? [job.sessionImport] : [])) {
+        for (const warning of receipt.run.preflight?.scopeWarnings ?? []) {
+          report.messages.push(`WARNING ${job.workspace}: ${warning.message}`);
+        }
+      }
+    }
     for (const job of jobs.filter(job => job.noManifest)) {
       const command = `aiwg sessions discover --workspace '${job.workspace!.replace(/'/g, "'\\''")}'`;
       report.messages.push(`Session refresh skipped for ${job.workspace}: no authorized discovery manifest. Run \`${command}\` or configure sessions.discovery_manifests in .aiwg/aiwg.config.`);
@@ -418,6 +432,16 @@ export async function refreshIndexes(
         .reduce((total, receipt) => total + (receipt.totals.excluded ?? 0), 0), 0),
       wallMs: Date.now() - start,
     };
+    report.indices = [];
+    for (const workspace of workspaces.keys()) {
+      loadWorkspaceGraphs(workspace);
+      for (const adapter of selectIndexAdapters(indexAdapterRegistry(workspace), options.only)) {
+        report.indices.push({ ...indexFreshnessSnapshot(adapter, workspace), workspace });
+      }
+    }
+    if (!jobs.length && options.only && report.indices.length && report.indices.every(index => index.status === 'unsupported')) {
+      report.status = 'deferred'; report.reason = 'unsupported';
+    }
     return report;
   };
   if (options.dryRun) return finish();
@@ -461,6 +485,8 @@ export async function refreshIndexes(
         continue;
       }
       const jobStart = Date.now();
+      let adapter: ReturnType<typeof indexAdapterRegistry>[number] | undefined;
+      let beforeDigest: string | undefined;
       try {
         const gateWorkspace = job.workspace ?? workspaces.keys().next().value ?? options.cwd ?? process.cwd();
         const gate = await (dependencies.gate ?? refreshResourceGate)(gateWorkspace);
@@ -470,6 +496,12 @@ export async function refreshIndexes(
           break;
         }
         if (job.workspace) loadWorkspaceGraphs(job.workspace);
+        const workspace = job.workspace ?? options.cwd ?? process.cwd();
+        adapter = indexAdapterRegistry(workspace).find(item => item.name === (job.kind === 'graph' ? job.graph
+          : job.kind === 'cache' ? `caches:${job.graph}` : job.kind));
+        if (adapter?.supported && job.kind !== 'graph') {
+          try { beforeDigest = await indexAdapterDigest(adapter, workspace); } catch { /* Owner reports unavailable dependencies. */ }
+        }
         if (job.kind === 'cache' && jobs.some(other => other.kind === 'graph'
           && other.workspace === job.workspace && other.graph === job.graph && other.status === 'error')) {
           job.status = 'skipped'; job.reason = 'graph failed';
@@ -485,11 +517,36 @@ export async function refreshIndexes(
           } else await executeJob(job, options, aliases, discoverRuntime);
         } else await executeJob(job, options, aliases, discoverRuntime);
       } catch (error) {
-        job.status = 'error'; job.error = error instanceof Error ? error.message : String(error);
+        if (error instanceof DirectoryLockContentionError) {
+          job.status = 'deferred'; job.reason = 'lock-held'; report.status = 'deferred';
+        } else {
+          job.status = 'error'; job.error = error instanceof Error ? error.message : String(error);
+        }
       } finally {
         job.wallMs = Date.now() - jobStart;
+        if (adapter) {
+          const workspace = job.workspace ?? options.cwd ?? process.cwd();
+          if (adapter.supported && job.kind !== 'graph' && job.status !== 'deferred') {
+            try {
+              let after: string | undefined;
+              let probeError: string | undefined;
+              try { after = await indexAdapterDigest(adapter, workspace); } catch (error) { probeError = String(error); }
+              if (job.kind === 'runtime' && job.status === 'ok') beforeDigest = after;
+              const partial = job.reason && job.reason !== 'unchanged';
+              job.freshness = recordIndexVerification(adapter, workspace, { before: beforeDigest, after,
+                error: job.error ?? probeError, pendingWork: partial ? 1 : 0, wallMs: job.wallMs });
+            } catch (error) {
+              job.freshness = { ...indexFreshnessSnapshot(adapter, workspace), status: 'degraded',
+                pendingWork: 1, lastError: String(error) };
+            }
+          } else job.freshness = indexFreshnessSnapshot(adapter, workspace);
+          if (job.freshness.pendingWork && !job.error && job.status !== 'deferred' && job.kind === 'graph'
+            && job.reason !== 'scan directories missing') {
+            job.status = 'deferred'; job.reason = 'inputs changed during build'; report.status = 'deferred';
+          }
+        }
       }
-      if (job.status !== 'error' && job.reason !== 'graph failed'
+      if (job.status !== 'error' && job.status !== 'deferred' && job.reason !== 'graph failed'
         && job.reason !== 'no authorized discovery manifest') checkpoint.completed.push(key);
       writeJson(checkpointPath, checkpoint);
       dependencies.afterJob?.(job, checkpoint.completed.length);
@@ -521,19 +578,16 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
       if (flag === '--full') options.full = true;
       else if (flag === '--dry-run') options.dryRun = true;
       else if (flag === '--json') json = true;
-      else if (['--workspace', '--root', '--only', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes', '--exclude'].includes(flag)) {
+      else if (['--workspace', '--root', '--only', '--lock-wait-ms', '--max-record-bytes', '--max-source-bytes', '--exclude', '--index-workers'].includes(flag)) {
         const value = args[++i];
         if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
         if (flag === '--workspace') options.workspaces!.push(value);
         else if (flag === '--root') (options.root as string[]).push(value);
         else if (flag === '--max-record-bytes') options.maxRecordBytes = value;
         else if (flag === '--max-source-bytes') options.maxSourceBytes = value;
+        else if (flag === '--index-workers') options.workers = resolveIndexWorkers(value);
         else if (flag === '--exclude') (options.exclude ??= []).push(value);
         else if (flag === '--only') {
-          if (value !== 'graphs' && value !== 'sessions' && value !== 'caches'
-            && value !== 'runtime' && value !== 'models' && value !== 'issues') {
-            throw new Error('--only must be graphs, sessions, caches, runtime, models, or issues');
-          }
           options.only = value;
         } else {
           if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('--lock-wait-ms must be a non-negative integer');
@@ -541,6 +595,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
         }
       } else throw new Error(`unknown refresh option: ${flag}`);
     }
+    options.workers = resolveIndexWorkers(options.workers);
     resolveImportLimits(undefined, { maxRecordBytes: options.maxRecordBytes, maxSourceBytes: options.maxSourceBytes });
     resolveImportExclusions(undefined, options.exclude);
     const report = await refreshIndexes(options);
@@ -549,6 +604,7 @@ export async function runIndexRefresh(args: string[], cwd = process.cwd(), signa
       console.log(`Index refresh: ${report.status} (${report.mode})${report.reason ? `: ${report.reason}` : ''}`);
       for (const job of report.jobs) console.log(`  ${job.status}: ${job.kind} ${job.scope === 'host' ? '[host]' : job.workspace}${job.graph ? ` [${job.graph}]` : ''}${job.error || job.reason ? `: ${job.error ?? job.reason}` : ''}`);
       for (const job of report.jobs) {
+        for (const diagnostic of job.diagnostics ?? []) console.log(`    preparation: ${diagnostic}`);
         for (const receipt of job.sessionImports ?? (job.sessionImport ? [job.sessionImport] : [])) {
           for (const source of receipt.run.sources) {
             if (source.status === 'excluded') console.log(`    excluded: ${source.sourceId} ${source.exclusion?.kind} ${source.exclusion?.entry}`);

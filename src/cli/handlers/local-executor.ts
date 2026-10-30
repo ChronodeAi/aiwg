@@ -19,10 +19,11 @@
 
 import path from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { pathToFileURL } from 'node:url';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
+import { resolveSensitiveInput, sensitiveInputOptions, type SensitiveInputDependencies } from '../../auth/sensitive-input.js';
 
 const DEFAULT_PORT         = 8200;
 const DEFAULT_BIND         = '127.0.0.1';
@@ -41,10 +42,22 @@ interface ExecutorIdentity {
   created_at:  string;
 }
 
+/** Optional input: no source keeps registration/cache behavior, even at a terminal. */
+export async function resolveLocalExecutorToken(args: string[], dependencies: SensitiveInputDependencies = {}): Promise<string | undefined> {
+  const source = sensitiveInputOptions(args, 'token');
+  const environment = dependencies.environment ?? process.env;
+  const explicit = source.interactive || source.stdin || source.file !== undefined || source.store !== undefined || source.env !== undefined;
+  if (!explicit) {
+    if (!environment.AIWG_EXECUTOR_TOKEN) return undefined;
+    source.env = 'AIWG_EXECUTOR_TOKEN';
+  }
+  return resolveSensitiveInput(source, { ...dependencies, environment });
+}
+
 /**
  * Resolve or generate-once the executor identity.
  * Written to `.aiwg/local-executor/identity.json` so restarts reuse the same
- * UUID (token reclaim via identity store on the aiwg-serve side).
+ * UUID. The shim separately persists its bearer token to authenticate restarts.
  */
 function resolveExecutorId(override?: string): string {
   if (override) return override;
@@ -117,7 +130,7 @@ function warnIfNonLoopback(bind: string): void {
       '[local-executor] WARNING: binding on non-loopback interface ' + bind + '.\n' +
       '  This executor has isolation:none — agent code runs in the host process.\n' +
       '  Ensure this interface is not reachable by untrusted parties.\n' +
-      '  The executor token will be rotated by aiwg-serve on first non-loopback register.'
+      '  Keep the persisted executor bearer token private.'
     );
   }
 }
@@ -139,6 +152,10 @@ export const localExecutorServeHandler: CommandHandler = {
     // The subcommand is: `aiwg local-executor serve [flags]`
     // ctx.args[0] === 'serve' (consumed by router) or flags directly
     const flagArgs = ctx.args[0] === 'serve' ? ctx.args.slice(1) : ctx.args;
+    let preexistingToken: string | undefined;
+    try { preexistingToken = await resolveLocalExecutorToken(flagArgs); }
+    catch (error) { return { exitCode: 1, message: (error as Error).message }; }
+    const redact = (message: string): string => preexistingToken ? message.split(preexistingToken).join('[REDACTED]') : message;
     const opts = parseLocalExecutorArgs(flagArgs);
 
     warnIfNonLoopback(opts.bind);
@@ -159,7 +176,7 @@ export const localExecutorServeHandler: CommandHandler = {
       startExecutorServer = shimMod.startExecutorServer;
     } catch (err) {
       return {
-        message:  `Failed to load executor-shim: ${(err as Error).message}`,
+        message:  `Failed to load executor-shim: ${redact((err as Error).message)}`,
         exitCode: 1,
       };
     }
@@ -171,7 +188,7 @@ export const localExecutorServeHandler: CommandHandler = {
       DaemonSupervisor = dsMod.DaemonSupervisor;
     } catch (err) {
       return {
-        message:  `Failed to load DaemonSupervisor: ${(err as Error).message}`,
+        message:  `Failed to load DaemonSupervisor: ${redact((err as Error).message)}`,
         exitCode: 1,
       };
     }
@@ -237,6 +254,9 @@ export const localExecutorServeHandler: CommandHandler = {
       restBase,
       wsBase,
       aiwgServeUrl: opts.aiwgServe,
+      token: preexistingToken,
+      tokenPath: projectAiwgPath(process.cwd(), 'local-executor', 'tokens',
+        `${createHash('sha256').update(`${opts.aiwgServe}\0${opts.executorId}`).digest('hex')}.json`),
     });
 
     // Register with aiwg-serve
@@ -245,7 +265,7 @@ export const localExecutorServeHandler: CommandHandler = {
       token = await shim.register();
     } catch (err) {
       return {
-        message:  `Failed to register with aiwg-serve at ${opts.aiwgServe}: ${(err as Error).message}\n` +
+        message:  `Failed to register with aiwg-serve at ${opts.aiwgServe}: ${redact((err as Error).message)}\n` +
                   'Is aiwg serve running? Start it with: aiwg serve --no-open',
         exitCode: 1,
       };
@@ -262,7 +282,7 @@ export const localExecutorServeHandler: CommandHandler = {
     } catch (err) {
       await shim.deregister();
       return {
-        message:  `Failed to start executor server: ${(err as Error).message}`,
+        message:  `Failed to start executor server: ${redact((err as Error).message).split(token).join('[REDACTED]')}`,
         exitCode: 1,
       };
     }
@@ -336,9 +356,15 @@ export const localExecutorHandler: CommandHandler = {
         '  --aiwg-serve <url>      Registration target (default: http://127.0.0.1:7337)\n' +
         '  --max-concurrency <n>   Max concurrent missions (default: 4)\n' +
         '  --executor-id <uuid>    Override stable executor ID\n' +
+        '  --token-interactive     Read optional existing bearer without echo\n' +
+        '  --token-stdin           Read optional existing bearer from stdin\n' +
+        '  --token-file <path>     Read optional existing bearer from a private file\n' +
+        '  --token-store <name>    Read optional existing bearer from the OS store\n' +
+        '  --token-env <NAME>      Read optional existing bearer from a named variable\n' +
         '\n' +
         'Environment:\n' +
-        '  AIWG_SERVE_ENDPOINT     Override --aiwg-serve default\n'
+        '  AIWG_SERVE_ENDPOINT     Override --aiwg-serve default\n' +
+        '  AIWG_EXECUTOR_TOKEN     Optional preexisting executor bearer\n'
       );
       return { exitCode: 0 };
     }

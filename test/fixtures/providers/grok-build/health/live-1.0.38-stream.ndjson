@@ -1,0 +1,26 @@
+{"type":"available_commands","tools":["run_terminal_command","read_file"],"commands":["compact","always-approve"]}
+{"type":"available_commands","tools":["run_terminal_command","read_file"],"commands":["compact","always-approve"]}
+{"type":"text","data":"I'll"}
+{"type":"text","data":" run"}
+{"type":"text","data":" that"}
+{"type":"text","data":" command"}
+{"type":"text","data":","}
+{"type":"text","data":" then"}
+{"type":"text","data":" reply"}
+{"type":"text","data":" with"}
+{"type":"text","data":" exactly"}
+{"type":"text","data":" what"}
+{"type":"text","data":" you"}
+{"type":"text","data":" asked"}
+{"type":"text","data":"."}
+{"type":"available_commands","tools":["run_terminal_command","read_file"],"commands":["compact","always-approve"]}
+{"type":"usage","usage":{"input_tokens":19469,"output_tokens":67,"cache_read_input_tokens":1792,"cache_creation_input_tokens":0,"reasoning_tokens":32},"signature":"fixture-signature-1"}
+{"type":"tool_call","toolCallId":"fixture-toolCallId-1","title":"run_terminal_command","kind":"execute","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"echo hi","description":"Run echo hi as requested"},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"fixture-toolCallId-1","status":null,"content":[{"type":"content","content":{"type":"text","text":"Run echo hi as requested"}}],"rawOutput":null,"locations":[]}
+{"type":"tool_call_update","toolCallId":"fixture-toolCallId-1","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":""}}],"rawOutput":{"type":"Bash","output":[],"output_for_prompt":"","exit_code":0,"command":"echo hi","truncated":false,"signal":null,"timed_out":false,"description":null,"current_dir":"/synthetic/grok-capture/workspace","output_file":"","total_bytes":0},"locations":[]}
+{"type":"tool_call_update","toolCallId":"fixture-toolCallId-1","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"hi\n"}}],"rawOutput":{"type":"Bash","output":[104,105,10],"output_for_prompt":"hi\n","exit_code":0,"command":"echo hi","truncated":false,"signal":null,"timed_out":false,"description":null,"current_dir":"/synthetic/grok-capture/workspace","output_file":"","total_bytes":3},"locations":[]}
+{"type":"tool_call_update","toolCallId":"fixture-toolCallId-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"hi\n"}}],"rawOutput":{"type":"Bash","output":[104,105,10],"output_for_prompt":"exit: 0\nhi\n","exit_code":0,"command":"echo hi","truncated":false,"signal":null,"timed_out":false,"description":"Run echo hi as requested","current_dir":"/synthetic/grok-capture/workspace","output_file":"/synthetic/grok-capture/terminal/tool-1.log","total_bytes":3,"was_bare_echo":true},"locations":[]}
+{"type":"text","data":"ok"}
+{"type":"available_commands","tools":["run_terminal_command","read_file"],"commands":["compact","always-approve"]}
+{"type":"usage","usage":{"input_tokens":98,"output_tokens":17,"cache_read_input_tokens":21248,"cache_creation_input_tokens":0,"reasoning_tokens":16},"signature":"fixture-signature-2"}
+{"type":"end","stopReason":"end_turn","sessionId":"fixture-sessionId-1","requestId":"fixture-requestId-1","usage":{"input_tokens":19567,"cache_read_input_tokens":23040,"cache_creation_input_tokens":0,"output_tokens":84,"reasoning_tokens":48,"total_tokens":42691},"num_turns":2,"total_cost_usd":0.01739372,"total_cost_usd_ticks":173937200,"modelUsage":{"grok-4.7-build":{"inputTokens":19567,"outputTokens":84,"cacheReadInputTokens":23040,"cacheCreationInputTokens":0,"modelCalls":2,"costUSD":0.01739372}}}

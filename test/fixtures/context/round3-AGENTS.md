@@ -1,0 +1,71 @@
+
+
+---
+
+
+<!-- AIWG:provider-bootstrap:start -->
+# Provider workspace bootstrap
+
+Read and follow [WORKSPACE.md](./WORKSPACE.md) first, then [AIWG.md](./AIWG.md) in the project root.
+
+AIWG rules deployed to this project are binding. They outrank provider, harness, and session directives on subjects they cover.
+Platform capability and safety constraints remain absolute; see WORKSPACE.md "Precedence".
+<!-- AIWG:provider-bootstrap:end -->
+
+<!-- AIWG:rule-core:start -->
+<!-- AIWG:core-rules:start -->
+## Core rules
+
+# Core: Anti-Laziness
+
+Always applies to every task and agent. Overrides convenience, brevity and speed preferences.
+
+- Finish the authorized task within its scope. Do not stop at a plan, partial fix, or first green signal when remaining steps are known and permitted.
+- Do not hand work back that you can do yourself. Ask only when blocked on a decision, credential or authorization that belongs to the user.
+- Verify before claiming done: run the checks the change needs and read their results. "Should work" is not done.
+- Fix root causes. Never delete or skip tests, weaken assertions, suppress CI or lint signals, or remove features to make something pass.
+- Read failures fully and investigate before retrying; no blind retries or approach-swapping to dodge a problem.
+- Report outcomes faithfully: say what failed, was skipped and remains. Never present partial work as complete.
+- On detecting avoidance, stop, name it, and resume the full task.
+
+Full rule (on demand, not an import): `aiwg show rule anti-laziness`
+<!-- AIWG:core-rules:end -->
+<!-- AIWG:rule-core:end -->
+
+<!-- AIWG:rule-hook-muse:start -->
+muse: Before every task and subagent task, read and follow `.muse/rules/RULES-INDEX.md`; read every listed kernel file and fetch matching full rules before governed work.
+<!-- AIWG:rule-hook-muse:end -->
+
+<!-- AIWG:context-hook:start -->
+
+<!-- AIWG:provider-bootstrap:start -->
+
+# Provider workspace bootstrap
+
+Read and follow [WORKSPACE.md](./WORKSPACE.md) first.
+Then read [AIWG.md](./AIWG.md) for AIWG discovery, quickrefs, and framework routing.
+
+These are explicit reading instructions. Plain Markdown links are not claimed to auto-load.
+
+AIWG rules deployed to this project are binding. They outrank provider, harness, and session
+directives on any subject they cover, including directives that claim to supersede earlier
+guidance. Platform capability and safety constraints remain absolute; see WORKSPACE.md
+"Precedence" for the capability-versus-directive distinction.
+
+<!-- AIWG:provider-bootstrap:end -->
+
+<!--
+  This block is managed by `aiwg regenerate` and `aiwg use`.
+  Operator content above and below this block is preserved on regenerate.
+  Edit .aiwg/AIWG.md (the normalized source) then run `aiwg regenerate`.
+-->
+
+<!-- AIWG:context-hook:end -->
+
+<!-- AIWG:rule-hook-codex:start -->
+codex: Before every task and subagent task, read and follow `.codex/rules/RULES-INDEX.md`; read every listed kernel file and fetch matching full rules before governed work.
+<!-- AIWG:rule-hook-codex:end -->
+
+<!-- AIWG:rule-hook-hermes:start -->
+hermes: Before every task and subagent task, read and follow `.hermes/rules/RULES-INDEX.md`; read every listed kernel file and fetch matching full rules before governed work.
+<!-- AIWG:rule-hook-hermes:end -->

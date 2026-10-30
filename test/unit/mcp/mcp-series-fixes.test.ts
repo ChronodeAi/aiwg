@@ -12,6 +12,8 @@
  * @source @src/mcp/omp-config.mjs
  * @source @src/mcp/registry.ts
  * @source @src/mcp/registry.mjs
+ * @source @src/mcp/profiles.ts
+ * @source @src/mcp/profiles.mjs
  * @source @src/mcp/cli.mjs
  */
 
@@ -20,9 +22,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync, symlinkSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { McpServerRegistry, injectServers, buildServerConfig } from "../../../src/mcp/registry.js";
 import { McpServerRegistry as RuntimeRegistry, injectServers as runtimeInjectServers, buildServerConfig as runtimeBuildServerConfig } from "../../../src/mcp/registry.mjs";
+import { McpProfileRegistry } from "../../../src/mcp/profiles.js";
+import { McpProfileRegistry as RuntimeProfiles } from "../../../src/mcp/profiles.mjs";
 import {
   assertProjectCredentials,
   assertSupportedScope,
@@ -49,6 +54,22 @@ let savedEnv: Record<string, string | undefined>;
 const registryImplementations = [
   { implementation: "TypeScript", Registry: McpServerRegistry, inject: injectServers, build: buildServerConfig },
   { implementation: "runtime", Registry: RuntimeRegistry, inject: runtimeInjectServers, build: runtimeBuildServerConfig as typeof buildServerConfig },
+];
+
+const profileImplementations = [
+  { implementation: "TypeScript", Registry: McpProfileRegistry, modulePath: resolve(__dirname, "../../../src/mcp/profiles.ts") },
+  { implementation: "runtime", Registry: RuntimeProfiles as unknown as typeof McpProfileRegistry, modulePath: resolve(__dirname, "../../../src/mcp/profiles.mjs") },
+];
+
+const storeImplementations = [
+  ...registryImplementations.map(({ implementation, Registry }) => ({
+    implementation, Registry: Registry as typeof McpServerRegistry, collection: "servers", kind: "McpServerRegistry",
+    entry: { name: "inherited", type: "http", url: "https://synthetic.example/mcp" },
+  })),
+  ...profileImplementations.map(({ implementation, Registry }) => ({
+    implementation, Registry, collection: "profiles", kind: "McpProfileRegistry",
+    entry: { name: "inherited", servers: [] },
+  })),
 ];
 
 beforeEach(() => {
@@ -81,6 +102,98 @@ afterEach(() => {
     else process.env[key] = value;
   }
   rmSync(root, { recursive: true, force: true });
+});
+
+describe.each(storeImplementations)("#3565 standalone $implementation $collection", ({ Registry, collection, kind }) => {
+  const operations = collection === "profiles" ? ["add", "edit", "import", "save", "cached save"] : ["add", "edit", "save", "cached save"];
+  const invalidStores = [
+    { shape: "invalid JSON", content: "{ SYNTHETIC-BROKEN", error: /Invalid JSON in MCP configuration layer/ },
+    ...[null, [], "text", 7, false].map(value => ({
+      shape: `root ${JSON.stringify(value)}`, content: JSON.stringify(value), error: /Invalid MCP configuration.*object root/,
+    })),
+    ...[null, [], "text", 7, false].map(value => ({
+      shape: `map ${JSON.stringify(value)}`, content: JSON.stringify({ [collection]: value }), error: /Invalid MCP configuration.*object.*map/,
+    })),
+  ];
+
+  async function mutate(registry: McpServerRegistry | McpProfileRegistry, operation: string) {
+    if (operation === "add") return registry.add({ name: "synthetic", type: "stdio", command: "helper", servers: [] } as never);
+    if (operation === "edit") return "edit" in registry
+      ? registry.edit("synthetic", { description: "changed" })
+      : registry.update("synthetic", { description: "changed" });
+    if (operation === "import" && "importFrom" in registry) {
+      const source = join(root, "import.json");
+      writeFileSync(source, JSON.stringify({ profiles: { synthetic: { servers: [] } } }));
+      return registry.importFrom(source);
+    }
+    return registry.save({ apiVersion: "aiwg.io/v1", kind, [collection]: {} } as never);
+  }
+
+  it.each(invalidStores.flatMap(store => operations.map(operation => ({ ...store, operation }))))(
+    "$operation refuses $shape and preserves bytes", async ({ content, error, operation }) => {
+      const registry = new Registry(configDir);
+      if (operation === "cached save") await registry.load();
+      const file = registry.getPath();
+      writeFileSync(file, content);
+      await expect.soft(mutate(registry, operation)).rejects.toThrow(error);
+      expect(readFileSync(file, "utf-8")).toBe(content);
+    },
+  );
+
+  it.each(operations)("%s refuses an unreadable store without replacing it", async operation => {
+    const registry = new Registry(configDir);
+    if (operation === "cached save") await registry.load();
+    // A directory is deterministically unreadable as a file, including under root.
+    mkdirSync(registry.getPath());
+    const sentinel = join(registry.getPath(), "sentinel");
+    writeFileSync(sentinel, "SYNTHETIC-UNCHANGED");
+    await expect(mutate(registry, operation)).rejects.toThrow(/EISDIR/);
+    expect(statSync(registry.getPath()).isDirectory()).toBe(true);
+    expect(readFileSync(sentinel, "utf-8")).toBe("SYNTHETIC-UNCHANGED");
+  });
+
+  it.each(["add", "save", ...(collection === "profiles" ? ["import"] : [])])("%s initializes a missing store", async operation => {
+    const registry = new Registry(configDir);
+    await mutate(registry, operation);
+    expect(JSON.parse(readFileSync(registry.getPath(), "utf-8"))).toHaveProperty(collection);
+  });
+});
+
+describe("#3565 profile export uses the safe writer", () => {
+  it.each(profileImplementations.flatMap(implementation => ["target", "parent", "ancestor"].map(link => ({ ...implementation, link }))))(
+    "$implementation refuses a symlinked $link without changing outside bytes", async ({ Registry, link }) => {
+      const registry = new Registry(configDir);
+      await registry.add({ name: "synthetic", servers: [] });
+      const outside = join(root, "outside-export");
+      mkdirSync(join(outside, "nested"), { recursive: true });
+      const target = join(outside, "nested", "profiles.json");
+      writeFileSync(target, "SYNTHETIC-UNCHANGED");
+      const alias = join(projectDir, "export-link");
+      symlinkSync(link === "target" ? target : link === "parent" ? join(outside, "nested") : outside, alias);
+      const destination = link === "target" ? alias : link === "parent" ? join(alias, "profiles.json") : join(alias, "nested", "profiles.json");
+      await expect.soft(registry.exportTo(destination)).rejects.toThrow(/symlink/);
+      expect(readFileSync(target, "utf-8")).toBe("SYNTHETIC-UNCHANGED");
+    },
+  );
+
+  it.each(profileImplementations.flatMap(implementation => [false, true].map(existing => ({ ...implementation, existing }))))(
+    "$implementation writes private exports under a permissive umask (existing=$existing)", async ({ Registry, modulePath, existing }) => {
+      const registry = new Registry(configDir);
+      await registry.add({ name: "synthetic", servers: [] });
+      const destination = join(projectDir, "profiles.json");
+      if (existing) {
+        writeFileSync(destination, "previous");
+        chmodSync(destination, 0o664);
+      }
+      execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+        import { McpProfileRegistry } from ${JSON.stringify(pathToFileURL(modulePath).href)};
+        process.umask(0o002);
+        await new McpProfileRegistry(process.argv[1]).exportTo(process.argv[2], 'synthetic');
+      `, configDir, destination], { timeout: 60_000 });
+      expect(JSON.parse(readFileSync(destination, "utf-8"))).toEqual({ profiles: { synthetic: await registry.get("synthetic") } });
+      expect(statSync(destination).mode & 0o777).toBe(0o600);
+    },
+  );
 });
 
 function writeRegistryFile(dir: string, servers: Record<string, unknown>, extra: Record<string, unknown> = {}) {
@@ -421,14 +534,17 @@ describe("3. registry file modes", () => {
 });
 
 describe("6. fresh layered save loads ownership first", () => {
-  it.each(registryImplementations)("$implementation never copies inherited entries or policy", async ({ Registry }) => {
+  it.each(storeImplementations)("$implementation $collection never copies inherited entries or policy", async ({ Registry, collection, kind, entry }) => {
     const org = join(root, "org");
     const identity = join(root, "identity");
     mkdirSync(org, { recursive: true });
     mkdirSync(identity, { recursive: true });
-    writeRegistryFile(org, {
-      inherited: { name: "inherited", type: "http", url: "https://synthetic.example/mcp" },
-    }, { credentialPolicy: "references" });
+    const filename = `mcp-${collection}.json`;
+    writeFileSync(join(org, filename), JSON.stringify({
+      apiVersion: "aiwg.io/v1", kind, [collection]: { inherited: entry },
+      credentialPolicy: "references", metadata: { organisation: "synthetic" },
+    }));
+    const before = readFileSync(join(org, filename), "utf-8");
     process.env.AIWG_CONFIG_LAYERS = [org, identity].join(":");
 
     const loader = new Registry();
@@ -436,9 +552,11 @@ describe("6. fresh layered save loads ownership first", () => {
     const fresh = new Registry();
     await fresh.save(merged as never);
 
-    const written = JSON.parse(readFileSync(join(identity, "mcp-servers.json"), "utf-8"));
-    expect(written.servers).toEqual({});
+    const written = JSON.parse(readFileSync(join(identity, filename), "utf-8"));
+    expect(written[collection]).toEqual({});
     expect(written).not.toHaveProperty("credentialPolicy");
+    expect(written).not.toHaveProperty("metadata");
+    expect(readFileSync(join(org, filename), "utf-8")).toBe(before);
   });
 });
 

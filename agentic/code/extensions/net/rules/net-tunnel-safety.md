@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Review tunnel access policies and credentials, and verify health after tunnel changes.
 enforcement: high
 ---
 

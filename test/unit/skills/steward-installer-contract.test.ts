@@ -38,9 +38,12 @@ describe('self-verifying steward installer guidance (#2075)', () => {
   it('keeps installer-agent fast paths aligned while preserving standalone recovery routes', async () => {
     for (const file of installerInstructions) {
       const body = await readFile(file, 'utf8');
-      expect(body, file).toContain('structured-result verification stages');
-      expect(body, file).toContain('audit and recovery routes, not mandatory follow-up steps');
-      expect(body, file).toContain('Do not pass the\nmanifest to deterministic `aiwg setup-run`');
+      expect(body, file).toContain('interview, review, and apply stages');
+      expect(body, file).toContain('aiwg.setup.apply.v1');
+      expect(body, file).toContain('`aiwg setup --review`');
+      expect(body, file).toContain('`aiwg setup --apply`');
+      expect(body, file).toContain('audit and recovery routes');
+      expect(body, file).toContain('Do not pass the public manifest to `aiwg setup-run`');
     }
   });
 });

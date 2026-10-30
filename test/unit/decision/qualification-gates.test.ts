@@ -7,7 +7,7 @@ import { syntheticCases } from './qualification-gate-fixtures.js';
 const oneCase: QualificationCase = { id: 'C01', kind: 'baseline', mandatory: true, candidateTests: [] };
 const base: QualificationRunManifest = {
   schemaVersion: 'decision-qualification-run/v1', mode: 'offline', runId: 'unit', generatedAt: '2026-09-22T00:00:00.000Z',
-  sourceCommit: 'abc', dirty: false, cases: [oneCase], evidence: [], evidenceFlags: {},
+  sourceCommit: 'a'.repeat(40), dirty: false, cases: [oneCase], evidence: [], evidenceFlags: {},
 };
 const allFlags = () => Object.fromEntries(DECISION_RELEASE_GATES.flatMap(gate => gate.requiredEvidence).map(key => [key, true]));
 const gateArtifacts = Object.fromEntries(Object.entries(GATE_ARTIFACT_SCHEMAS).map(([flag, schemaVersion]) => [flag,
@@ -32,9 +32,22 @@ describe('decision qualification gate evaluator', () => {
   it('promotes only when every mandatory gate has complete passing evidence', () => {
     const { cases, evidence } = complete();
     const report = evaluateQualification({ ...base, cases, evidenceFlags: { 'privacy-scan-clean': true }, evidence, gateArtifacts },
-      undefined, { artifactsVerified: true });
+      undefined, { artifactsVerified: true, loadArtifactVerified: true });
     expect(report.gates.every(gate => gate.status === 'pass')).toBe(true);
     expect(report.decision).toBe('PROMOTE');
+  });
+
+  it('keeps G5 closed without a verified load artifact or with a dirty or abbreviated commit', () => {
+    const { cases, evidence } = complete();
+    const run = { ...base, cases, evidence, gateArtifacts, evidenceFlags: allFlags() };
+    for (const [candidate, proof] of [
+      [run, { artifactsVerified: true }],
+      [{ ...run, dirty: true }, { artifactsVerified: true, loadArtifactVerified: true }],
+      [{ ...run, sourceCommit: 'abc1234' }, { artifactsVerified: true, loadArtifactVerified: true }],
+    ] as const) {
+      expect(evaluateQualification(candidate, undefined, proof).gates.find(gate => gate.id === 'G5'))
+        .toMatchObject({ status: 'fail', missing: ['evidence:load-manifest-qualified'] });
+    }
   });
 
   it('GATE-DERIVED-03 ignores caller-set derived flags and requires recorded suites, artifacts and a verification proof', () => {
@@ -82,4 +95,15 @@ describe('decision qualification gate evaluator', () => {
     ] });
     expect(report.gates[0]?.missing.slice(0, 2)).toEqual(['case:C01', 'case:C02']);
   });
+});
+
+it('preserves the qualification verdict table for optional and mandatory failures (#2829)', () => {
+  const { cases, evidence } = complete();
+  for (const mandatory of [false, true]) for (const passed of [false, true]) {
+    const report = evaluateQualification({ ...base, cases, evidence: passed ? evidence : [],
+      evidenceFlags: { 'privacy-scan-clean': true }, gateArtifacts },
+      DECISION_RELEASE_GATES.map(gate => ({ ...gate, mandatory })),
+      { artifactsVerified: true, loadArtifactVerified: true });
+    expect(report.decision).toBe(mandatory && !passed ? 'HOLD' : 'PROMOTE');
+  }
 });

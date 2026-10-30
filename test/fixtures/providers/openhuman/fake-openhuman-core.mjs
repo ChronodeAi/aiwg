@@ -12,6 +12,7 @@
  * success scenario runs and nothing is recorded. The success output shape is
  * synthetic: the real result payload is not a pinned upstream contract.
  */
+import { ignoreTermUntilKilled } from '../ignore-term.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const config = process.env.AIWG_FAKE_WORKER_CONFIG
@@ -103,8 +104,7 @@ switch (scenario) {
     process.exit(0);
     break;
   case 'ignore-term':
-    process.on('SIGTERM', () => {});
-    setInterval(() => {}, 1000);
+    ignoreTermUntilKilled();
     break;
   case 'hang':
   case 'stdin-wait-notice':

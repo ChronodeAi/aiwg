@@ -1,7 +1,9 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /** Google Antigravity CLI project resource deployment, qualified against 1.1.26. */
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  withRuleDeployment,
   collectFrameworkArtifacts,
   createAgentsMdFromTemplate,
   deployFiles,
@@ -14,10 +16,9 @@ import {
   normalizeDeploymentMode,
   resolveAiwgRoot,
 } from './base.mjs';
-
 export const name = 'antigravity';
 export const aliases = ['agy'];
-export const paths = { agents: '.agents/agents', commands: '', skills: '.agents/skills', rules: '' };
+export const paths = { agents: '.agents/agents', commands: '', skills: '.agents/skills', rules: '.antigravity/rules' };
 export const kernelSkillsPath = '.agents/skills';
 export const support = { agents: 'degraded', commands: 'indexed', skills: 'native', rules: 'context' };
 export const capabilities = {
@@ -28,9 +29,7 @@ export const capabilities = {
   homeDirectoryDeploy: false,
   parallelCommandAndSkillSurfaces: false,
 };
-
 export const mapModel = model => model;
-
 const ANTIGRAVITY_TOOL_MAP = new Map([
   ['Read', 'view_file'],
   ['Write', 'write_to_file'],
@@ -38,7 +37,6 @@ const ANTIGRAVITY_TOOL_MAP = new Map([
   ['Grep', 'grep_search'],
   ['Bash', 'run_command'],
 ]);
-
 function mapTools(value) {
   if (!value) return [];
   return value
@@ -48,7 +46,8 @@ function mapTools(value) {
     .filter(Boolean);
 }
 
-export function transformAgent(_source, content) {
+export const transformAgent = withModelWrapper('antigravity', translateAgent);
+function translateAgent(_source, content) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) return content;
   const frontmatter = match[1];
@@ -96,7 +95,7 @@ export async function postDeploy(target, opts) {
     throw new Error('Antigravity global skill deployment is disabled: official 1.1.26 path documentation conflicts');
   }
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
-    createAgentsMd(target, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(target, opts.srcRoot, opts.dryRun);
   }
   if (!opts.quiet) {
     console.log('Antigravity resources are project scoped. Restart agy after resource changes; authenticate with the provider separately.');
@@ -106,6 +105,10 @@ export async function postDeploy(target, opts) {
 export function getFileExtension() { return '.md'; }
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   if (opts.global || opts.user || opts.scope === 'user') {
     throw new Error('Antigravity global skill deployment is disabled: official 1.1.26 path documentation conflicts');
   }

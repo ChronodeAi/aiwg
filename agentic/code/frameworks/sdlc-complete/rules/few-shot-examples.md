@@ -1,5 +1,14 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Keep two or three complete, diverse examples reachable per agent; inline at most one compact example, externalize the rest, and keep definitions within the 16 KB ceiling."
+bound_to:
+  agents: ["agentsmith"]
+  skills: ["add-agent", "devkit-create-agent", "smith-agenticdef"]
+triggers:
+  - "agent few shot examples catalog"
+  - "externalize examples from agent definitions"
+  - "agent definition 16 KB size ceiling"
 ---
 
 # Few-Shot Examples Rules

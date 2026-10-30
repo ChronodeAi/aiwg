@@ -59,8 +59,15 @@ describe('loginInProfile --api-key-env credential safety (#3062 second review, f
       `const chunks = [];\n` +
       `process.stdin.on('data', (c) => chunks.push(c));\n` +
       `process.stdin.on('end', () => {\n` +
-      `  writeFileSync(${JSON.stringify(stdinLog)}, Buffer.concat(chunks).toString('utf8'));\n` +
-      `  process.exit(0);\n` +
+      `  const key = Buffer.concat(chunks).toString('utf8');\n` +
+      `  writeFileSync(${JSON.stringify(stdinLog)}, key);\n` +
+      `  const split = Math.floor(key.length / 2);\n` +
+      `  process.stdout.write('stdout-key=' + key.slice(0, split), () => {\n` +
+      `    process.stdout.write(key.slice(split) + '\\n');\n` +
+      `    process.stderr.write('stderr-key=' + key.slice(0, split), () => {\n` +
+      `      process.stderr.write(key.slice(split) + '\\n');\n` +
+      `    });\n` +
+      `  });\n` +
       `});\n`,
       { mode: 0o755 },
     );
@@ -81,6 +88,7 @@ describe('loginInProfile --api-key-env credential safety (#3062 second review, f
         HOME: root,
         CODEX_HOME: join(root, '.codex'),
         AIWG_CREDSAFE_FAKE_KEY: FAKE_KEY,
+        AIWG_UNRELATED_SYNTHETIC_SECRET: 'synthetic-unrelated-helper-secret',
         // The diagnostic surface under test: this is what made the key
         // visible in the first round.
         NODE_DEBUG: 'child_process',
@@ -94,7 +102,10 @@ describe('loginInProfile --api-key-env credential safety (#3062 second review, f
     // whatever NODE_DEBUG printed — never contains the fake key.
     expect(result.stdout).not.toContain(FAKE_KEY);
     expect(result.stderr).not.toContain(FAKE_KEY);
+    expect(result.stderr).not.toContain('synthetic-unrelated-helper-secret');
     expect(result.stdout).toContain('login resolved without throwing');
+    expect(result.stdout).toContain('stdout-key=[redacted]');
+    expect(result.stderr).toContain('stderr-key=[redacted]');
 
     // The stub codex process actually ran and received the key — but
     // only on stdin.
@@ -111,5 +122,7 @@ describe('loginInProfile --api-key-env credential safety (#3062 second review, f
     // value reaches the stub's own environment.
     expect(env.AIWG_CREDSAFE_FAKE_KEY).toBeUndefined();
     expect(Object.values(env)).not.toContain(FAKE_KEY);
+    expect(env.AIWG_UNRELATED_SYNTHETIC_SECRET).toBeUndefined();
+    expect(env.NODE_DEBUG).toBeUndefined();
   });
 });

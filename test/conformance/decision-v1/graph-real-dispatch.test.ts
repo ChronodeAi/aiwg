@@ -60,7 +60,8 @@ describe('actual ruleset dispatcher through existing Flow skill bridge', () => {
     });
     for (let replay = 0; replay < 2; replay++) {
       const records: any[] = [];
-      const host = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan),
+      // A fixed budget clock keeps admission and settlement independent of CI load.
+      const host = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, [], () => 0),
         () => ({ attempts: 4, tokens: 20, costMicros: 10 }),
         async request => { inputs.push(request.inputs); return invoker(request); }, undefined,
         value => records.push(structuredClone(value)));

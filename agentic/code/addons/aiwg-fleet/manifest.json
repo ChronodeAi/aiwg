@@ -19,24 +19,50 @@
   ],
   "entry": {
     "behaviors": "behaviors/",
-    "docs": "docs/"
+    "docs": "docs/",
+    "agents": "agents/"
   },
   "behaviors": [
     "quiet-bot",
     "quiet-business-bot"
   ],
   "dependencies": {
-    "required": ["aiwg-utils"]
+    "required": [
+      "aiwg-utils"
+    ]
   },
   "providers": {
-    "openclaw": { "supported": true, "native_behaviors": true },
-    "claude-code": { "supported": "fallback-rule" },
-    "warp": { "supported": "fallback-rule" },
-    "copilot": { "supported": "fallback-rule" },
-    "cursor": { "supported": "fallback-rule" },
-    "windsurf": { "supported": "fallback-rule" },
-    "opencode": { "supported": "fallback-rule" },
-    "factory": { "supported": "fallback-rule" },
-    "codex": { "supported": "fallback-rule" }
-  }
+    "openclaw": {
+      "supported": true,
+      "native_behaviors": true
+    },
+    "claude-code": {
+      "supported": "fallback-rule"
+    },
+    "warp": {
+      "supported": "fallback-rule"
+    },
+    "copilot": {
+      "supported": "fallback-rule"
+    },
+    "cursor": {
+      "supported": "fallback-rule"
+    },
+    "windsurf": {
+      "supported": "fallback-rule"
+    },
+    "opencode": {
+      "supported": "fallback-rule"
+    },
+    "factory": {
+      "supported": "fallback-rule"
+    },
+    "codex": {
+      "supported": "fallback-rule"
+    }
+  },
+  "agents": [
+    "fleet-quiet-bot",
+    "fleet-business-bot"
+  ]
 }

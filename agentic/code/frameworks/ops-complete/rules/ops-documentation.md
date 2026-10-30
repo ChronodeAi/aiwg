@@ -1,5 +1,48 @@
 ---
 enforcement: high
+activation: bound
+summary: Write executable, classified ops documents with the required eight sections, explicit commands, expected output, verification, and a successful destination gate.
+bound_to:
+  agents:
+    - backup-verifier
+    - cert-lifecycle-monitor
+    - dr-planner
+    - identity-auditor
+    - network-auditor
+    - ops-deployment-manager
+    - ops-inventory
+    - ops-runbook-executor
+    - pki-operator
+    - secret-operator
+    - stream-health-monitor
+    - sys-host-profiler
+  skills:
+    - ops-audit-trail
+    - ops-verify
+    - dev-builder-audit
+    - dev-ci-builder
+    - dev-pipeline-audit
+    - dev-release-coordinate
+    - it-asset-sync
+    - it-deployment-lifecycle
+    - it-dr-test
+    - it-identity-audit
+    - it-network-state
+    - it-provision
+    - net-connectivity-test
+    - net-dns-check
+    - net-vlan-audit
+    - repo-maintainer
+    - sec-access-snapshot
+    - sec-cert-scan
+    - sec-luks-verify
+    - stream-deploy
+    - stream-health
+    - sys-cert-check
+    - sys-fleet-inventory
+    - sys-host-audit
+triggers:
+  - write a verified operational runbook
 ---
 
 # Ops Documentation Rules

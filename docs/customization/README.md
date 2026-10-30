@@ -18,9 +18,19 @@ For multi-repository work, see [Working Across Multiple Projects](../guides/mult
 
 ## Path A — Project-Local (simplest start for a single project)
 
+> "Add a project-local rule that blocks edits under vendor/ and deploy it for this project only."
+
+Your assistant scaffolds the bundle with `aiwg new-bundle`, deploys it with `aiwg use`, and checks it with `aiwg doctor --project-local`.
+
+> "It deployed to the wrong provider. Show me where it landed and how to remove it."
+
+Your assistant inspects shadow resolution and the deployed paths, then removes the deployment while keeping the bundle source.
+
 Author bundles directly inside your project under `.aiwg/{type}/{name}/`.
 No fork, no clone, no rebuild: just files in your repo. Discovered
 automatically by `aiwg use`.
+
+### Command reference
 
 ```bash
 aiwg new-bundle my-team-rules --type extension --starter rule
@@ -56,11 +66,17 @@ The graduate operation is a hash-verified copy using the same bundle layout
 
 ## Path B — Fork (for upstream contributions)
 
+> "I want to fix AIWG core and contribute it back. Set up fork mode for this project."
+
+Your assistant hands the setup to the Steward agent, which forks, enables dev mode, and wires upstream sync.
+
 When you're building something you might contribute to AIWG itself, or
 you want to live on the bleeding edge with custom branches, fork AIWG on
 GitHub and run in dev mode. The Steward agent handles the setup.
 
 > "Set up AIWG customization mode for me — I want to fork and contribute back"
+
+Your assistant confirms fork scope and upstream sync before changing core sources.
 
 What you get:
 - Your own copy of AIWG on GitHub that you control
@@ -82,8 +98,14 @@ project-local bundles to upstream and PRing them.
 
 ## Path C — Corpus (cross-project sharing)
 
+> "Share my-team-rules across my private repos without publishing it."
+
+Your assistant promotes the bundle into the corpus with `aiwg promote --to corpus` and registers that corpus source in each project.
+
 When you have customizations to share across many of your own projects
 without making them public:
+
+### Command reference
 
 1. Create a corpus directory: `mkdir ~/my-corpus`
 2. Author bundles there directly, or promote project-local bundles into it:
@@ -123,6 +145,10 @@ Are you modifying AIWG core (TS source, build, deploy pipeline)?
 ---
 
 ## Mixing paths
+
+> "I started project-local. How do I share this bundle later without rebuilding it?"
+
+Your assistant promotes the same bundle layout upstream or into a corpus with `aiwg promote`.
 
 The three paths compose:
 

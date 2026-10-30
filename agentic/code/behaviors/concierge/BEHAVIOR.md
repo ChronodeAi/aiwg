@@ -1,4 +1,8 @@
 ---
+activation: bound
+summary: "Route daemon requests with professional warmth and maintain session continuity."
+bound_to:
+  agents: [concierge]
 name: concierge
 version: 1.0.0
 description: 'Persistent front-facing interface for the AIWG daemon. Routes user requests

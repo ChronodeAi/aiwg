@@ -2,8 +2,33 @@
 enforcement: high
 id: strict-toolchain
 severity: HIGH
-applies_to: [all-agents, test-engineer, security-auditor, code-reviewer]
-tags: [compiler-warnings, ci, toolchain, static-analysis]
+applies_to:
+  - all-agents
+  - test-engineer
+  - security-auditor
+  - code-reviewer
+tags:
+  - compiler-warnings
+  - ci
+  - toolchain
+  - static-analysis
+activation: paths
+summary: Define language-specific strict compiler, lint, and typecheck floors in CI; fail new warnings and keep sanitizers or fuzzing as additional coverage.
+bound_to:
+  agents:
+    - build-engineer
+    - test-engineer
+    - code-reviewer
+    - security-auditor
+  skills:
+    - strict-toolchain-audit
+    - sanitizer-in-ci
+    - fuzzing-in-ci
+    - ci-workflow-audit
+    - dev-ci-builder
+paths: [ "**/tsconfig*.json", "**/Cargo.toml", "**/clippy.toml", "**/.clippy.toml", "**/go.mod", "**/.golangci.*", "**/pyproject.toml", "**/mypy.ini", "**/.ruff.toml", "**/ruff.toml", "**/Makefile", "**/CMakeLists.txt", "**/meson.build", "**/package.json", "**/eslint.config.*", .github/workflows/**, .gitea/workflows/**, .gitlab-ci.yml ]
+triggers:
+  - enforce strict compiler warnings in CI
 ---
 
 # Strict Toolchain

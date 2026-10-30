@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
+import { DECISION_STAGED_LOAD_RESULT_VERSIONS } from './load.js';
 import { evaluateQualification } from './gates.js';
 import {
   deriveGateEvidence, DERIVED_GATE_EVIDENCE, GATE_ARTIFACT_FLAGS, GATE_ARTIFACT_SCHEMAS,
@@ -99,7 +100,8 @@ interface QualificationArtifact {
 export const QUALIFICATION_EVIDENCE_ID = /^(?:CON|POL|BCH|CTX|CNC|CAN|RTY|REC|SEC|PRV|CAL|DRF|CCP|M(?:0[1-9]|1[01]))-[A-Z0-9][A-Z0-9._-]*$/;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_ARTIFACT_BYTES = 256 * 1024;
+// Full staged-load receipt history and fixed-interval samples exceed 256 KiB.
+const DEFAULT_MAX_ARTIFACT_BYTES = 1024 * 1024;
 const DEFAULT_CONCURRENCY = 4;
 
 function boundedInteger(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
@@ -328,7 +330,7 @@ async function attachGateArtifacts(
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
     await rename(temporary, target);
-    refs[flag] = { artifact: relative, digest: digest(bytes), schemaVersion: GATE_ARTIFACT_SCHEMAS[flag] };
+    refs[flag] = { artifact: relative, digest: digest(bytes), schemaVersion: (parsed as { schemaVersion: string }).schemaVersion };
     context.accepted[flag] = parsed;
   }
   return refs;
@@ -359,8 +361,11 @@ export async function verifyQualificationGateArtifacts(
     const parsed = parseJson(bytes);
     const versionOk = flag === 'immutable-splits'
       ? (IMMUTABLE_SPLIT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
-      : ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
-    if (!versionOk || !validateGateArtifact(flag, parsed, context)) {
+      : flag === 'load-manifest-qualified'
+        ? (DECISION_STAGED_LOAD_RESULT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
+        : ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
+    if (!versionOk || (flag === 'load-manifest-qualified' && (parsed as { schemaVersion?: string })?.schemaVersion !== ref.schemaVersion)
+      || !validateGateArtifact(flag, parsed, context)) {
       results.push({ flag, verified: false, reason: 'invalid-artifact' });
       continue;
     }
@@ -506,7 +511,9 @@ export async function evaluateExecutedQualification(
     && verification.every(item => item.verified && caseIds.has(item.caseId))
     && gateVerification.every(item => item.verified);
   return { manifest, verification, gateVerification,
-    report: evaluateQualification(hardened, undefined, { artifactsVerified }) };
+    report: evaluateQualification(hardened, undefined, {
+      artifactsVerified, loadArtifactVerified: gateVerified.has('load-manifest-qualified'),
+    }) };
 }
 
 /** Executes, persists, verifies, and evaluates in one promotion-capable pipeline. */

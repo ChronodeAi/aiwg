@@ -48,10 +48,14 @@ The selected skill declares inputs, outputs, gates, constraints, and references.
 For collaborative artifact work, a skill may use this logical pattern:
 
 ```text
-Primary Author -> Independent Reviewers -> Synthesizer -> Baseline/Archive
+Primary Author -> Separate Initial Reviews -> Synthesizer -> Baseline/Archive
 ```
 
 The mechanics vary by provider. Claude may expose a `Task`-style API, Codex may expose collaboration primitives, and other providers may execute or emulate the pattern differently. Steward/provider guidance determines the mechanism. Independent work can run concurrently within configured caps; dependent work remains sequential.
+
+## Evaluator evidence
+
+Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.
 
 ## Artifacts and Gates
 

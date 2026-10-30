@@ -47,7 +47,8 @@ describe('DAG real dispatcher bridge boundary', () => {
     const invoker = decisionRulesetFlowInvoker(graph, { resolve: () => resolved,
       project: id => ({ result: id }), unknownCostBoundUsd: 0.000004,
       evaluate: async req => { calls.push(req); return result; } });
-    const ledger = new GraphBudgetLedger(graph, planDecisionGraph(graph, new Set([pin.digest, bindingPin.digest])));
+    // A fixed budget clock keeps admission and settlement independent of CI load.
+    const ledger = new GraphBudgetLedger(graph, planDecisionGraph(graph, new Set([pin.digest, bindingPin.digest])), [], () => 0);
     const invokeNode = admittedDecisionFlowAdapter(ledger,
       () => ({ attempts: 1, tokens: 4, costMicros: 5 }), invoker);
     const report = await executeFlowGraph(manifest, { validation: { catalogIds: new Set([skill]) }, invokeNode });

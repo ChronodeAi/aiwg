@@ -25,7 +25,8 @@ import { resolveSyncProcessTimeoutMs } from "../../../src/process/bounded-child-
 
 vi.mock("os", async importOriginal => {
   const os = await importOriginal<typeof import("os")>();
-  return { ...os, homedir: vi.fn(() => os.tmpdir()) };
+  const homedir = vi.fn(() => os.tmpdir());
+  return { ...os, homedir, default: { ...os, homedir } };
 });
 
 // Spies through to the real implementation by default; the "stays alive
@@ -66,6 +67,8 @@ function makeFakeAsyncChild() {
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
     stdin: typeof stdin;
+    stdout: EventEmitter & { destroy: ReturnType<typeof vi.fn> };
+    stderr: EventEmitter & { destroy: ReturnType<typeof vi.fn> };
     kill: ReturnType<typeof vi.fn>;
     exitCode: number | null;
     signalCode: NodeJS.Signals | null;
@@ -74,6 +77,8 @@ function makeFakeAsyncChild() {
   // A spawned child has a PID; signalChild() refuses to signal one without.
   child.pid = 424242;
   child.stdin = stdin;
+  child.stdout = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+  child.stderr = Object.assign(new EventEmitter(), { destroy: vi.fn() });
   child.exitCode = null;
   child.signalCode = null;
   child.kill = vi.fn((signal?: NodeJS.Signals) => {
@@ -96,6 +101,7 @@ vi.mock("child_process", async importOriginal => {
       queueMicrotask(() => {
         child.setExit(0, null);
         child.emit("exit", 0, null);
+        child.emit("close", 0, null);
       });
       return child;
     }),
@@ -344,6 +350,26 @@ describe("Codex runtime-home config permissions", () => {
     }
   });
 
+  it.each(["legacy", "xdg", "explicit"])("preserves %s AIWG configuration across the profile HOME change", async (kind) => {
+    vi.stubEnv("AIWG_CONFIG", "");
+    const configDir = kind === "legacy" ? join(root, ".aiwg")
+      : kind === "xdg" ? join(root, ".config", "aiwg") : join(root, "operator-config");
+    mkdirSync(configDir, { recursive: true });
+    if (kind === "explicit") vi.stubEnv("AIWG_CONFIG", configDir);
+    writeFileSync(join(configDir, "installation.json"), JSON.stringify({ runMode: "development" }));
+    const runtimeHome = await ensureRuntimeHome("isolated");
+    vi.mocked(spawnSync).mockClear();
+    launchWithProfile("isolated", ["--version"]);
+    await loginInProfile("isolated");
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+    for (const [, , options] of vi.mocked(spawnSync).mock.calls) {
+      expect(options?.env?.AIWG_CONFIG).toBe(configDir);
+      expect(options?.env?.HOME).toBe(runtimeHome);
+      expect(options?.env?.CODEX_HOME).toBe(runtimeHome);
+    }
+    expect(process.env.HOME).toBe(root);
+  });
+
   describe("headless launch/login (#3062)", () => {
     it("bounds `codex exec <prompt>` instead of handing over the terminal, with or without a tty", async () => {
       const runtimeHome = await ensureRuntimeHome("isolated");
@@ -427,6 +453,47 @@ describe("Codex runtime-home config permissions", () => {
       expect(spawnSync).not.toHaveBeenCalled();
     });
 
+    it('waits for close and redacts credentials split across trailing diagnostic chunks', async () => {
+      await ensureRuntimeHome('isolated');
+      const key = 'synthetic-split-output-key';
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        const child = makeFakeAsyncChild();
+        queueMicrotask(() => {
+          child.setExit(0, null);
+          child.emit('exit', 0, null);
+          child.stdout.emit('data', Buffer.from(`accepted ${key.slice(0, 9)}`));
+          child.stdout.emit('data', Buffer.from(`${key.slice(9)}\n`));
+          child.stderr.emit('data', Buffer.from(`diagnostic ${key}\n`));
+          child.emit('close', 0, null);
+        });
+        return child;
+      });
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await loginInProfile('isolated', { apiKey: key });
+        expect(stdout.mock.calls.map(call => String(call[0])).join('')).toContain('accepted [redacted]');
+        expect(stderr.mock.calls.map(call => String(call[0])).join('')).toContain('diagnostic [redacted]');
+        expect([...stdout.mock.calls, ...stderr.mock.calls].map(call => String(call[0])).join('')).not.toContain(key);
+      } finally { stdout.mockRestore(); stderr.mockRestore(); }
+    });
+
+    it('kills a login child whose combined diagnostics exceed the output cap', async () => {
+      await ensureRuntimeHome('isolated');
+      const child = makeFakeAsyncChild();
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => {
+          child.stdout.emit('data', Buffer.alloc(512 * 1024, 'x'));
+          child.stderr.emit('data', Buffer.alloc(512 * 1024 + 1, 'y'));
+        });
+        return child;
+      });
+      await expect(loginInProfile('isolated', { apiKey: 'synthetic-output-cap-key' })).rejects.toThrow('1 MiB limit');
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
+      expect(child.stdout.destroy).toHaveBeenCalledOnce();
+      expect(child.stderr.destroy).toHaveBeenCalledOnce();
+    });
+
     it("refuses the interactive OAuth login without a terminal and without apiKeyEnv, spawning nothing", async () => {
       await ensureRuntimeHome("isolated");
       vi.mocked(isInteractive).mockReturnValue(false);
@@ -464,6 +531,7 @@ describe("Codex runtime-home config permissions", () => {
         queueMicrotask(() => {
           child.setExit(1, null);
           child.emit("exit", 1, null);
+          child.emit("close", 1, null);
         });
         return child;
       });

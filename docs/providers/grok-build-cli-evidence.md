@@ -200,11 +200,58 @@ to recognize ACP events. The unsupported
 `--no-auto-update` flag was removed from legacy headless/smoke argv. Their
 synthetic fixtures under `test/fixtures/providers/grok-build/health/` mirror
 these documented events. The merged direct adapter and its approved module
-digest remain unchanged. This alignment is documentation-backed only: no live
-capture or account/timing qualification was performed for #2994.
-The live-capture acceptance item remains open: help/bundled documentation and
-synthetic replay do not establish live stream compatibility. No prompt/model
-call is authorized in this repair session.
+digest remain unchanged. The initial alignment was documentation-backed:
+no live capture or account/timing qualification was performed in that repair.
+The supplied 1.0.38 capture below now backs stream compatibility for #2994;
+it does not qualify the 1.0.50 direct-shell invocation or its permission modes.
+
+### Live capture (1.0.38, 2026-10-25)
+
+An authenticated **grok 1.0.38** run captured on **2026-10-25** used
+`--output-format streaming-json` with the prompt
+`Run the shell command 'echo hi' then reply with exactly: ok`.
+The supplied evidence is retained as the scrubbed
+[stream fixture](../../test/fixtures/providers/grok-build/health/live-1.0.38-stream.ndjson)
+and a separate
+[single JSON result fixture](../../test/fixtures/providers/grok-build/health/live-1.0.38-result.json).
+The adjacent [README](../../test/fixtures/providers/grok-build/health/README.md)
+records provenance and scrubbing. No additional Grok invocation was made to
+prepare or replay these fixtures.
+
+Observed order: two `available_commands`, thirteen `text` chunks,
+`available_commands`, `usage`, `tool_call`, four `tool_call_update`, final
+`text` (`ok`), `available_commands`, `usage`, `end`. All 26 events use the
+documented ACP vocabulary. Differences from the 1.0.50 documentation examples:
+
+- The initial `tool_call.status` is `pending`, rather than the example's
+  `in_progress`. Update statuses are `null`, `in_progress`, `in_progress`,
+  `completed`; the null-status update also has `rawOutput: null`.
+- Both `usage` events contain only `type`, `usage`, and `signature`:
+  `messageId` and `stopReason` are absent. The first usage boundary precedes
+  tool execution, and the second follows the final answer. Usage is also
+  aggregated on `end`, consistent with the documented placement.
+- `end` contains `stopReason: end_turn`, `sessionId`, `requestId`, `usage`,
+  `num_turns: 2`, `modelUsage`, `total_cost_usd`, and the additional
+  `total_cost_usd_ticks` field. Usage uses snake_case token names; model
+  usage uses camelCase. No documented field-name conflict was observed.
+- Tool output includes nested ACP content wrappers and a structured `Bash`
+  `rawOutput` (byte-array output, exit code, paths and execution metadata),
+  rather than the documentation's minimal example object.
+
+The separate JSON capture is one object with `text: ok`, `stopReason:
+end_turn`, IDs, aggregate usage, `num_turns: 1`, both cost fields and
+`modelUsage`; it is not an NDJSON event. The transport's JSON test preserves
+that distinction.
+
+No parser or observer behavior change was needed: existing handling permits
+pending/null tool updates, treats usage as activity without requiring its
+optional identifiers, and recognizes `end_turn` as terminal success. Offline
+tests replay the live fixtures through the headless parser, shared health
+observer, and direct adapter (per-event parity, chunked health framing, and
+final-answer extraction across usage/tool boundaries). `thought`, `plan`,
+`error`, and failure stop reasons remain covered by synthetic vectors; they
+were not observed in this successful capture. Account/timing qualification
+and a live 1.0.50 run remain outside this evidence.
 
 ## 5. Authentication
 

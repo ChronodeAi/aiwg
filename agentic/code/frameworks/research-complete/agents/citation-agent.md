@@ -62,7 +62,9 @@ Before inserting citations, document:
 
 ### 2. Source Verification Phase
 
-1. **Verify source exists** - Check `.aiwg/research/sources/metadata/REF-XXX.yaml`
+Use `aiwg corpus resolve` for verified paper identity before selecting a REF; exact REF existence does not itself verify paper metadata.
+
+1. **Verify source exists** - Require a regular corpus Markdown file whose REF token exactly equals the requested ID, preserving zero padding and any letter suffix. Reject blank or malformed IDs and directories; a filename prefix is insufficient.
 2. **Load metadata** - Extract title, authors, year, venue, DOI
 3. **Validate DOI** - Confirm link resolves to correct paper
 4. **Check completeness** - Ensure all required fields present

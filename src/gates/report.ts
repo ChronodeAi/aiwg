@@ -1,12 +1,14 @@
+import { assertDecisionCeiling, GateDecisionUpgradeError } from './lattice.js';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { artifactDigest } from '../decision/validate.js';
-import { evaluateGates, maxOutcome, type EvaluateGatesInput } from './evaluate.js';
+import { evaluateGates, type EvaluateGatesInput } from './evaluate.js';
 import { validateGateDocument } from './schema.js';
 import type { GateOutcome, GateReport } from './types.js';
 
 export interface GateReportValidation {
   valid: boolean;
   reasons: string[];
+  error?: GateDecisionUpgradeError;
 }
 
 /**
@@ -86,12 +88,12 @@ export function validateGateReport(report: unknown, input: EvaluateGatesInput): 
     reasons.push('report-reevaluation-mismatch');
   }
   if (expected.decision !== parsed.decision) reasons.push('report-decision-mismatch');
-  const components: GateOutcome[] = [
-    ...parsed.gateEvidence.map(entry => entry.outcome),
-    parsed.ceilings.packOutcome, parsed.ceilings.upstreamCeiling, parsed.ceilings.bindingCeiling,
-  ];
-  if (maxOutcome(parsed.decision, maxOutcome(...components)) !== parsed.decision) {
-    reasons.push('report-upgrades-component');
+  try {
+    assertGateReportDecision(parsed);
+    assertDecisionCeiling(parsed.decision, input.upstream?.metadata.release_gate.decision ?? 'PROMOTE', input.binding.spec.ceiling ?? 'PROMOTE');
+  } catch (error) {
+    if (!(error instanceof GateDecisionUpgradeError)) throw error;
+    return { valid: false, reasons: [...reasons, error.code], error };
   }
   return { valid: reasons.length === 0, reasons };
 }
@@ -100,4 +102,14 @@ function stripDigest(report: GateReport): Omit<GateReport, 'digest'> {
   const { digest: _dropped, ...fields } = report;
   void _dropped;
   return fields;
+}
+
+/** Validate carried component ceilings even when no trusted replay context is available. */
+export function assertGateReportDecision(report: GateReport): void {
+  const components: GateOutcome[] = [
+    ...report.gateEvidence.map(entry => entry.outcome),
+    report.ceilings.packOutcome, report.ceilings.upstreamCeiling, report.ceilings.bindingCeiling,
+    report.upstream?.decision ?? 'PROMOTE',
+  ];
+  assertDecisionCeiling(report.decision, ...components);
 }

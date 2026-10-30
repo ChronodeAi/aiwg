@@ -44,7 +44,7 @@ Claude Code (host)
 ### Step 1: Install MCP Configuration
 
 ```bash
-aiwg mcp install claude
+aiwg mcp install claude-code
 ```
 
 This creates or merges into `.mcp.json` in the project root:
@@ -54,14 +54,17 @@ This creates or merges into `.mcp.json` in the project root:
   "mcpServers": {
     "aiwg": {
       "command": "aiwg",
-      "args": ["mcp", "serve"],
-      "env": {
-        "AIWG_ROOT": "~/.local/share/ai-writing-guide"
-      }
+      "args": ["mcp", "serve"]
     }
   }
 }
 ```
+
+**Retained legacy entries:** Installation migrates only the recognizable built-in
+AIWG stanza from `.claude/settings.local.json`. Custom legacy entries, including
+any plaintext credentials, are kept. Inspect that file's `mcpServers` map in each
+older project. Remove obsolete entries and move needed servers into `.mcp.json`
+using environment references, then remove retained plaintext credentials.
 
 ### Step 2: Verify
 

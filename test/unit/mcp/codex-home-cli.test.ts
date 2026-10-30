@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const cli = resolve(__dirname, '../../../src/mcp/cli.mjs');
+const cli = resolve(__dirname, '../../../dist/src/mcp/cli.mjs');
 let root: string;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'aiwg-codex-home-cli-'));
@@ -32,4 +32,35 @@ describe.each(['codex', 'openai'])('%s CLI respects CODEX_HOME', provider => {
     else expect(readFileSync(join(codexHome, 'config.toml'), 'utf-8'))
       .toContain(command === 'inject' ? '[mcp_servers.remote]' : '[mcp_servers.aiwg]');
   });
+  it.each([
+    'model = "unterminated\n',
+    '[mcp_servers.aiwg]\ncommand = "unterminated\n',
+    'mcp_servers = { aiwg = { command = "custom" } }\nbroken = [\n',
+  ])('refuses malformed TOML byte-for-byte: %j', malformed => {
+    const config = join(root, 'home/.codex/config.toml');
+    writeFileSync(config, malformed);
+    expect(() => execFileSync(process.execPath, [cli, 'install', provider], {
+      cwd: join(root, 'project'), encoding: 'utf-8', timeout: 60_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: process.env.PATH, HOME: join(root, 'home'), AIWG_CONFIG: join(root, 'config') },
+    })).toThrow(/Invalid TOML/);
+    expect(readFileSync(config, 'utf-8')).toBe(malformed);
+  });
+
+  it.each([
+    '# operator comment mentions [mcp_servers.aiwg]\nmodel = "operator"\n',
+    'model = "operator"\nmcp_servers = { other = { command = "other" } }\n',
+  ])('uses parsed TOML structure when installing: %j', original => {
+    const config = join(root, 'home/.codex/config.toml');
+    writeFileSync(config, original);
+    execFileSync(process.execPath, [cli, 'install', provider], {
+      cwd: join(root, 'project'), encoding: 'utf-8', timeout: 60_000,
+      env: { PATH: process.env.PATH, HOME: join(root, 'home'), AIWG_CONFIG: join(root, 'config') },
+    });
+    const installed = readFileSync(config, 'utf-8');
+    expect(installed).toContain('model = "operator"');
+    expect(installed).toContain('command = "aiwg"');
+    if (original.includes('other')) expect(installed).toContain('command = "other"');
+  });
+
 });

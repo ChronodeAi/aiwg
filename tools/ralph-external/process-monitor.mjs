@@ -15,7 +15,7 @@ import { hostname } from 'node:os';
 import { join, dirname } from 'path';
 import { constants } from 'node:fs';
 import { open, opendir, rename, unlink } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createWorkerHealthObserver } from './lib/worker-health.mjs';
 
@@ -38,6 +38,9 @@ import { createWorkerHealthObserver } from './lib/worker-health.mjs';
 // error, a thrown assertion, ...) and silently report every live-process
 // health query as unavailable instead of surfacing the actual failure.
 let boundedExecFileSync = null;
+let projectRecoveryStatus = null;
+let mergeRecoveryStatuses = null;
+let projectStartupCorrection = null;
 let processHealthUnavailableReason = null;
 let importImpl;
 try {
@@ -57,6 +60,11 @@ if (importImpl) {
   } catch (error) {
     if (!['AIWG_IMPLEMENTATION_MISSING', 'AIWG_PACKAGE_ROOT_MISSING'].includes(error?.code)) throw error;
     processHealthUnavailableReason = `bounded-child-process helper unavailable: implementation missing: ${error.message}`;
+  }
+  try {
+    ({ projectRecoveryStatus, mergeRecoveryStatuses, projectStartupCorrection } = await importImpl(import.meta.url, 'mission-protocol/worker-status.js'));
+  } catch (error) {
+    if (!['AIWG_IMPLEMENTATION_MISSING', 'AIWG_PACKAGE_ROOT_MISSING'].includes(error?.code)) throw error;
   }
 }
 
@@ -843,20 +851,25 @@ async function captureSizes(directory) {
 /** Readers never create a monitor, walk a worktree or execute a subprocess. */
 export async function sampleWorkerStatus(options, memory = new Map()) {
   const now = options.now?.() ?? Date.now(), sampledAt = new Date(now).toISOString();
-  const began = monotonicMs();
+  // Use one monotonic source for worker age and the sampling budget. Injected
+  // lifecycle traces must not expire because the host descheduled their I/O.
+  const monotonicNow = options.monotonicNow ?? monotonicMs;
+  const began = monotonicNow();
   const report = { version: 1, sampledAt, scope: 'direct-conductor', observerCoverage: 'unobserved',
-    workers: [], breakers: [], nextCheckAt: null, complete: true, findings: [], exitCode: 0 };
+    workers: [], breakers: [], recovery: { source: 'unavailable', observedAt: null, observedAtMs: null,
+      scopes: [], transitions: [], omittedScopeCount: 0, truncated: false }, nextCheckAt: null, complete: true, findings: [], exitCode: 0 };
   let root;
+  const recoveryOwners = new Map();
   try {
     root = await openStatusDirectory(options.runDir ?? options.runsRoot);
     const listing = options.runDir ? { entries: [{ name: null }], complete: true }
       : await boundedEntries(root, STATUS_LIMITS.directories);
     report.complete = listing.complete;
     if (!listing.complete) { report.findings.push('SELECTION_LIMIT: narrow --runs-root'); report.exitCode = 2; }
-    const sampleTime = options.monotonicNow?.() ?? monotonicMs();
+    const sampleTime = monotonicNow();
     const bootId = options.bootId ?? (() => { try { return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); } catch { return null; } })();
     for (const entry of listing.entries) {
-      if (monotonicMs() - began >= STATUS_LIMITS.sampleMs) {
+      if (monotonicNow() - began >= STATUS_LIMITS.sampleMs) {
         report.complete = false; report.findings.push('SAMPLE_BUDGET: narrow selection'); if (report.exitCode !== 1) report.exitCode = 2; break;
       }
       let directory;
@@ -867,6 +880,11 @@ export async function sampleWorkerStatus(options, memory = new Map()) {
           process: await statusRecord(directory, 'process.json', true), health: await statusRecord(directory, 'health.json'),
           exit: await statusRecord(directory, 'exit.json'), scratch: await statusRecord(directory, 'last-observed.json') };
         const ownerRecord = await statusRecord(directory, '.status-observer');
+        const supervisor = records.process.supervisor;
+        const ownerHost = safeLabel(supervisor?.host), ownerBoot = safeLabel(supervisor?.bootId), ownerStart = safeLabel(supervisor?.startTicks);
+        const launcherOwnerRecorded = records.process.origin === 'launcher'
+          && supervisor?.uid === process.getuid() && Number.isSafeInteger(supervisor.pid) && supervisor.pid > 0
+          && ownerHost && ownerBoot && ownerStart;
         const expected = records.process.worker;
         // classifyWorkerStatus() also ignores an unverified worker for this
         // comparison; skip the resample too so this never samples an
@@ -881,6 +899,22 @@ export async function sampleWorkerStatus(options, memory = new Map()) {
           ? (options.sampleIdentity ?? sampleWorkerIdentity)(ownerIdentity.pid) : null;
         const row = classifyWorkerStatus(records, { now, monotonicNow: sampleTime, bootId, actual, counters,
           previous: memory.get(key), ownerRecord, actualObserver });
+        if (projectRecoveryStatus && launcherOwnerRecorded && records.process.recovery) {
+          const recovery = projectRecoveryStatus(records.process.recovery, 'recorded');
+          const ownerKey = JSON.stringify([ownerHost, ownerBoot, supervisor.pid, ownerStart]);
+          const previous = recoveryOwners.get(ownerKey);
+          if (recovery.observedAt && (!previous || Date.parse(recovery.observedAt) > Date.parse(previous.observedAt)
+            || recovery.observedAt === previous.observedAt && recovery.transitions.length >= previous.transitions.length)) {
+            const digest = createHash('sha256').update(ownerKey).digest('hex').slice(0, 12);
+            const owner = `${supervisor.pid}@${ownerHost.slice(0, 80)}:${ownerStart.slice(0, 32)}:${digest}`;
+            for (const scope of recovery.scopes) scope.owner = owner;
+            for (const transition of recovery.transitions) transition.owner = owner;
+            recoveryOwners.set(ownerKey, recovery);
+            report.recovery = mergeRecoveryStatuses([...recoveryOwners.values()]);
+          }
+        }
+        const correction = launcherOwnerRecorded && projectStartupCorrection?.(records.process.startupCorrection);
+        if (correction) row.startupCorrection = correction;
         report.findings.push(...row.findings.map(finding => `${row.invocationId}: ${finding}`));
         if (row.observerOwnership === 'unavailable') report.findings.push('OBSERVER_OWNER_UNAVAILABLE: reconcile reservation before observing');
         memory.set(key, { cpuTicks: actual?.cpuTicks ?? null, counters, health: row.health });
@@ -894,7 +928,7 @@ export async function sampleWorkerStatus(options, memory = new Map()) {
             row.findings.push(code); report.findings.push(`${row.invocationId}: ${code}`);
           }
         }
-        if (monotonicMs() - began >= STATUS_LIMITS.sampleMs) {
+        if (monotonicNow() - began >= STATUS_LIMITS.sampleMs) {
           report.complete = false; report.findings.push('SAMPLE_OVERRUN: observation unavailable; narrow selection');
           row.health.coverage = 'degraded'; row.health.unavailableSignals.push('observer-continuity'); row.nextAction = 'RESTORE_OBSERVATION';
         }
@@ -972,12 +1006,19 @@ export function createStatusObservationOwner() {
 export function formatWorkerStatus(report) {
   const label = value => value == null ? '?' : String(value);
   const seconds = value => value == null ? '?' : `${Math.round(value * 1000) / 1000}s`;
+  const recovery = report.recovery;
+  const recoveryLines = !recovery || recovery.source === 'unavailable'
+    ? ['Recovery scope status unavailable: no recorded recovery owner observation']
+    : [`Recovery scopes (${recovery.source}) observed=${label(recovery.observedAt)} omitted=${recovery.omittedScopeCount} truncated=${recovery.truncated}`,
+      ...recovery.scopes.map(scope => `  ${scope.scopeKey} state=${scope.state} reasons=${scope.reasons.join(',') || 'UNKNOWN'} next eligible=${label(scope.nextEligibleAt ?? scope.nextEligibleAtMs)} canary in flight=${scope.canaryInFlight}${scope.owner ? ` owner=${scope.owner}` : ''}`),
+      ...recovery.transitions.map(transition => `  ${transition.scopeKey}: ${transition.from} -> ${transition.to} at=${label(transition.at ?? transition.atMs)} reasons=${transition.reasons.join(',') || 'UNKNOWN'} next eligible=${label(transition.nextEligibleAt ?? transition.nextEligibleAtMs)}${transition.owner ? ` owner=${transition.owner}` : ''}`)];
   return [`Workers (${report.scope}) coverage=${report.observerCoverage} complete=${report.complete} breakers=${report.breakers.length} (no shared Tier 0 breaker authority)`,
     'invocation | member | state | coverage | age | last progress | remaining | cause | next action',
     ...report.workers.map(row => row.error ? `? | ? | unreadable | ? | ? | ? | ? | ${row.error.code} | ${row.nextAction}`
       : `${row.invocationId} | ${label(row.member)} | ${row.health.state} | ${row.health.coverage} | ${seconds(row.elapsedSeconds)} | ${seconds(row.ages.progressSeconds)} | ${seconds(row.remainingSeconds)} | ${row.health.reasonCode} | ${row.nextAction}\n`
-        + `  thresholds=${JSON.stringify(row.thresholds)} termination=${row.termination} verification=${label(row.verification)} observer-gap=${row.health.maxCheckGapSeconds}s`),
-    ...report.findings, `next check=${label(report.nextCheckAt)}`].join('\n');
+        + `  thresholds=${JSON.stringify(row.thresholds)} termination=${row.termination} verification=${label(row.verification)} observer-gap=${row.health.maxCheckGapSeconds}s`
+        + (row.startupCorrection ? `\n  startup correction=${row.startupCorrection.action} state=${row.startupCorrection.state} reason=${row.startupCorrection.reasonCode} stop=${label(row.startupCorrection.stopCode)}` : '')),
+    ...recoveryLines, ...report.findings, `next check=${label(report.nextCheckAt)}`].join('\n');
 }
 
 /** One bounded foreground loop. Timeout only stops watching, never the worker. */

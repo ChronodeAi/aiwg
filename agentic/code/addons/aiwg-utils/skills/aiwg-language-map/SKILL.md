@@ -15,7 +15,7 @@ This is your always-loaded directory for the AIWG **addon and extension** surfac
 1. Identify which **capability domain** below the user's need belongs to
 2. Pick a **curated phrase** from that domain
 3. Run `aiwg discover "<phrase>"` and surface the top match (or top-3) to the user
-4. Fetch the body with `aiwg show skill <name>` — never `find` / `ls` / `Read` on storage paths
+4. Fetch the body with `aiwg show skill <name> --body` — never `find` / `ls` / `Read` on storage paths
 
 If a phrase doesn't fit the user's exact need, paraphrase. `aiwg discover` is forgiving with natural language.
 

@@ -108,3 +108,11 @@ After `npm run build:cli`, `node tools/decision/review-offline-benchmark.mjs --i
 ## Production follow-up (#2677)
 
 The `reconcile(effectId)` callback, `VerifiedReviewEffectLedger`, `LiveReviewAuthority` and `actionAllowed` are pluggable interfaces. The production executor-side completion lookup is the ledger-backed adapter (`openReviewEffectLedger`, `LedgerReviewEffectJournal` and `ledgerReviewReconciler`, #2721). #2677 still tracks the identity authority, the session importer, the distributed #1567 writer and the live staging crash matrix.
+
+## Evaluator evidence
+
+Each decision accepts optional `evaluation` metadata as the fifth argument to
+`DecisionReviewService.decide`. The writer preserves it in the decision and its
+matching event; edits retain old decisions and require fresh approval. See
+[evaluator calibration](evaluator-calibration.md) for field meanings, re-review
+links, held-out calibration procedure and blank report template. Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.

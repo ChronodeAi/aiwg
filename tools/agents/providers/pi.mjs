@@ -11,6 +11,7 @@ import path from 'path';
 import fs from 'fs';
 import {
   collectFrameworkArtifacts,
+  withRuleDeployment,
   createAgentsMdFromTemplate,
   deployFiles,
   deploySkillsWithKernelRouting,
@@ -29,7 +30,7 @@ export const paths = {
   agents: '',
   commands: '.pi/prompts',
   skills: '.pi/.aiwg/skills',
-  rules: '',
+  rules: '.pi/rules',
 };
 
 export const extensionBridge = 'agentic/code/providers/pi/aiwg-bridge.ts';
@@ -117,7 +118,9 @@ export function deployExtensionBridge(targetDir, opts) {
   if (!fs.existsSync(source)) return 0;
   const destination = path.join(targetDir, '.pi/extensions');
   ensureDir(destination, opts.dryRun);
-  return deployFiles([source], destination, opts);
+  const loader = new URL('../../providers/pi-bridge-policy.mjs', import.meta.url).href;
+  return deployFiles([source], destination, opts, (_file, content) =>
+    content.replace("'../../../../tools/providers/pi-bridge-policy.mjs'", JSON.stringify(loader)));
 }
 
 export function createAgentsMd(target, srcRoot, dryRun) {
@@ -127,7 +130,7 @@ export function createAgentsMd(target, srcRoot, dryRun) {
 
 export async function postDeploy(targetDir, opts) {
   if (opts.createAgentsMd || (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
   if (!opts.quiet && (opts.deployCommands || opts.deploySkills || opts.commandsOnly || opts.skillsOnly)) {
     console.log('Pi project resources are trust-gated; approve the project with `/trust` (restart required) or use `pi --approve` for a reviewed one-shot run.');
@@ -139,6 +142,10 @@ export function getFileExtension() {
 }
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const normalizedMode = normalizeDeploymentMode(opts.mode);
   const agentFiles = [];
   const commandFiles = [];

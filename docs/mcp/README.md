@@ -69,7 +69,12 @@ only after independently establishing that the worker stopped.
 The `sandbox` toolset exposes revisioned fleet inventory/admission/observation/
 reconciliation and governed activity coverage/timeline/export. Configure it with
 `AIWG_SANDBOX_MANAGEMENT_URL` and a mode-`0600` bearer file named by
-`AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE`. Credentials are server configuration,
+`AIWG_SANDBOX_MANAGEMENT_TOKEN_FILE`, or set
+`AIWG_SANDBOX_MANAGEMENT_TOKEN_STORE` to a named OS-store entry. The legacy file
+takes precedence; an invalid selected file never falls through to the store.
+Files must be regular, owned by the current user, private, and neither symlinks
+nor multiply linked. See [Supplying sensitive values](../cli/sensitive-values.md)
+for named-store setup and private-file requirements. Credentials are server configuration,
 never tool inputs or outputs. Non-loopback endpoints must use HTTPS. Mutations
 and evidence export require `confirmed: true`; unsupported upstream endpoints
 return a typed `supported: false` result for HTTP 404/405.
@@ -132,8 +137,10 @@ Config writes reject symlink destinations; writes whose destination is inside
 the project directory also reject symlink parents below the project directory.
 JSON installation refuses malformed JSON,
 non-object roots, and non-object server maps without changing the file.
-Writes use atomic replacement; existing files keep their mode while newly
-created registry files start at `0600`. Parent-directory checks are repeated
+Writes use atomic replacement; existing standalone registry files keep their mode
+unless they contain literal credentials and grant group or other access. Such
+writes tighten the mode to `0600` and warn with the file and old and new modes.
+New registry files start at `0600`. Parent-directory checks are repeated
 before the final rename, but when a parent directory is attacker-writable a
 swap between that last check and the rename can still redirect the write.
 ### Claude Desktop and legacy migration
@@ -337,6 +344,19 @@ Persistent injection, installation and hook translation honor `CODEX_HOME` (defa
 set both `HOME` and `CODEX_HOME` to the isolated runtime home.
 
 ## Credentials in Injected Servers
+
+See [Supplying sensitive values](../cli/sensitive-values.md#mcp-registry-values)
+for per-value MCP registration sources, private-file checks and argv exposure.
+`mcp add`/`mcp update` extend `--env-from`/`--header-env` with `file:ABSOLUTE_PATH`
+and `store:NAME`; `stdin:STORE_NAME` and `interactive:STORE_NAME` save through the
+existing native store and persist only `store:STORE_NAME`. Registration never
+prompts by default and accepts at most one stdin value. File/store references
+resolve in AIWG's runtime client (currently Fortemi), while native provider/profile
+config writers require environment names and refuse file/store locators.
+Secret-looking `--env`/`--headers` literals warn once without printing values;
+legacy registry entries keep loading unchanged. `--args` stays literal and is
+visible in process argv and saved config; use env/header references for secrets.
+
 
 A registry entry can carry a credential as a literal value (`--env`, `--headers`) or as a reference to an
 environment variable (`--header-env HEADER=VAR`, `--env-from NAME=VAR`). A reference writes only the

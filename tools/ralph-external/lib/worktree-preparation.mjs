@@ -17,11 +17,41 @@
  * (deferred to S2+; see `agentic/code/addons/aiwg-utils/rules/subagent-scoping.md`
  * Rule 9 and `08-security-and-threat-model.md`'s Tier 1 brief/retention
  * section).
+ *
+ * #3685: a fresh worktree holds only tracked files, so deployed provider
+ * context (gitignored `.codex/`, `.claude/`, `.muse/`, `.agents/` and the
+ * AIWG rule sections in `AGENTS.md`) is missing until the conductor puts
+ * it there. Preparation therefore deploys that context by default
+ * (`deployContext`, one `aiwg use all` pass for every configured provider
+ * — never one deploy per provider, which clobbers other providers'
+ * `AGENTS.md` sections), hides the deploy's tracked-bridge edits from the
+ * worker diff with `git update-index --skip-worktree`, and verifies the
+ * rule sections before reporting ready.
+ *
+ * #3685 round 2: the provider set is the union of the config `providers`
+ * and every orchestration CLI, loaded through `readAiwgConfig` (see
+ * `worker-context.mjs`, which also owns the single-pass deploy, the
+ * section verifier, and the skip-worktree helpers extracted from here).
+ * This module stays synchronous: callers preload the set with
+ * `resolveWorkerContextProviders()` and pass it as `contextProviders`.
  */
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import {
+  defaultDeployWorkerContext,
+  listDeployDirtiedBridges,
+  resolveWorkerContextProviders,
+  verifyWorkerContextSections,
+} from './worker-context.mjs';
+
+export {
+  defaultDeployWorkerContext,
+  listDeployDirtiedBridges,
+  resolveWorkerContextProviders,
+  verifyWorkerContextSections,
+};
 
 /** Thrown when a requested claim set collides with an already-held claim. */
 export class WorktreeClaimConflictError extends Error {
@@ -241,7 +271,7 @@ export function resolveBaseDigest({ repoRoot, revision = 'HEAD', spawn = spawnSy
  * ownership of the requested files/ports. Fails closed: a claim conflict
  * or a failing `git worktree add` leaves no worktree behind and (on the
  * git-failure path) releases the claim it just took, so a failed
- * preparation never leaks ownership of files/ports nobody can actually use.
+ * preparation never leaks ownership of files/ports nobody can use.
  *
  * @param {object} options
  * @param {string} options.repoRoot - Absolute path to the repository the worktree is cut from.
@@ -251,10 +281,18 @@ export function resolveBaseDigest({ repoRoot, revision = 'HEAD', spawn = spawnSy
  * @param {{files?: string[], ports?: number[]}} [options.claims] - Ownership claims to hold for this writer (files must be absolute paths).
  * @param {WorktreeClaimRegistry} options.registry - Shared claim registry for this conductor run.
  * @param {string} [options.worktreesRoot] - Parent directory for writer worktrees (defaults under `.aiwg/working/worktrees`).
+ * @param {boolean} [options.deployContext=true] - Deploy AIWG context for the configured providers into the new worktree (Tier 0 default on, #3685).
+ * @param {string[]|null} [options.contextProviders=null] - Explicit provider ids, or null to resolve the union of
+ *   config providers and orchestration CLIs via `readAiwgConfig` (round 2; never ad-hoc JSON).
+ * @param {string} [options.aiwgBin='aiwg'] - Binary for the default single-pass deploy.
+ * @param {(opts: object) => object} [options.deployContextFn] - Injectable single-pass deploy (defaults to `defaultDeployWorkerContext`).
+ * @param {(opts: object) => object} [options.verifyContextFn] - Injectable rule-section verifier (defaults to `verifyWorkerContextSections`).
  * @param {(cmd: string, args: string[], opts: object) => object} [options.spawn=spawnSync]
- * @returns {{created: boolean, blocked?: boolean, conflicts?: Array, path?: string, baseDigest?: string}}
+ * @param {(repoRoot: string) => Promise<object|null>} [options.contextReadConfig] - Injectable config loader (defaults to `readAiwgConfig`).
+ * @param {(config: object) => object} [options.contextResolveFromConfig] - Injectable union resolver (defaults to the src-side pure function).
+ * @returns {Promise<{created: boolean, blocked?: boolean, conflicts?: Array, path?: string, baseDigest?: string, context?: object}>}
  */
-export function prepareWorkerWorktree({
+export async function prepareWorkerWorktree({
   repoRoot,
   ownerId,
   name = 'writer',
@@ -262,6 +300,13 @@ export function prepareWorkerWorktree({
   claims = {},
   registry,
   worktreesRoot,
+  deployContext = true,
+  contextProviders = null,
+  aiwgBin = 'aiwg',
+  deployContextFn = null,
+  verifyContextFn = null,
+  contextReadConfig = null,
+  contextResolveFromConfig = null,
   spawn = spawnSync,
   timeoutMs = 30000,
 } = {}) {
@@ -300,7 +345,44 @@ export function prepareWorkerWorktree({
     if (finalMode !== 0o700) {
       throw new Error(`refusing worktree ${worktreePath}: expected mode 0700 after git worktree add, got ${finalMode.toString(8)}`);
     }
-    return { created: true, path: worktreePath, baseDigest, ownerId };
+    // #3685: a fresh worktree contains only tracked files, so deployed
+    // provider context (.codex/, .claude/, .muse/, .agents/, AGENTS.md rule
+    // sections) is missing until the conductor deploys it. Default on for
+    // Tier 0; pass deployContext:false only to test worktree mechanics.
+    let context = { deployed: false, providers: [], skippedBridges: [] };
+    if (deployContext) {
+      // The union needs `readAiwgConfig` (async): an explicit list wins
+      // verbatim, otherwise the config providers plus orchestration CLIs.
+      // Deploying a guessed set would leave the worker with the wrong (or
+      // no) context, so resolution failure throws before anything is made.
+      const { providers } = await resolveWorkerContextProviders({
+        repoRoot, providers: contextProviders,
+        ...(contextReadConfig ? { readConfig: contextReadConfig } : {}),
+        ...(contextResolveFromConfig ? { resolveFromConfig: contextResolveFromConfig } : {}),
+      });
+      try {
+        const deploy = deployContextFn ?? defaultDeployWorkerContext;
+        await deploy({ worktreePath, repoRoot, providers, aiwgBin, spawn, timeoutMs });
+        // Keep the deploy's tracked-bridge edits out of the worker diff:
+        // flag each deploy-dirtied tracked file skip-worktree (content
+        // stays on disk for the worker; only git status/diff hides it).
+        const dirtied = listDeployDirtiedBridges({ worktreePath, spawn, timeoutMs });
+        if (dirtied.length > 0) {
+          runGit(['update-index', '--skip-worktree', '--', ...dirtied], { cwd: worktreePath, spawn, timeoutMs });
+        }
+        const verify = verifyContextFn ?? verifyWorkerContextSections;
+        verify({ worktreePath, providers });
+        context = { deployed: true, providers, skippedBridges: dirtied };
+      } catch (error) {
+        // Leave no worktree behind (same contract as the git-failure path)
+        // and release the claim; the original deploy/verify error wins.
+        try {
+          runGit(['worktree', 'remove', '--force', worktreePath], { cwd: repoRoot, spawn, timeoutMs });
+        } catch { /* best-effort cleanup; report the deploy failure, not this */ }
+        throw error;
+      }
+    }
+    return { created: true, path: worktreePath, baseDigest, ownerId, context };
   } catch (error) {
     registry.release(ownerId);
     throw error;

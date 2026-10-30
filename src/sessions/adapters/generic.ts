@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -23,7 +24,7 @@ const Rfc3339Schema = z.string().refine(
   'timestamp must be RFC 3339 with an explicit UTC offset',
 );
 
-export const GenericInterchangeHeaderSchema = z.object({
+export const GenericInterchangeHeaderSchema = z.looseObject({
   type: z.literal(GENERIC_INTERCHANGE_KIND),
   schemaVersion: z.string().regex(/^\d+\.\d+\.\d+$/),
   product: z.string().min(1),
@@ -32,25 +33,25 @@ export const GenericInterchangeHeaderSchema = z.object({
   exportedAt: Rfc3339Schema,
   consistency: z.enum(['provisional', 'consistent-snapshot', 'complete']),
   lifecycle: z.enum(['active', 'complete', 'archived']),
-  workspace: z.object({
+  workspace: z.looseObject({
     id: z.string().min(1),
     name: z.string().min(1).optional(),
     repository: z.string().min(1).optional(),
     branch: z.string().min(1).optional(),
-  }).passthrough(),
-  provenance: z.object({
+  }),
+  provenance: z.looseObject({
     exporter: z.string().min(1),
     exporterVersion: z.string().min(1),
     sourceClass: z.string().min(1),
-  }).passthrough(),
-  extensions: z.record(z.unknown()).default({}),
-}).passthrough();
+  }),
+  extensions: z.record(z.string(), z.unknown()).prefault({}),
+});
 
-export const GenericInterchangeEventSchema = z.object({
+export const GenericInterchangeEventSchema = z.looseObject({
   type: z.literal('event'),
   sessionId: z.string().min(1),
   eventId: z.string().min(1),
-  sequence: z.number().int().nonnegative(),
+  sequence: integer().nonnegative(),
   kind: z.string().min(1),
   role: z.string().min(1).optional(),
   participant: z.string().min(1).optional(),
@@ -62,8 +63,8 @@ export const GenericInterchangeEventSchema = z.object({
   occurredAt: Rfc3339Schema.optional(),
   text: z.string(),
   lifecycle: z.enum(['active', 'complete', 'archived']),
-  extensions: z.record(z.unknown()).default({}),
-}).passthrough();
+  extensions: z.record(z.string(), z.unknown()).prefault({}),
+});
 
 export type GenericInterchangeHeader = z.infer<typeof GenericInterchangeHeaderSchema>;
 
@@ -265,7 +266,7 @@ function parseHeader(value: unknown): GenericInterchangeHeader {
   }
   throw new SessionContractError(
     'MALFORMED_SOURCE',
-    `generic interchange header ${describeIssue(result.error, true)}`,
+    `generic interchange header ${describeIssue(result.error, true, value)}`,
     schemaRejectionDetail(result.error),
   );
 }
@@ -280,7 +281,7 @@ function parseEvent(value: unknown): z.infer<typeof GenericInterchangeEventSchem
   // expected shape without echoing the received value.
   throw new SessionContractError(
     'MALFORMED_SOURCE',
-    `generic interchange event is malformed: ${describeIssue(result.error, false)}`,
+    `generic interchange event is malformed: ${describeIssue(result.error, false, value)}`,
     schemaRejectionDetail(result.error),
   );
 }
@@ -295,20 +296,27 @@ function quoteValue(value: unknown): string {
   return JSON.stringify(text.length > 64 ? `${text.slice(0, 64)}…` : text);
 }
 
-function describeIssue(error: z.ZodError, echoReceived: boolean): string {
+function describeIssue(error: z.ZodError, echoReceived: boolean, value: unknown): string {
   const issue = error.issues[0];
   const field = issue.path.length > 0 ? `field "${issue.path.join('.')}"` : 'record';
-  if (issue.code === z.ZodIssueCode.invalid_enum_value) {
-    const received = echoReceived ? ` (got ${quoteValue(issue.received)})` : '';
-    return `${field} must be one of ${issue.options.join('|')}${received}`;
+  // Read only the failing field, retaining the existing policy that header
+  // enums may echo values while event transcript values are never echoed.
+  let input = value;
+  for (const key of issue.path) {
+    input = input !== null && typeof input === 'object'
+      ? (input as Record<PropertyKey, unknown>)[key] : undefined;
   }
-  if (issue.code === z.ZodIssueCode.invalid_type) {
-    return issue.received === 'undefined'
-      ? `${field} is required (${issue.expected})`
-      : `${field} must be ${issue.expected} (got ${issue.received})`;
+  if (issue.code === 'invalid_value') {
+    if (issue.values.length === 1) return `${field} must be ${quoteValue(issue.values[0])}`;
+    const received = echoReceived ? ` (got ${quoteValue(input)})` : '';
+    return `${field} must be one of ${issue.values.join('|')}${received}`;
   }
-  if (issue.code === z.ZodIssueCode.invalid_literal) {
-    return `${field} must be ${quoteValue(issue.expected)}`;
+  if (issue.code === 'invalid_type') {
+    const received = input === null ? 'null' : Array.isArray(input) ? 'array' : typeof input;
+    const expected = issue.expected === 'int' ? 'integer' : issue.expected;
+    return received === 'undefined'
+      ? `${field} is required (${expected})`
+      : `${field} must be ${expected} (got ${received})`;
   }
   return `${field} is invalid: ${issue.message}`;
 }

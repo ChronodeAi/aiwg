@@ -20,6 +20,8 @@ triggers:
 
 # Steward Quickref
 
+`aiwg show <type> <name>` returns a metadata card. Inspect its outline, then fetch a needed `--section "Heading"` or use `--body` for the full instructions. Fetch required rules with `--rules --with-rule-bodies` before governed work.
+
 Thin routing anchor for the three cross-cutting **feature domains** that no
 single framework quickref owns: **expansion authoring**, **persona/SOUL
 identity**, and **project creation**. This file holds *guidance + anchoring
@@ -29,7 +31,7 @@ the owning capability top-3 (the four discover facets fuse the result —
 see `src/artifacts/discover-facets.ts`).
 
 > **Always discover, then show.** These phrases are the entry points; fetch the
-> selected artifact with `aiwg show <type> <name>`. Do not browse the
+> selected artifact with `aiwg show <type> <name> --body`. Do not browse the
 > filesystem (`skill-discovery` rule).
 
 ## Steward Tiering
@@ -112,4 +114,4 @@ When a request maps to one of these domains:
 3. **Re-query on low confidence.** If the first pass is weak, broaden the
    phrase or try an adjacent domain phrase before concluding "not found" — the
    `skill-discovery` rule forbids decline-without-search.
-4. **Show the selection.** `aiwg show <type> <name>` for the chosen capability.
+4. **Show the selection.** `aiwg show <type> <name> --body` for the chosen capability.

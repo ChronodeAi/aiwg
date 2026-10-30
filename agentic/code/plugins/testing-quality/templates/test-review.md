@@ -3,6 +3,10 @@
 Review ID, reviewer and date: {{identity}}
 Inventory ID, test file, line/body identity and source hash: {{source_binding}}
 Runner lane/case IDs and evidence receipt: {{runner_binding}}
+Observed evaluator model/vendor/family: {{observed_identity_or_unknown}}
+Acceptance criteria reference: {{criteria_version_or_digest}}
+Generator/evaluator disagreements and resolution/check references: {{disagreements}}
+Previous review after material fixes (`reReviewOf`): {{previous_review_ref}}
 Review scope: {{individual_case_or_complete_file}}
 Sibling/parameterized cases covered and remaining: {{scope_accounting}}
 
@@ -24,3 +28,6 @@ Repair acceptance condition: {{observable_verification}}
 A source smell is not automatically a defect. A mocked boundary may be valid narrow evidence. Suspected flakiness needs
 observed repeated outcomes before a rate is reported. A review is stale when its source binding changes. Do not mark a
 file completely reviewed from one selected case; machine review input must match the actual completed scope.
+
+Machine records carry these optional fields in `spec.evaluation`; see `$AIWG_ROOT/docs/decision/evaluator-calibration.md`.
+Agreement is not proof; consequential conclusions need executable checks or accountable human acceptance.

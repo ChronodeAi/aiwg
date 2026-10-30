@@ -1,5 +1,28 @@
 ---
 enforcement: high
+activation: bound
+summary: Validate critical workflow replay with five runs and documented match thresholds; record nondeterminism and produce compliance reproducibility reports.
+bound_to:
+  skills:
+    - reproducibility-validate
+    - generate-tests
+    - auto-test-execution
+    - flow-test-strategy-execution
+    - flow-security-review-cycle
+    - flow-compliance-validation
+    - flow-release
+  agents:
+    - test-engineer
+    - security-auditor
+    - compliance-checker
+    - build-engineer
+  flows:
+    - flow-test-strategy-execution
+    - flow-security-review-cycle
+    - flow-compliance-validation
+    - flow-release
+triggers:
+  - how to validate critical workflow reproducibility
 ---
 
 # Reproducibility Validation Rules

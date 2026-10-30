@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runDefaultLane } from '../../../tools/testing/run-default-lane.mjs';
+import { parseLaneInvocation, runDefaultLane } from '../../../tools/testing/run-default-lane.mjs';
 
 import { DEFAULT_ALLOWED_ENTRIES, findLeakedEntries } from '../../../tools/testing/check-tmpdir-leaks.mjs';
 
@@ -59,6 +59,18 @@ describe('tmpdir leak gate (#3018)', () => {
 
 
 describe('default lane private TMPDIR', () => {
+  it.each(['deployment', 'wasm'])('selects the %s lane without forwarding the wrapper option', lane => {
+    expect(parseLaneInvocation(['--config', `config/vitest.${lane}.config.js`, '--run'])).toEqual({
+      config: `config/vitest.${lane}.config.js`,
+      args: ['--run'],
+    });
+    expect(parseLaneInvocation(['--run'])).toEqual({
+      config: 'config/vitest.config.js',
+      args: ['--run'],
+    });
+    expect(() => parseLaneInvocation(['--config'])).toThrow('--config requires a path');
+  });
+
   async function runChild(source) {
     const root = await tmpDir('aiwg-lane-wrapper-');
     vi.stubEnv('TMPDIR', root);
@@ -94,7 +106,7 @@ describe('default lane private TMPDIR', () => {
 
   it('checks cleanup when the child terminates on a signal', async () => {
     const result = await runChild("process.kill(process.pid, 'SIGTERM')");
-    expect(result).toMatchObject({ code: 1, entries: [] });
+    expect(result).toMatchObject({ code: 143, entries: [] });
   });
 
   it.each([0, 7])('fails on leaks even when the child exits %i', async (exitCode) => {
@@ -102,7 +114,7 @@ describe('default lane private TMPDIR', () => {
       require('node:fs').mkdirSync(require('node:path').join(require('node:os').tmpdir(), 'leaked-fixture'));
       process.exit(${exitCode});
     `);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(exitCode === 0 ? 1 : exitCode);
     expect(result.entries).toHaveLength(1);
     expect(await readdir(join(result.root, result.entries[0]))).toEqual(['leaked-fixture']);
   });

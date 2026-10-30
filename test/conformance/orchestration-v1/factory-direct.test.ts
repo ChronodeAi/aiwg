@@ -1,3 +1,5 @@
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2902 (B-OG-37) Factory (Droid) promotion: offline S1 profile work.
  *
@@ -55,11 +57,7 @@ async function installFactoryPackage(bytes: Buffer) {
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
     version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
   await writeFile(path.join(packageRoot, 'lib', 'factory-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
   await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
   await chmod(resolveImpl, 0o644);
@@ -78,7 +76,7 @@ async function installFactoryPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.factory.workerAdapter = structuredClone(registry.providers.factory.workerHealthAdapter);
   return registry;
 }
@@ -463,14 +461,10 @@ describe('T-OG-03/20/21/23 Factory run identity, stall and security signals', ()
   it('FD10 TERM ignored requires KILL; the exit records the signal, never zero', async () => {
     const { root, workdir } = await scratch();
     const { file } = await fakeConfig(root, 'ignore-term');
-    let child: ReturnType<typeof spawn> | undefined;
     const result = await run(process.execPath, argv().slice(0, 1).concat(argv().slice(1).map(a => a === '/w' ? workdir : a)),
       { cwd: workdir, stdinData: 'brief', env: { AIWG_FAKE_WORKER_CONFIG: file }, timeoutMs: 8_000,
-        onStart: started => { child = started; setTimeout(() => {
-          started.kill('SIGTERM');
-          setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-        }, 600); } });
-    expect(child).toBeDefined();
+        onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });

@@ -9,6 +9,12 @@ description: "Generate a `setup.manifest.yaml` file for a project using the `set
 
 Generate a `setup.manifest.yaml` file for a project using the `setup.aiwg.io/v1` SetupManifest language.
 
+For AIWG itself, reuse the published provider-orchestrated `setup.aiwg.yaml`
+rather than generating a replacement. It bootstraps a healthy CLI, then uses
+`aiwg setup --scope project`, `aiwg setup --review`, and `aiwg setup --apply`.
+These commands save, review, and apply an interview plan; they do not change
+SetupManifest execution mode or make `setup-run` an interactive installer.
+
 ## Trigger Phrases
 
 - "generate a setup manifest for [project]"

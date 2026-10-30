@@ -12,6 +12,7 @@ README](just-try-it.md). The result is a saved report with three prioritized fix
 |---|---|
 | Follow the first task from setup through a saved result | [Start Here](start-here.md) |
 | Install or repair AIWG | [Install, Connect, and Verify](install-connect-verify.md) |
+| Review or resume a guided setup plan, including headless setup | [Guided Setup](guided-setup.md) |
 | Set up Node.js/npm | [Install Node.js](install-node.md) |
 | Resolve macOS installation problems | [macOS Install Guide](macos-install.md) |
 | Choose the right AI tool handoff | [Provider Handoff](provider-handoff.md) |
@@ -23,6 +24,7 @@ README](just-try-it.md). The result is a saved report with three prioritized fix
 | Share project instructions across a team | [Team Setup](team-setup.md) |
 | Coordinate background work | [Automation](daemon-and-automation.md) |
 | Dispatch work to other installed AI CLIs | [Turn On Direct Worker Dispatch](worker-dispatch.md) |
+| Hand work to helpers, pick a wrapper, brief and accept it | [Agent Orchestration Guide](../orchestration/guide.md) |
 | Review earlier AI sessions | [Session History](session-history.md) |
 | Find a workflow without knowing its name | [Language Map](language-map.md), [Ask the Steward](first-success-ask-steward.md) |
 

@@ -1,3 +1,5 @@
+import { termAfterReady, TERM_READY } from '../../helpers/term-escalation.js';
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2897 (B-OG-07) Codex promotion: offline S1 profile work.
  *
@@ -66,11 +68,7 @@ async function installCodexPackage(bytes: Buffer) {
   // The approved adapter installs byte-for-byte; the tamper case installs
   // modified bytes and must fail the digest check.
   await writeFile(path.join(packageRoot, 'lib', 'codex-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   // Mirrors the repo layout (tools/ralph-external/lib -> tools/): from
   // pkg/lib, '../../_resolve-impl.mjs' resolves to the install base.
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
@@ -84,7 +82,7 @@ async function installCodexPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   // Inactive health metadata becomes a loader candidate only in this copy;
   // the bundled runtimeDriver is already the installed reference.
   registry.providers.codex.workerAdapter = structuredClone(registry.providers.codex.workerHealthAdapter);
@@ -153,7 +151,7 @@ async function fakeConfig(root: string, scenario: string, extra: Record<string, 
  * exercised; without it the bundled metadata must block. */
 async function codexPlan(options: { qualify?: boolean; effort?: 'ultra'; cliVersion?: string;
   adapterOverride?: (adapter: any) => void; memberModel?: string; discoveryModel?: string; discoveryApiModelId?: string;
-  execution?: Record<string, unknown> } = {}) {
+  execution?: Record<string, unknown>; envNames?: string[] } = {}) {
   const f = workerResolutionFixture();
   const { root, workdir } = await scratch();
   // Quoting torture (quotes/spaces/Unicode/newlines/leading-`--` inside):
@@ -214,7 +212,7 @@ async function codexPlan(options: { qualify?: boolean; effort?: 'ultra'; cliVers
   const drivers: Record<string, WorkerInvocationDriver> = { codex: {
     qualification: { adapter, adapterId: 'codex', cliVersion: binding.cliVersion },
     buildInvocation: async input => ({ argv: [process.execPath, FAKE, ...owner.buildWorkerArgs(input, profile, input.permissions)],
-      stdin: CODEX_DIRECT_STDIN, envNames: ['AIWG_FAKE_WORKER_CONFIG'] }),
+      stdin: CODEX_DIRECT_STDIN, envNames: options.envNames ?? ['PATH', 'AIWG_FAKE_WORKER_CONFIG'] }),
   } };
   const request = { role: 'coding' as const, group: 'workers', task: 'implementation', brief, workdir,
     final_output: path.join(root, "final '雪\n.json"), transport: 'shell' as const };
@@ -238,15 +236,15 @@ describe('Codex version-bound profile (B-OG-07)', () => {
       qualification: { status: 'unqualified' } });
     expect(adapter.invocation.argv).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', '${model}', '-c',
       'model_reasoning_effort="${effort}"', '-s', '${sandbox}', '-C', '${workspace}', '-c',
-      'approval_policy="${approval}"', '--skip-git-repo-check', '-o', '${final}', '--json', '-']);
+      'approval_policy="${approval}"', '--skip-git-repo-check', '-o', '${final}.last-message', '--json', '-']);
     expect(adapter.invocation.argv.join(' ')).not.toMatch(/bypass|dangerous|ultra|--effort|--fallback|--force/);
     expect(adapter.invocation.argv.join(' ')).not.toContain("'\"");
-    expect(adapter.invocation.envAllowlist).toEqual(['CODEX_HOME', 'HOME']);
+    expect(adapter.invocation.envAllowlist).toEqual(['CODEX_HOME', 'HOME', 'PATH']);
     const profile = adapter.invocationProfiles!['direct-shell'];
     expect(profile.supportedVersions).toBe('>=0.161.0 <0.200.0');
     expect(profile.transport).toBe('shell');
     expect(profile.mcp).toBeUndefined();
-    expect(profile.envAllowlist).toEqual(['CODEX_HOME', 'HOME']);
+    expect(profile.envAllowlist).toEqual(['CODEX_HOME', 'HOME', 'PATH']);
     expect(Object.keys(profile.controls).sort()).toEqual(['approval', 'children', 'effort', 'fallback', 'finalOutput', 'model',
       'sandbox', 'stdin', 'stepCap', 'structuredOutput', 'trust', 'workdir']);
     for (const [name, control] of Object.entries(profile.controls)) {
@@ -296,7 +294,7 @@ describe('Codex version-bound profile (B-OG-07)', () => {
       { selected: { model: MODEL, effort: { value: 'medium' } }, cwd: '/w', brief: 'b', finalPath: '/w/f.json' },
       null, {})).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL,
       '-c', 'model_reasoning_effort="medium"', '-s', 'workspace-write', '-C', '/w',
-      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', '/w/f.json', '--json', '-']);
+      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', '/w/f.json.last-message', '--json', '-']);
     expect(CODEX_DIRECT_STDIN).toBe('brief-text');
   });
 
@@ -348,7 +346,7 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(invocation.stdin).toBe('brief-text');
     expect(invocation.argv.slice(2)).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL,
       '-c', 'model_reasoning_effort="medium"', '-s', 'workspace-write', '-C', workdir,
-      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', invocation.finalPath, '--json', '-']);
+      '-c', 'approval_policy="never"', '--skip-git-repo-check', '-o', `${invocation.finalPath}.last-message`, '--json', '-']);
     // The brief travels on stdin only: no argv token carries brief bytes,
     // and the marker appears nowhere in argv.
     expect(invocation.argv.at(-1)).toBe('-');
@@ -357,7 +355,7 @@ describe('T-OG-15 Codex direct command contract', () => {
     // The resolved plan carries no brief text either (paths and digests only).
     expect(JSON.stringify(plan)).not.toContain(MARKER);
     const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
-    expect(invocation.shellCommand).toBe(`cd ${quote(workdir)} && env -i AIWG_FAKE_WORKER_CONFIG="\${AIWG_FAKE_WORKER_CONFIG-}"`
+    expect(invocation.shellCommand).toBe(`cd ${quote(workdir)} && env -i PATH="\${PATH-}" AIWG_FAKE_WORKER_CONFIG="\${AIWG_FAKE_WORKER_CONFIG-}"`
       + ` ${invocation.argv.map(quote).join(' ')} < ${quote(brief)} > ${quote(invocation.stdoutPath)} 2> ${quote(invocation.stderrPath)}`);
     expect(invocation.shellCommand).not.toContain('< /dev/null');
     const { file, recordPath } = await fakeConfig(root, 'success');
@@ -367,18 +365,24 @@ describe('T-OG-15 Codex direct command contract', () => {
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
     expect(record).toMatchObject({ noDaemon: true, ignoreUserConfig: true, model: MODEL, effort: 'medium',
       sandbox: 'workspace-write', approval: 'never', workdir, skipGitRepoCheck: true, jsonStream: true, cwd: workdir,
-      outputFile: invocation.finalPath, stdinEof: true, stdinBytes: Buffer.byteLength(payload), promptViaStdin: true });
+      outputFile: `${invocation.finalPath}.last-message`, stdinEof: true, stdinBytes: Buffer.byteLength(payload), promptViaStdin: true });
     expect(record.prompt).toBe(payload);
     expect(record.argv).toEqual(invocation.argv.slice(2));
     expect(JSON.stringify(record.argv)).not.toContain(MARKER);
-    expect(record.envNames.filter((name: string) => !['PWD', 'SHLVL', '_'].includes(name))).toEqual(['AIWG_FAKE_WORKER_CONFIG']);
+    expect(record.envNames.filter((name: string) => !['PWD', 'SHLVL', '_'].includes(name))).toEqual(['AIWG_FAKE_WORKER_CONFIG', 'PATH']);
     expect(existsSync(path.join(root, 'injected'))).toBe(false);
-    const final = owner.parseOutput(await readFile(invocation.finalPath, 'utf8'));
+    const final = owner.parseOutput(await readFile(`${invocation.finalPath}.last-message`, 'utf8'));
     expect(final).toEqual({ response: `synthetic reply (${payload.length} chars)` });
     const events = (await readFile(invocation.stdoutPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(events.map(event => owner.observeHealthEvent(event, { kind: 'stdout', id: 'stdout', generation: 0, offset: 0 },
       { invocationId: 'cx02', sessionId: THREAD })?.kind ?? null))
       .toEqual(['setup', 'accepted', 'activity', 'activity', 'progress', 'progress', 'terminal']);
+  });
+
+  it('CX02d rejects an environment name outside the Codex profile allowlist', async () => {
+    const { plan } = await codexPlan({ envNames: ['PATH', 'UNRELATED_SECRET'] });
+    expect(plan.invocation?.shellCommand).toBeFalsy();
+    expect(plan.status).not.toBe('resolved');
   });
 
   it('CX02c -c values carry TOML quoting without a shell layer; shell-quoted values are refused', async () => {
@@ -543,13 +547,25 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(recordPath).toBeDefined();
   });
 
+  it.each([
+    { sandbox: 'read-only', flag: 'read-only' },
+    { sandbox: 'workspace-write', flag: 'workspace-write' },
+    { sandbox: 'external', flag: 'danger-full-access' },
+  ])('renders exact Codex $sandbox sandbox argv with approvals never', ({ sandbox, flag }) => {
+    const argv = owner.buildWorkerArgs({ selected: { model: MODEL, effort: { value: 'medium' } },
+      cwd: '/w', brief: 'Synthetic brief', finalPath: '/w/final.json' }, null, { sandbox });
+    expect(argv).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL,
+      '-c', 'model_reasoning_effort="medium"', '-s', flag, '-C', '/w', '-c', 'approval_policy="never"',
+      '--skip-git-repo-check', '-o', '/w/final.json.last-message', '--json', '-']);
+  });
+
   it('CX05 the driver argv carries no brief anywhere and refuses guessed or stale controls', () => {
     const input = { selected: { model: MODEL, effort: { value: 'medium' } }, cwd: '/w',
       brief: `"; rm -rf / #\n--model evil ${MARKER}`, finalPath: '/w/final.json' };
     const argv = owner.buildWorkerArgs(input, null, { sandbox: 'workspace-write', approval: 'never' });
     expect(argv).toEqual(['--no-daemon', 'exec', '--ignore-user-config', '-m', MODEL, '-c', 'model_reasoning_effort="medium"',
       '-s', 'workspace-write', '-C', '/w', '-c', 'approval_policy="never"',
-      '--skip-git-repo-check', '-o', '/w/final.json', '--json', '-']);
+      '--skip-git-repo-check', '-o', '/w/final.json.last-message', '--json', '-']);
     expect(argv.join(' ')).not.toContain(MARKER);
     expect(argv.join(' ')).not.toMatch(/bypass|dangerous|yolo|skip-permissions|--fallback|--force|--effort/);
     const xhigh = owner.buildWorkerArgs(
@@ -562,7 +578,6 @@ describe('T-OG-15 Codex direct command contract', () => {
     expect(() => owner.buildWorkerArgs({ ...input, cwd: 'relative' }, null, {})).toThrow(/absolute workspace/);
     expect(() => owner.buildWorkerArgs({ ...input, finalPath: 'relative.json' }, null, {})).toThrow(/absolute final-output/);
     expect(() => owner.buildWorkerArgs({ ...input }, null, { sandbox: 'danger-full-access' })).toThrow(/not a qualified direct mode/);
-    expect(() => owner.buildWorkerArgs({ ...input }, null, { sandbox: 'external' })).toThrow(/not a qualified direct mode/);
     expect(() => owner.buildWorkerArgs({ ...input }, null, { approval: 'always' })).toThrow(/not a qualified direct policy/);
     expect(() => owner.buildWorkerArgs({ ...input }, null, { approval: 'on-request' })).toThrow(/not a qualified direct policy/);
     expect(owner.getAbortInput()).toBeNull();
@@ -627,7 +642,7 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
     expect(stdout.filter(event => event.type === 'item.completed').map(event => event.item.id))
       .toEqual(['codex-fixture-item-1', 'codex-fixture-item-2']);
     const snapshot = o.finish({ exitCode: result.code, termination: 'confirmed',
-      finalValid: owner.parseOutput(await readFile(finalPath, 'utf8')) !== null });
+      finalValid: owner.parseOutput(await readFile(`${finalPath}.last-message`, 'utf8')) !== null });
     expect(snapshot).toMatchObject({ state: 'completed' });
     expect(snapshot.lastProgressAt).not.toBeNull();
     expect(snapshot.unavailableSignals).toEqual(expect.arrayContaining(['semantic-start']));
@@ -666,11 +681,11 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
     const { file: malformedFile } = await fakeConfig(root, 'malformed');
     const malformed = await run(process.execPath, argv(workdir, finalPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: malformedFile } });
     expect(malformed.code).toBe(0);
-    expect(owner.parseOutput(await readFile(finalPath, 'utf8'))).toBeNull();
+    expect(owner.parseOutput(await readFile(`${finalPath}.last-message`, 'utf8'))).toBeNull();
     const p = observer({ t: 0 });
     p.processStarted({ pid: 1, startTicks: 'fixture', executable: process.execPath });
     expect(p.finish({ exitCode: 0, termination: 'confirmed', finalValid: false }).reasonCode).toBe('FINAL_INVALID');
-    await expect(owner.parseWorkerFinal(await readFile(finalPath, 'utf8'), {
+    await expect(owner.parseWorkerFinal(await readFile(`${finalPath}.last-message`, 'utf8'), {
       observation: { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 },
     })).rejects.toThrow();
   });
@@ -748,13 +763,9 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
     const { root, workdir } = await scratch();
     const finalPath = path.join(root, 'final.json');
     const { file } = await fakeConfig(root, 'ignore-term');
-    let child: ReturnType<typeof spawn> | undefined;
     const result = await run(process.execPath, argv(workdir, finalPath), { cwd: workdir, env: { AIWG_FAKE_WORKER_CONFIG: file },
-      timeoutMs: 8_000, onStart: started => { child = started; setTimeout(() => {
-        started.kill('SIGTERM');
-        setTimeout(() => { if (started.exitCode === null && started.signalCode === null) started.kill('SIGKILL'); }, 500);
-      }, 600); } });
-    expect(child).toBeDefined();
+      timeoutMs: 8_000, onStart: termAfterReady });
+    expect(result.stdout).toContain(TERM_READY);
     expect(result.signal).toBe('SIGKILL');
     expect(result.code).toBeNull();
   });
@@ -769,10 +780,12 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
       env: { PATH: process.env.PATH, AIWG_FAKE_WORKER_CONFIG: file, CODEX_API_KEY: secret } });
     expect(result.code).toBe(0);
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
+    expect(record.envNames).toContain('PATH');
+    expect(plan.invocation!.shellCommand).toContain('PATH="${PATH-}"');
     expect(record.envNames).not.toContain('CODEX_API_KEY');
     const stdout = await readFile(plan.invocation!.stdoutPath, 'utf8');
     expect(stdout).not.toContain(secret);
-    const final = owner.parseOutput(await readFile(plan.invocation!.finalPath, 'utf8'));
+    const final = owner.parseOutput(await readFile(`${plan.invocation!.finalPath}.last-message`, 'utf8'));
     expect(final?.response).toContain('touch');
     expect(existsSync(marker)).toBe(false); // worker-returned commands are never executed
   });
@@ -801,7 +814,7 @@ describe('T-OG-20/21/23 Codex run identity, stall and security signals', () => {
       onStart: child => o.processStarted({ pid: child.pid!, startTicks: 'fixture', executable: process.execPath }) });
     expect(result.code).toBe(1);
     feedLines(o, result.stdout);
-    expect(owner.parseOutput(await readFile(finalPath, 'utf8'))).toBeNull();
+    expect(owner.parseOutput(await readFile(`${finalPath}.last-message`, 'utf8'))).toBeNull();
     expect(o.finish({ exitCode: result.code, termination: 'confirmed', finalValid: false }).state).not.toBe('completed');
   });
 });

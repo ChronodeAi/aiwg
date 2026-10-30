@@ -10,6 +10,8 @@ content creation across channels, brand and legal review, publication planning,
 and performance analysis. Use it when campaign work needs a brief, reviewable
 assets, and a record of what changed.
 
+Each section below starts with what you can ask your assistant, then gives the command reference. Every command is kept exactly as shipped.
+
 ---
 
 ## Before You Start
@@ -27,6 +29,16 @@ packet, or performance note saved under `.aiwg/marketing/`.
 
 ### From a brief or idea
 
+> "Start a campaign for our Q2 enterprise product launch. Ask me for goals, audience, and budget, and save the brief where I can review it."
+
+Your assistant walks through campaign goals, audience definition, messaging pillars, channel mix, budget, and timeline.
+
+> "We only target mid-market CTOs and the budget is fixed. Rework the brief around that."
+
+Your assistant revises the brief against the corrected constraints.
+
+#### Command reference — campaign intake
+
 ```bash
 /marketing-intake-wizard "Q2 product launch for enterprise customers" --interactive
 ```
@@ -35,7 +47,13 @@ The wizard walks through campaign goals, audience definition, messaging pillars,
 
 ### From existing assets
 
+> "Build a campaign around these existing assets. Tell me what is missing before we create anything new."
+
+Your assistant scans what you have, infers campaign intent, and identifies gaps.
+
 If you already have some materials and need to build a campaign around them:
+
+#### Command reference — intake from assets
 
 ```bash
 /intake-from-campaign ./existing-assets --interactive
@@ -65,6 +83,10 @@ Check status at any point:
 
 ## The agent roster
 
+> "Which agent should write this piece, and what will I get back to review?"
+
+Your assistant matches the work to a specialist agent and states what that agent returns. Where one agent briefs another, the brief names the goal, inputs, boundaries, result, and success check.
+
 | Agent | Role |
 |-------|------|
 | `campaign-strategist` | Campaign architecture, channel strategy, measurement frameworks |
@@ -83,7 +105,13 @@ Check status at any point:
 
 ## Content creation
 
+> "Generate a week of social content for LinkedIn and Twitter announcing our new feature. Keep it professional and save drafts for review."
+
+Your assistant drafts channel-specific content against the campaign brief and saves it for review.
+
 ### Social content
+
+#### Command reference — social content
 
 ```
 Generate a week of social content for LinkedIn and Twitter announcing our new feature
@@ -94,6 +122,12 @@ Generate a week of social content for LinkedIn and Twitter announcing our new fe
 ```
 
 ### Blog and thought leadership
+
+> "Write a practitioner blog post about our monolith-to-microservices move. Use the technical-authority voice."
+
+Your assistant drafts the post against the campaign brief and brand voice.
+
+#### Command reference — blog and email
 
 ```
 Write a blog post about why we moved from monolith to microservices, written as a practitioner for other practitioners
@@ -122,7 +156,13 @@ profile when the campaign has one:
 Use the technical-authority voice for all content in this campaign
 ```
 
+> "Check this content against our brand voice and list what to fix before it goes out."
+
+Your assistant checks tone, vocabulary, visual description language, and structural patterns against your brand guidelines.
+
 Run brand compliance review before anything goes out:
+
+### Command reference — brand review
 
 ```
 /brand-validate path/to/content.md
@@ -134,7 +174,13 @@ This checks tone, vocabulary, visual description language, and structural patter
 
 ## Legal review
 
+> "Clear these campaign assets for legal. Flag unsubstantiated claims and missing disclosures."
+
+Your assistant reviews for regulatory compliance, claim substantiation, required disclosures, and risk flags.
+
 For campaigns making specific claims or running in regulated industries:
+
+### Command reference — legal review
 
 ```
 /legal-clearance path/to/campaign-assets/
@@ -146,7 +192,13 @@ Reviews for regulatory compliance, claim substantiation, required disclosures, a
 
 ## Performance and analytics
 
+> "Analyze last month for the Q2 launch. Separate what the data shows from what still needs validation."
+
+Your assistant analyzes the campaign data you provide or connect.
+
 After a campaign runs:
+
+### Command reference — analytics
 
 ```
 /campaign-analytics --campaign "Q2 launch" --period "last-30-days"
@@ -160,7 +212,13 @@ assumptions that still need validation.
 
 ## Multi-channel coordination
 
+> "Kick off the Q2 enterprise launch across email, social, blog, paid, and webinar. Keep messaging consistent and save the plan for review."
+
+Your assistant orchestrates content creation across all channels with consistent messaging, proper sequencing, and cross-channel coordination.
+
 Large campaigns spanning many channels:
+
+### Command reference — coordination
 
 ```
 /campaign-kickoff "Q2 Enterprise Launch" --channels "email,social,blog,paid,webinar"
@@ -168,11 +226,23 @@ Large campaigns spanning many channels:
 
 This orchestrates content creation across all channels with consistent messaging, proper sequencing, and cross-channel coordination. The `campaign-orchestrator` agent ensures nothing conflicts and everything reinforces the core message.
 
+**Agent-to-agent brief (example):**
+
+```brief
+Goal: draft launch emails for the Q2 enterprise launch. Inputs: campaign brief and messaging pillars. Boundaries: use approved claims only; no new offers. Result: three drafts with subject lines. Success check: each draft cites its brief section.
+```
+
 ---
 
 ## Campaign retrospective
 
+> "Write the retrospective for the Q2 launch: what worked, what did not, and what to change next time."
+
+Your assistant documents performance against goals and recommendations for the next campaign.
+
 When a campaign ends:
+
+### Command reference — retrospective
 
 ```
 /marketing-retrospective --campaign "Q2 launch"

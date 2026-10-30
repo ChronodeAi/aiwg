@@ -5,7 +5,13 @@
   "capturedOn": "2026-08-14",
   "policy": {
     "materialScoreDrop": 0.1,
-    "blockingSeverities": ["high", "critical"],
+    "blockingSeverities": [
+      "high",
+      "critical"
+    ],
+    "informationalAlertTypes": [
+      "socketUpgradeAvailable"
+    ],
     "reviewOwner": "AIWG maintainers",
     "reviewExpiresOn": "2026-11-14"
   },
@@ -39,9 +45,10 @@
       "classification": "required-capability",
       "rationale": "AIWG is an orchestration CLI whose documented workflows intentionally invoke local tools after user approval.",
       "owner": "AIWG maintainers",
-      "reviewedOn": "2026-08-14",
-      "expiresOn": "2026-11-14",
-      "revalidateWhen": "Shell execution boundaries, approval gates, or command dispatch code changes."
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "Shell execution boundaries, approval gates, or command dispatch code changes.",
+      "scope": "first-party"
     },
     {
       "package": "*",
@@ -50,9 +57,10 @@
       "classification": "required-capability",
       "rationale": "AIWG installs and manages project-owned workflow, agent, skill, and context files.",
       "owner": "AIWG maintainers",
-      "reviewedOn": "2026-08-14",
-      "expiresOn": "2026-11-14",
-      "revalidateWhen": "Install roots, path validation, or write authorization behavior changes."
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "Install roots, path validation, or write authorization behavior changes.",
+      "scope": "first-party"
     },
     {
       "package": "*",
@@ -61,9 +69,10 @@
       "classification": "required-capability",
       "rationale": "AIWG retrieves explicitly selected public resources and serves opt-in local integrations.",
       "owner": "AIWG maintainers",
-      "reviewedOn": "2026-08-14",
-      "expiresOn": "2026-11-14",
-      "revalidateWhen": "Remote origins, transport policy, or network-facing commands change."
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "Remote origins, transport policy, or network-facing commands change.",
+      "scope": "first-party"
     },
     {
       "package": "*",
@@ -72,8 +81,8 @@
       "classification": "required-capability",
       "rationale": "The CLI reads documented environment configuration while secret values remain excluded from reports and logs.",
       "owner": "AIWG maintainers",
-      "reviewedOn": "2026-08-14",
-      "expiresOn": "2026-11-14",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
       "revalidateWhen": "Environment-variable handling or redaction policy changes."
     },
     {
@@ -83,9 +92,153 @@
       "classification": "required-capability",
       "rationale": "Public, versioned web resources are a supported AIWG distribution channel.",
       "owner": "AIWG maintainers",
-      "reviewedOn": "2026-08-14",
-      "expiresOn": "2026-11-14",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
       "revalidateWhen": "Resource URL allowlisting or release distribution changes."
+    },
+    {
+      "package": "node-server",
+      "depth": "direct",
+      "type": "networkAccess",
+      "classification": "required-capability",
+      "rationale": "Hono Node adapter used by aiwg serve and the MCP HTTP transport; network use is its purpose.",
+      "artifactHash": "sha512-bjD221KPLoJTWUwso1J6fGKiTXEUFedG/s0visavY4zakFPkeGURMRNly+FhBHs7T8Dz4qHaZIMX9ZoJHSJtKA==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "node-server version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "2.0.11",
+      "evidenceFile": "package/dist/index.mjs"
+    },
+    {
+      "package": "commander",
+      "depth": "direct",
+      "type": "filesystemAccess",
+      "classification": "required-capability",
+      "rationale": "CLI argument parser; reads package metadata and resolves executable subcommands from disk.",
+      "artifactHash": "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "commander version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "12.1.0",
+      "evidenceFile": "package/lib/command.js"
+    },
+    {
+      "package": "commander",
+      "depth": "direct",
+      "type": "shellAccess",
+      "classification": "required-capability",
+      "rationale": "child_process.spawn runs only for executable subcommands (command(name, desc) with an executable file); AIWG registers none (no executable subcommands in src, tools or bin).",
+      "artifactHash": "sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "commander version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "12.1.0",
+      "evidenceFile": "package/lib/command.js"
+    },
+    {
+      "package": "chokidar",
+      "depth": "direct",
+      "type": "filesystemAccess",
+      "classification": "required-capability",
+      "rationale": "File watcher used by watch and housekeeper jobs on user-selected project paths.",
+      "artifactHash": "sha512-Qgzu8kfBvo+cA4962jnP1KkS6Dop5NS6g7R5LFYJr4b8Ub94PPQXUksCw9PvXoeXPRRddRNC5C1JQUR2SMGtnA==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "chokidar version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "4.0.3",
+      "evidenceFile": "package/esm/handler.js"
+    },
+    {
+      "package": "graceful-fs",
+      "depth": "direct",
+      "type": "filesystemAccess",
+      "classification": "required-capability",
+      "rationale": "Drop-in fs wrapper that retries EMFILE; file access on paths the caller already chose.",
+      "artifactHash": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "graceful-fs version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "4.2.11",
+      "evidenceFile": "package/graceful-fs.js"
+    },
+    {
+      "package": "glob",
+      "depth": "direct",
+      "type": "filesystemAccess",
+      "classification": "required-capability",
+      "rationale": "Pattern matching over project files the caller already selected.",
+      "artifactHash": "sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "glob version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "13.0.6",
+      "evidenceFile": "package/dist/commonjs/index.min.js"
+    },
+    {
+      "package": "glob",
+      "depth": "direct",
+      "type": "networkAccess",
+      "classification": "required-capability",
+      "rationale": "False positive: the flagged fetch( is the bundled lru-cache LRUCache.fetch() method (in-memory cache), not a network call. Verified in dist/commonjs/index.min.js 13.0.6.",
+      "artifactHash": "sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "glob version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "13.0.6",
+      "evidenceFile": "package/dist/commonjs/index.min.js"
+    },
+    {
+      "package": "listr2",
+      "depth": "direct",
+      "type": "networkAccess",
+      "classification": "required-capability",
+      "rationale": "False positive: the flagged fetch() is the spinner frame accessor and the URLs are documentation links. Verified in dist/index.cjs 8.3.3.",
+      "artifactHash": "sha512-LWzX2KsqcB1wqQ4AHgYb4RsDXauQiqhjLk+6hjbaeHG4zpjjVAB6wC/gz6X0l+Du1cN3pUB5ZlrvTbhGSNnUQQ==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "listr2 version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "8.3.3",
+      "evidenceFile": "package/dist/index.cjs"
+    },
+    {
+      "package": "ws",
+      "depth": "direct",
+      "type": "networkAccess",
+      "classification": "required-capability",
+      "rationale": "WebSocket library used by the AIWG cockpit/pty bridge; network use is its purpose.",
+      "artifactHash": "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2027-01-25",
+      "revalidateWhen": "ws version changes (new artifact hash) or AIWG starts using the flagged capability differently.",
+      "reviewedVersion": "8.21.1",
+      "evidenceFile": "package/lib/websocket-server.js"
+    },
+    {
+      "package": "zod",
+      "depth": "transitive",
+      "type": "cve",
+      "classification": "accepted-risk",
+      "rationale": "GHSA-mrhx-c7xc-m3w5 in the zod 3.25.76 copy nested under @fortemi/core, which pins zod ^3.24. AIWG itself uses zod 4.6.7 and passes no schemas across the boundary. Waiting on a Fortemi release with zod 4.",
+      "owner": "AIWG maintainers",
+      "reviewedOn": "2026-10-25",
+      "expiresOn": "2026-12-15",
+      "revalidateWhen": "@fortemi/core publishes a zod 4 release, or AIWG starts passing untrusted input into Fortemi tool schemas.",
+      "reviewedVersion": "3.25.76",
+      "issue": "roctinam/aiwg#3577"
     }
+  ],
+  "firstPartyPackages": [
+    "pkg:npm/aiwg",
+    "pkg:npm/%40aiwg/cli",
+    "pkg:npm/%40aiwg/cockpit"
   ]
 }

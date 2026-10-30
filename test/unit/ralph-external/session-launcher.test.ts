@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { writeExecutableSync } from '../../helpers/write-executable.js';
 
 // Import the module under test
 // @ts-ignore - ESM import
@@ -64,7 +65,7 @@ describe('SessionLauncher', () => {
       vi.stubEnv('PATH', `${testDir}:${process.env.PATH}`);
       vi.stubEnv('CI', 'false');
       const fakeCli = join(testDir, 'claude');
-      writeFileSync(fakeCli, `#!${process.execPath}\nconsole.log(JSON.stringify(process.env));`, { mode: 0o755 });
+      writeExecutableSync(fakeCli, `#!${process.execPath}\nconsole.log(JSON.stringify(process.env));`);
       if (Adapter) {
         const adapter = new Adapter();
         vi.spyOn(adapter, 'getBinary').mockReturnValue(fakeCli);
@@ -105,9 +106,9 @@ describe('SessionLauncher', () => {
       vi.stubEnv('AIWG_AUDIT_SENTINEL', 'synthetic-unlisted');
       vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-auth');
       vi.stubEnv('PATH', `${testDir}:${process.env.PATH}`);
-      writeFileSync(join(testDir, 'claude'), `#!${process.execPath}
+      writeExecutableSync(join(testDir, 'claude'), `#!${process.execPath}
         if (!process.env.PATH || process.env.AIWG_AUDIT_SENTINEL || process.env.ANTHROPIC_API_KEY) process.exitCode = 17;
-        else console.log('fixture-version');`, { mode: 0o755 });
+        else console.log('fixture-version');`);
       expect(await probe()).toBe(expected);
     });
   });

@@ -9,7 +9,10 @@ import {
   getFortemiCoreSyncStatus,
 } from "../../../src/artifacts/fortemi-core-sync.js";
 import { buildAiwgFortemiIndexExport } from "../../../src/artifacts/browser-export.js";
+import * as browserExport from "../../../src/artifacts/browser-export.js";
 import { collectIndexStatus } from "../../../src/artifacts/index-status.js";
+import { loadFortemiCoreExport, loadFortemiCoreMetadataEntries } from "../../../src/artifacts/fortemi-core-query-adapter.js";
+import { discoverCapability, queryIndex } from '../../../src/artifacts/query-engine.js';
 import { main } from "../../../src/artifacts/cli.js";
 import {
   GRAPH_CONFIGS,
@@ -79,12 +82,163 @@ describe("Fortemi Core static index sync (#1687)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     if (prevXdg === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdg;
     resetRegistry();
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('preserves lifecycle metadata in Fortemi exports and excludes tombstones from ordinary retrieval', async () => {
+    const retired = entry({ name: 'retired-synthetic', title: 'Retired synthetic capability',
+      memoryRecord: { lifecycle: 'retired', placement: 'indexed' } as MetadataEntry['memoryRecord'] });
+    writeProjectIndex(tmp, retired);
+    const exported = buildAiwgFortemiIndexExport(tmp, { graph: 'project', schemaVersion: 'v2' });
+    expect(exported.items[0].search?.frontmatter.aiwg_memory_record).toEqual(retired.memoryRecord);
+    syncFortemiCoreIndex(tmp);
+    expect(loadFortemiCoreMetadataEntries(tmp).entries[0].memoryRecord).toEqual(retired.memoryRecord);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    for (const fulltext of [false, true]) {
+      await queryIndex(tmp, { text: 'synthetic', fulltext }, { backend: 'fortemi-core', json: true });
+      expect(JSON.parse(log.mock.calls.at(-1)![0] as string).results).toEqual([]);
+    }
+    await discoverCapability(tmp, { phrase: 'synthetic', graph: 'project', backend: 'fortemi-core', json: true });
+    expect(JSON.parse(log.mock.calls.at(-1)![0] as string).results).toEqual([]);
+  });
+
+  it.each([
+    { lengths: [199, 199, 199, 199, 200], short: 4, degenerate: true },
+    { lengths: [199, 199, 199, 200, 200], short: 3, degenerate: false },
+    { lengths: [200, 200], short: 0, degenerate: false },
+    { lengths: [0], short: 1, degenerate: true },
+    { lengths: [], short: 0, degenerate: true },
+  ])("measures exported text quality at the character and ratio boundaries ($lengths)", ({ lengths, short, degenerate }) => {
+    writeProjectIndex(tmp, entry());
+    const exported = buildAiwgFortemiIndexExport(tmp, { graph: "project", schemaVersion: "v2" });
+    const template = exported.items[0];
+    exported.items = lengths.map((length, i) => ({
+      ...template,
+      source: { ...template.source, path: `pdfs/full/item-${i}.pdf` },
+      title: i === 0 ? "item-0.pdf" : `Paper ${i}`,
+      text: `  ${"x".repeat(length)}\n`,
+    }));
+    vi.spyOn(browserExport, "buildAiwgFortemiIndexExport").mockReturnValue(exported);
+    const manifest = syncFortemiCoreIndex(tmp);
+    expect(manifest.text_quality).toEqual({
+      short_text_threshold_chars: 200,
+      short_text_count: short,
+      filename_title_count: lengths.length ? 1 : 0,
+      degenerate,
+    });
+    const saved = JSON.parse(fs.readFileSync(path.join(tmp, path.dirname(manifest.export_path), "manifest.json"), "utf-8"));
+    expect(saved.text_quality).toEqual(manifest.text_quality);
+  });
+
+  it("warns for created, unchanged, and updated metadata-only graph syncs with source context", async () => {
+    vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeProjectIndex(tmp, entry({ path: "pdfs/full/sample.pdf", title: "sample.pdf" }));
+    fs.writeFileSync(path.join(tmp, ".aiwg", "aiwg.config"), JSON.stringify({
+      index: { graphs: { papers: {
+        scanDirs: ["pdfs/full"], extensions: [".pdf"], nodeStrategy: "filename-metadata",
+        filenamePattern: "(?<name>.+)\\.pdf",
+      } } },
+    }));
+    const papersDir = getGraphIndexDir(tmp, "papers");
+    fs.mkdirSync(papersDir, { recursive: true });
+    const projectIndex = path.join(getGraphIndexDir(tmp, "project"), "metadata.json");
+    const papersIndex = path.join(papersDir, "metadata.json");
+    fs.copyFileSync(projectIndex, papersIndex);
+    const previousExitCode = process.exitCode;
+    for (const status of ["created", "unchanged", "updated"]) {
+      if (status === "updated") {
+        const index = JSON.parse(fs.readFileSync(papersIndex, "utf-8"));
+        index.entries["pdfs/full/sample.pdf"].summary = "Short update.";
+        fs.writeFileSync(papersIndex, JSON.stringify(index));
+      }
+      await main(["sync", "--graph", "papers"]);
+      expect(log).toHaveBeenLastCalledWith(expect.stringContaining(`Fortemi Core ${status}: 1 item(s)`));
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("1/1 items (100%) have <200 chars of indexed text; 1 have a filename as title"));
+      expect(warn).toHaveBeenLastCalledWith(expect.stringContaining("Source: pdfs/full (nodeStrategy: filename-metadata)"));
+      expect(process.exitCode).toBe(previousExitCode);
+    }
+    expect(warn).toHaveBeenCalledTimes(3);
+  });
+
+  it("warns per degenerate graph in sync --all while keeping healthy graphs quiet", async () => {
+    vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeProjectIndex(tmp, entry({ summary: "Substantial indexed text. ".repeat(20) }));
+    const dir = getGraphIndexDir(tmp, "codebase");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "metadata.json"), JSON.stringify({
+      version: "1.0.0", builtAt: "2026-01-03T00:00:00.000Z", buildTimeMs: 1, entries: {},
+    }));
+    await main(["sync", "--all"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("graph 'codebase' contains no indexed items"));
+  });
+
+  for (const all of [false, true]) {
+    it(`reports text quality in sync JSON without console warnings (all=${all})`, async () => {
+      vi.spyOn(process, "cwd").mockReturnValue(tmp);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      writeProjectIndex(tmp, entry());
+      await main(["sync", "--json", ...(all ? ["--all"] : [])]);
+      expect(log).toHaveBeenCalledTimes(1);
+      const report = JSON.parse(log.mock.calls[0][0]);
+      const manifest = all ? report.manifests[0] : report;
+      expect(manifest.text_quality).toMatchObject({ short_text_count: 1, degenerate: true });
+      expect(warn).not.toHaveBeenCalled();
+    });
+  }
+
+  it('reads unchanged exports once across status checks and query loading, without sharing mutable results', () => {
+    writeProjectIndex(tmp, entry());
+    syncFortemiCoreIndex(tmp, { graph: 'project' });
+    const exportPath = path.join(getGraphIndexDir(tmp, 'project'), '../fortemi-core/project/aiwg-fortemi-index-v2.json');
+    const reads = vi.spyOn(fs, 'readFileSync');
+    for (let i = 0; i < 3; i++) expect(getFortemiCoreSyncStatus(tmp, 'project').stale).toBe(false);
+    const first = loadFortemiCoreExport(tmp, 'project').exported!;
+    const originalTitle = first.items[0].title;
+    expect(reads.mock.calls.filter(args => args[0] === exportPath)).toHaveLength(1);
+    first.items[0].title = 'Caller mutation';
+    expect(loadFortemiCoreExport(tmp, 'project').exported!.items[0].title).toBe(originalTitle);
+    expect(reads.mock.calls.filter(args => args[0] === exportPath)).toHaveLength(2);
+  });
+
+  it('invalidates cached validation for same-size tampering with a restored mtime', () => {
+    writeProjectIndex(tmp, entry());
+    syncFortemiCoreIndex(tmp, { graph: 'project' });
+    const status = getFortemiCoreSyncStatus(tmp, 'project');
+    const fixed = 1_700_000_000;
+    fs.utimesSync(status.exportPath, fixed, fixed);
+    expect(getFortemiCoreSyncStatus(tmp, 'project').stale).toBe(false);
+    const before = fs.statSync(status.exportPath, { bigint: true });
+    const text = fs.readFileSync(status.exportPath, 'utf8');
+    fs.writeFileSync(status.exportPath, text.replace('AIWG Doctor', 'AIWG Tester'));
+    fs.utimesSync(status.exportPath, fixed, fixed);
+    // Model an advancing filesystem change timestamp deterministically: CI
+    // overlay filesystems can report the same ctime for consecutive writes.
+    const statSync = fs.statSync.bind(fs);
+    vi.spyOn(fs, 'statSync').mockImplementation(((file, options) => {
+      const stat = statSync(file, options);
+      if (file === status.exportPath && options?.bigint) {
+        return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+          ctimeNs: before.ctimeNs + 1n,
+        });
+      }
+      return stat;
+    }) as typeof fs.statSync);
+    const after = fs.statSync(status.exportPath, { bigint: true });
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+    expect(after.ctimeNs).not.toBe(before.ctimeNs);
+    expect(getFortemiCoreSyncStatus(tmp, 'project')).toMatchObject({ stale: true,
+      reason: 'export checksum does not match manifest' });
+    expect(loadFortemiCoreExport(tmp, 'project').exported).toBeUndefined();
   });
 
   it("serializes records separately and preserves exact JSON bytes and checksums (#3185)", () => {
@@ -479,6 +633,7 @@ describe("Fortemi Core static index sync (#1687)", () => {
     syncFortemiCoreIndex(tmp, { generatedAt: "2026-01-05T00:00:00.000Z" });
 
     const statusBefore = getFortemiCoreSyncStatus(tmp);
+    const unchangedExportStat = fs.statSync(statusBefore.exportPath, { bigint: true });
     const exported = JSON.parse(fs.readFileSync(statusBefore.exportPath, "utf-8"));
     exported.schema_version = "aiwg.fortemi.index.export.v1";
     const exportText = JSON.stringify(exported, null, 2) + "\n";
@@ -487,6 +642,14 @@ describe("Fortemi Core static index sync (#1687)", () => {
     const manifest = JSON.parse(fs.readFileSync(statusBefore.manifestPath, "utf-8"));
     manifest.export_checksum = createHash("sha256").update(exportText).digest("hex");
     fs.writeFileSync(statusBefore.manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation(((file, options) => {
+      if (file === statusBefore.exportPath && options?.bigint) {
+        return unchangedExportStat;
+      }
+      return statSync(file, options);
+    }) as typeof fs.statSync);
 
     const status = collectIndexStatus(tmp).fortemiCore;
     expect(status.optedIn).toBe(true);

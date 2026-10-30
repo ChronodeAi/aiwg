@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-const failure = vi.hoisted(() => ({ close: false, write: false }));
+const failure = vi.hoisted(() => ({ close: false, write: false, uuid: null as string | null }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
@@ -24,6 +24,10 @@ vi.mock('node:fs/promises', async importOriginal => {
     },
   };
 });
+vi.mock('node:crypto', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return { ...actual, randomUUID: () => failure.uuid ?? actual.randomUUID() };
+});
 import { assertConfigDestination, writeConfigAtomic } from '../../../src/mcp/config-file.mjs';
 import { manageOmpMcp } from '../../../src/mcp/omp-config.mjs';
 import { manageGrokBuildMcp } from '../../../src/mcp/grok-build-config.mjs';
@@ -31,12 +35,27 @@ import { manageGrokBuildMcp } from '../../../src/mcp/grok-build-config.mjs';
 let root: string;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'aiwg-config-file-')); });
 afterEach(async () => {
+  failure.uuid = null;
   failure.close = false;
   failure.write = false;
   await rm(root, { recursive: true, force: true });
 });
 
 describe('atomic MCP config writes', () => {
+  it('exclusively creates temps and leaves a pre-created symlink untouched', async () => {
+    const file = join(root, 'mcp.json');
+    const victim = join(root, 'victim');
+    await writeFile(file, 'original');
+    await writeFile(victim, 'untouched');
+    failure.uuid = 'precreated';
+    const temporary = `${file}.precreated.tmp`;
+    await symlink(victim, temporary);
+    await expect(writeConfigAtomic(file, 'replacement', { userScope: true })).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(await readFile(victim, 'utf8')).toBe('untouched');
+    expect(await readFile(file, 'utf8')).toBe('original');
+    expect(await readdir(root)).toContain('mcp.json.precreated.tmp');
+  });
+
   it.each([false, true])('removes the temp file even when cleanup close fails (write fails=%s)', async writeFails => {
     const file = join(root, 'mcp.json');
     await writeFile(file, 'original');
@@ -112,5 +131,25 @@ describe('atomic MCP config writes', () => {
     expect((await stat(join(outside, 'mcp.json'))).mode & 0o777).toBe(0o600);
     await symlink(join(outside, 'mcp.json'), join(parent, 'link.json'));
     await expect(assertConfigDestination(join(parent, 'link.json'))).rejects.toThrow('destination is a symlink');
+  });
+});
+
+
+describe('private parent creation (#3565)', () => {
+  it.each([{ userScope: true }, { newFileMode: 0o600 }])('creates only new parents with 0700 under umask 0002 (%j)', async options => {
+    const existing = join(root, 'existing');
+    await mkdir(existing);
+    await chmod(existing, 0o775);
+    const file = join(existing, 'private', 'nested', 'settings.json');
+    const helper = pathToFileURL(resolve(__dirname, '../../../src/mcp/config-file.mjs')).href;
+    execFileSync(process.execPath, ['--input-type=module', '-e', `
+      import { writeConfigAtomic } from ${JSON.stringify(helper)};
+      process.umask(0o002);
+      await writeConfigAtomic(process.argv[1], '{}', ${JSON.stringify(options)});
+    `, file], { timeout: 60_000 });
+    expect((await stat(join(existing, 'private'))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(existing, 'private/nested'))).mode & 0o777).toBe(0o700);
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await stat(existing)).mode & 0o777).toBe(0o775);
   });
 });

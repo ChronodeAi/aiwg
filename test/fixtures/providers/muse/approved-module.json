@@ -1,0 +1,18 @@
+{
+  "note": "Host installation-authority allowlist entry for the Muse driver module (#3181). packageRoot is supplied by the installing host at load time; the digest pins tools/ralph-external/lib/muse-adapter.mjs byte-for-byte. Approval to load is not qualification to dispatch.",
+  "source": "tools/ralph-external/lib/muse-adapter.mjs",
+  "entry": {
+    "reference": "installed:muse",
+    "packageName": "@aiwg/muse-worker",
+    "packageVersion": "1",
+    "modulePath": "lib/muse-adapter.mjs",
+    "interfaceVersion": 1,
+    "sha256": "sha256:8bc8dc3597aacc28e3ca27f1861d884ba3deb37c75fab526bc7a4809b8e36b04",
+    "adapterIds": [
+      "muse"
+    ],
+    "platforms": [
+      "linux"
+    ]
+  }
+}

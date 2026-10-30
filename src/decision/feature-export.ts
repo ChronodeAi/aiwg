@@ -1,3 +1,4 @@
+import { assertDecisionCeiling } from '../gates/lattice.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -1193,9 +1194,7 @@ function normalizeEvalIntegrity(value: DecisionFeatureEvalIntegrity | undefined)
   if (value.upstreamDisposition !== value.qualificationRelease.decision) {
     throw new DecisionFeatureExportError('Feature export integrity must preserve the upstream qualification release decision');
   }
-  if (integrityRank(value.disposition) < integrityRank(value.upstreamDisposition)) {
-    throw new DecisionFeatureExportError(`Feature export integrity cannot upgrade ${value.upstreamDisposition} to ${value.disposition}`);
-  }
+  assertDecisionCeiling(value.disposition, value.upstreamDisposition);
   const { digest, ...payload } = value;
   if (digest !== digestEvalIntegrity(payload)) throw new DecisionFeatureExportError('Feature export integrity digest does not match its content');
   return structuredClone(value);
@@ -1217,9 +1216,9 @@ function validateQualificationRelease(record: QualificationReleaseRecord): void 
     throw new DecisionFeatureExportError('Feature export qualification release digest does not match its content');
   }
   validateQualificationIntegrity(record.integrity);
-  if (integrityRank(record.decision) < integrityRank(record.integrity.release_gate.decision)) {
-    throw new DecisionFeatureExportError('Feature export qualification release cannot upgrade its integrity release gate');
-  }
+  assertDecisionCeiling(record.decision, record.integrity.release_gate.decision,
+    record.integrity.integrity_state === 'compromised' || record.integrity.compromise_labels.length ? 'ROLLBACK' : 'PROMOTE',
+    ...record.gates.map(gate => gate.status === 'pass' ? 'PROMOTE' as const : 'HOLD' as const));
 }
 
 function validateQualificationIntegrity(value: QualificationIntegrityMetadata): void {
@@ -1240,9 +1239,6 @@ function digestEvalIntegrity(value: Omit<DecisionFeatureEvalIntegrity, 'digest'>
   return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
 }
 
-function integrityRank(decision: DecisionFeatureIntegrityDisposition): number {
-  return ({ PROMOTE: 0, HOLD: 1, ROLLBACK: 2 } as const)[decision];
-}
 
 function activeExportHold(hold: DecisionLifecycleHold, subject: string, nowEpochMs: number): boolean {
   return hold.subject === subject && hold.expiresAt > nowEpochMs && hold.scope.includes('export');

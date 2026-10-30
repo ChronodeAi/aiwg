@@ -105,6 +105,7 @@ describe('sessions CLI contracts', () => {
         .toContain('--workspace <path-or-id>');
     }
     expect(usage).toContain('--db <path>');
+    expect(usage).toContain('Adds to defaults separately authorized by --provider-home');
     expect(usage).toContain('--max-record-bytes <n>');
     expect(usage).toContain('--max-source-bytes <n>');
     expect(usage).toContain('default 67108864');
@@ -167,9 +168,19 @@ describe('sessions CLI contracts', () => {
     expect(output.data.providers.find((item: any) => item.provider === 'grok-build'))
       .toMatchObject({
         disposition: 'implemented',
-        reasonCode: 'CLI_EXPORT_REQUIRED',
+        reasonCode: 'GROK_BUILD_NATIVE_EXPERIMENTAL_DISABLED',
         supportedOperations: ['inspect', 'stream'],
         acquisitionModes: ['manual-export'],
+        discovery: {
+          disposition: 'manual-export',
+          authorization: 'none',
+          requiredFlags: [],
+          liveDetection: 'unsupported',
+        },
+      });
+    expect(output.data.providers.find((item: any) => item.provider === 'copilot'))
+      .toMatchObject({
+        discovery: { disposition: 'manual-export' },
       });
     expect(output.data.providers.find((item: any) => item.provider === 'cursor'))
       .toMatchObject({
@@ -186,8 +197,14 @@ describe('sessions CLI contracts', () => {
     expect(output.data.providers.find((item: any) => item.provider === 'hermes'))
       .toMatchObject({
         disposition: 'implemented',
-        supportedOperations: ['inspect', 'stream'],
+        supportedOperations: ['discover', 'inspect', 'stream'],
         acquisitionModes: ['jsonl', 'api', 'sqlite-snapshot'],
+        discovery: {
+          disposition: 'discoverable',
+          authorization: 'explicit-root',
+          requiredFlags: ['--hermes-root'],
+          liveDetection: 'unsupported',
+        },
       });
     expect(output.data.providers.find((item: any) => item.provider === 'opencode'))
       .toMatchObject({

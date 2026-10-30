@@ -111,7 +111,7 @@ describe('muse writer surface (#226)', () => {
     expect(kernelSkillsPath).toBe('.agents/skills');
     expect(paths.agents).toBe('');
     expect(paths.commands).toBe('');
-    expect(paths.rules).toBe('');
+    expect(paths.rules).toBe('.muse/rules');
     expect(getFileExtension()).toBe('.md');
   });
 

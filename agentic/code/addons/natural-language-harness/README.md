@@ -1,5 +1,7 @@
 # Natural-Language Harness Runtime
 
+Evidence status: design intent.
+
 NLAH documents keep policy readable while mapping every executable `MUST`
 clause to a deterministic mechanism. Prose is never executed directly.
 

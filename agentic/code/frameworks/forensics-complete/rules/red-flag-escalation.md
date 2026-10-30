@@ -1,5 +1,44 @@
 ---
 enforcement: critical
+activation: bound
+summary: Pause forensic analysis on any defined red flag, log the finding, alert the operator, and await explicit instructions without remediation.
+bound_to:
+  agents:
+    - cloud-analyst
+    - container-analyst
+    - forensic-acquisition-agent
+    - forensics-orchestrator
+    - ioc-analyst
+    - log-analyst
+    - memory-analyst
+    - network-analyst
+    - persistence-hunter
+    - recon-agent
+    - reporting-agent
+    - timeline-builder
+    - triage-agent
+  skills:
+    - cloud-forensics
+    - container-forensics
+    - evidence-preservation
+    - forensics-acquire
+    - forensics-hunt
+    - forensics-investigate
+    - forensics-ioc
+    - forensics-profile
+    - forensics-report
+    - forensics-status
+    - forensics-timeline
+    - forensics-triage
+    - ioc-extraction
+    - linux-forensics
+    - log-analysis
+    - memory-forensics
+    - sigma-hunting
+    - supply-chain-forensics
+    - target-profiling
+triggers:
+  - forensic red flags requiring operator escalation
 ---
 
 # Red Flag Escalation

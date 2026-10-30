@@ -129,11 +129,17 @@ export interface ScriptRunnerOptions {
   /** Additional environment variables */
   env?: Record<string, string>;
 
+  /** Shell variables withheld from unrelated script recipients. */
+  omitEnv?: readonly string[];
+
   /** Timeout in milliseconds */
   timeout?: number;
 
   /** Capture stdout/stderr instead of inheriting (for quiet mode) */
   capture?: boolean;
+
+  /** File-backed stdout capture; caller owns and closes the descriptor. */
+  stdoutFd?: number;
 }
 
 /**

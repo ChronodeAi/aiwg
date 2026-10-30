@@ -1,5 +1,9 @@
 # Messaging Guide
 
+> "Notify #aiwg-notifications in Slack when the agent loop finishes, and let me approve gates from chat."
+
+Your assistant connects the messaging hub to Slack, Discord, or Telegram for notifications, slash commands, and 2-way chat.
+
 AIWG messaging integration connects your project to Slack, Discord, and Telegram for real-time notifications, interactive commands, and 2-way AI chat. The messaging subsystem runs within the daemon process.
 
 ## Overview
@@ -12,6 +16,12 @@ The messaging system provides:
 - **Multi-platform** — Same event stream delivered to all connected platforms simultaneously
 
 ## Quick Start
+
+> "Set up Slack notifications for this project using my bot token."
+
+Your assistant reads the bot token from the environment and starts the daemon messaging hub with the enabled adapters.
+
+### Command reference
 
 ### 1. Set environment variables
 
@@ -49,6 +59,10 @@ The daemon log confirms adapter loading:
 ```
 
 ## Platform Setup
+
+> "Connect the Discord bot and route security alerts to a separate channel."
+
+Your assistant sets the bot token and channel IDs and configures `config.rooms` for per-event routing.
 
 ### Slack
 
@@ -176,6 +190,10 @@ Route different event types to separate Telegram chats or groups using `config.r
 
 ## Commands
 
+> "From chat, show project status and approve gate-e2c-001."
+
+Your assistant routes `/status` and `/approve` through the CommandRouter with read/write permission checks.
+
 All platforms support the same command set. Prefix commands with `/` in chat:
 
 | Command | Permission | Description |
@@ -231,6 +249,10 @@ Bot: Based on the project configuration, the test suite runs via
 
 ## 2-Way AI Chat
 
+> "Ask the bot what testing framework we use, then how to add a test file."
+
+Your assistant forwards free text to the ChatHandler, which answers with project context and keeps up to 10 message pairs of history.
+
 Beyond slash commands, you can send free-text messages to the bot for AI-powered responses. The bot uses `claude -p` with your project's full context (CLAUDE.md, codebase, etc.).
 
 ### How It Works
@@ -284,6 +306,10 @@ const hub = await createMessagingHub({
 
 ## Event Topics
 
+> "Send build failures to Telegram as critical alerts and health recoveries as info."
+
+Your assistant publishes bus events with topic, severity, and summary so each platform formats them the same way.
+
 The messaging system forwards events from the internal event bus to all connected platforms. Events are formatted into human-readable messages with severity indicators.
 
 ### Event Categories
@@ -324,6 +350,10 @@ hub.publish({
 ```
 
 ## Custom Adapters
+
+> "Add a new platform adapter that sends formatted messages and handles inbound commands."
+
+Your assistant extends `BaseAdapter` with `initialize`, `send`, `update`, and `shutdown` plus inbound dispatch.
 
 To add support for a new messaging platform, extend `BaseAdapter`:
 
@@ -425,6 +455,10 @@ this.client.on('message', (msg) => {
 ```
 
 ## Troubleshooting
+
+> "The bot loads no adapters and ignores /status. What do I check first?"
+
+Your assistant verifies at least one platform token is set, then checks channel permissions and daemon logs.
 
 ### No adapters loaded
 

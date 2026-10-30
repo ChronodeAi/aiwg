@@ -19,6 +19,7 @@
  */
 
 import path from 'path';
+import { sensitiveInputOptions } from '../../auth/sensitive-input.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { installPackage } from '../../packages/registry.js';
 import { recordDeployment } from '../../packages/package-registry.js';
@@ -65,6 +66,7 @@ export const installHandler: CommandHandler = {
           '  --deploy                Deploy immediately after install',
           '  --provider <name>       Target provider (claude, copilot, cursor...)',
           '  --target <dir>          Project directory to deploy into',
+          '  --token-interactive | --token-stdin | --token-file <path> | --token-store <name> | --token-env <name>',
           '  --refresh               Force re-pull even if cached',
           '  --ref <tag-or-sha>      Resolve this ref and lock its immutable commit',
           '  --package <id>          Select one wrapper when a repository contains several',
@@ -74,6 +76,10 @@ export const installHandler: CommandHandler = {
           '  --global                Store package state in the user AIWG directory (default)',
         ].join('\n'),
       };
+    }
+
+    if (/^https?:\/\/[^/]*@/.test(rawRef)) {
+      return { exitCode: 1, message: 'Credentials in Git URLs are refused; use --token-stdin, --token-file, --token-store or --token-env.' };
     }
 
     const deploy = hasFlag(ctx.args, '--deploy');
@@ -108,6 +114,7 @@ export const installHandler: CommandHandler = {
       const resolvedPolicy = await resolveVerificationPolicy(policyName, scope);
       const installed = await installPackage(rawRef, {
         refresh,
+        tokenInput: sensitiveInputOptions(ctx.args, 'token'),
         ref: parseFlag(ctx.args, '--ref'),
         packageSelector: parseFlag(ctx.args, '--package'),
         verify,

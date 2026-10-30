@@ -1,5 +1,17 @@
 ---
 enforcement: medium
+activation: bound
+summary: Include required diagrams with major documentation artifacts; retain editable source, label boundaries and relationships, and split overly complex diagrams.
+bound_to:
+  skills:
+    - doc-sync
+  agents:
+    - architecture-designer
+    - requirements-analyst
+    - test-architect
+    - security-architect
+    - deployment-manager
+    - technical-writer
 ---
 
 # Diagram Generation Rules

@@ -5,7 +5,6 @@ import { spawnSync } from 'node:child_process';
 import {
   cp,
   mkdir,
-  mkdtemp,
   readFile,
   rename,
   rm,
@@ -94,6 +93,7 @@ function runNpm(args, cwd, cacheRoot) {
     cwd,
     env,
     stdio: 'inherit',
+    timeout: lockTimeoutMs,
   });
 
   if (result.error) throw result.error;
@@ -105,7 +105,11 @@ function runNpm(args, cwd, cacheRoot) {
 async function buildWebRelease() {
   await acquireLock();
 
-  const stageRoot = await mkdtemp(join(tmpdir(), 'aiwg-cockpit-web-release-'));
+  // Rollup/esbuild use absolute module IDs when assigning identifiers. A fresh
+  // random staging path changes the minified bundle (and its content hash) on
+  // every prepack. The exclusive checkout lock gives builds a stable stage path
+  // without sharing mutable dependency trees between concurrent builds.
+  const stageRoot = join(lockRoot, 'stage');
   const stagedWebRoot = join(stageRoot, 'web');
   const cacheRoot = join(stageRoot, '.npm-cache');
   const nextDistRoot = join(webRoot, `.dist-release-${process.pid}-${Date.now()}`);
@@ -113,6 +117,7 @@ async function buildWebRelease() {
   let previousDistMoved = false;
 
   try {
+    await mkdir(stageRoot);
     await cp(webRoot, stagedWebRoot, {
       recursive: true,
       filter(source) {

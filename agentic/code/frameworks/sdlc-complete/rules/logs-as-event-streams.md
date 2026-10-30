@@ -4,6 +4,18 @@ name: logs-as-event-streams
 severity: HIGH
 category: observability
 factor: 12-factor-XI
+activation: bound
+summary: Write application logs as unbuffered stdout/stderr event streams with correlation IDs; delegate routing and rotation to the environment.
+bound_to:
+  skills: []
+  agents:
+    - software-implementer
+    - reliability-engineer
+    - devops-engineer
+    - architecture-designer
+  flows: []
+triggers:
+  - how should applications route logs
 ---
 
 # Logs as Event Streams

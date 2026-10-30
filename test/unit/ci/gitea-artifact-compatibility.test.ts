@@ -8,7 +8,7 @@ describe('Gitea artifact compatibility', () => {
   it('uses the Node 20 v3 uploader for session performance evidence', () => {
     const evidenceStep = workflow.slice(
       workflow.indexOf('- name: Preserve session performance evidence'),
-      workflow.indexOf('- name: Run tests'),
+      workflow.indexOf('- name: Run UAT'),
     );
 
     expect(evidenceStep).toContain(

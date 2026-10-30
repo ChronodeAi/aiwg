@@ -5,7 +5,7 @@ import { admitDirectWorker, debitDirectWorkerAllowance, reserveDirectWorkerAllow
   resetInProcessAllowanceLedger, ALLOWANCE_EXHAUSTED_CODE } from '../../../tools/ralph-external/session-launcher.mjs';
 
 const endpoint = 'https://provider.invalid/account-health';
-afterEach(() => { vi.restoreAllMocks(); resetInProcessAllowanceLedger(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); resetInProcessAllowanceLedger(); });
 function fixture() {
   return { driver: { qualification: { installation: { endpoints: [endpoint] } },
     buildInvocation: vi.fn(() => { throw new Error('Never execute a CLI as an uncontained probe'); }) },
@@ -49,13 +49,49 @@ describe('bounded qualified recovery probes', () => {
   });
 
   it('T-OG-22 aborts an unresponsive endpoint at the probe deadline', async () => {
-    const started = performance.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     let signal;
-    const result = await runRecoveryProbe({ ...fixture(), timeoutMs: 20,
+    const pending = runRecoveryProbe({ ...fixture(), timeoutMs: 20, nowMs: Date.now,
       fetchImpl: async (_url, options) => { signal = options.signal; return new Promise(() => {}); } });
+    await vi.advanceTimersByTimeAsync(19);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
     expect(result).toMatchObject({ success: false, reason: 'probe-timeout', termination: 'confirmed' });
     expect(signal.aborted).toBe(true);
-    expect(performance.now() - started).toBeLessThan(1500);
+  });
+
+  it('uses the injected absolute deadline after dispatch preparation and response delivery', async () => {
+    let now = 0;
+    const fetchImpl = vi.fn(async () => { now = 10; return new Response(null); });
+    expect(await runRecoveryProbe({ ...fixture(), timeoutMs: 10, nowMs: () => now,
+      onDispatch: () => { now = 10; }, fetchImpl })).toMatchObject({ reason: 'probe-timeout' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    now = 0;
+    expect(await runRecoveryProbe({ ...fixture(), timeoutMs: 10, nowMs: () => now, fetchImpl }))
+      .toMatchObject({ reason: 'probe-timeout', success: false });
+  });
+
+  it.each(['file:///tmp/untrusted', 'https://user:pass@provider.invalid', 'https://provider.invalid/#untrusted'])
+  ('rejects unsafe qualified endpoint %s before charging', async endpoint => {
+    const dispatch = vi.fn();
+    const fetchImpl = vi.fn();
+    expect(await runRecoveryProbe({ ...fixture(), driver: { qualification: { installation: { endpoints: [endpoint] } } },
+      onDispatch: dispatch, fetchImpl })).toMatchObject({ reason: 'probe-endpoint-unavailable' });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('caps all trusted retry/reset headers to one day and ignores malformed or past values', async () => {
+    for (const headers of [{ 'retry-after': '999999' }, { 'x-ratelimit-reset': '999999' }, { 'ratelimit-reset': '999999' }]) {
+      expect(await runRecoveryProbe({ ...fixture(), wallNowMs: () => 0,
+        fetchImpl: async () => new Response(null, { status: 429, headers }) }))
+        .toMatchObject({ retryAfterSeconds: 86400 });
+    }
+    expect(await runRecoveryProbe({ ...fixture(), wallNowMs: () => 1_000_000,
+      fetchImpl: async () => new Response(null, { status: 429, headers: { 'retry-after': '-1', 'x-ratelimit-reset': '1', 'ratelimit-reset': 'garbage' } }) }))
+      .toMatchObject({ retryAfterSeconds: null });
   });
 
   it('T-OG-22 bounds actual endpoint headers to 64KiB', async () => {
@@ -128,6 +164,77 @@ function pausedFixture(status = 200) {
 }
 
 describe('T-OG-22 production probe and canary cumulative allowance', () => {
+  it('T-OG-22 shared-account 429 reset admits one probe and canary with once-only charges', async () => {
+    let now = 0;
+    const breaker = new ScopedFailureBreaker({ nowMs: () => now, jitterMs: () => 0 });
+    const trace = ['closed'];
+    breaker.on('transition', event => { if (event.scopeKey === 'quota:shared') trace.push(event.to); });
+    const options = fixture();
+    options.driver.qualification.installation.accountScope = 'shared';
+    const admissionOptions = { gateEnabled: true, config: { parallelism: { worker_dispatch: true } },
+      invocation: options.invocation, drivers: { fixture: options.driver }, scopedBreaker: breaker,
+      taskChainDigest: '429-reset-lifecycle', maxAttempts: 5, onTransition: null };
+    const dispatch = async admission => {
+      expect(admission.refused).toBeUndefined();
+      expect(breaker.beginDispatch(admission.token, { invocationId: admission.invocationId,
+        selectionDigest: admission.selectionDigest }).ok).toBe(true);
+      await debitDirectWorkerAllowance(admission.ledger);
+      await debitDirectWorkerAllowance(admission.ledger);
+      expect(breaker.commitDispatch(admission.token).ok).toBe(true);
+    };
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    let entered;
+    const probing = new Promise(resolve => { entered = resolve; });
+    const fetchImpl = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { entered(); return pending; });
+    let recovering;
+    try {
+      for (let n = 0; n < 3; n++) {
+        // Distinct CLIs use the same independently qualified account scope.
+        const cli = n === 1 ? 'other-fixture' : 'fixture';
+        const admission = await admitDirectWorker({ ...admissionOptions, invocationId: `quota-${n}`,
+          invocation: { ...options.invocation, selected: { cli } }, drivers: { [cli]: options.driver } });
+        await dispatch(admission);
+        const outcome = { kind: 'failed', reasonCode: 'RATE_LIMIT', evidenceSource: 'launcher',
+          quotaAccount: 'shared', cli, resetAtMs: 300_000, confirmedStop: true };
+        await settleDirectWorker(admission, outcome);
+        const settled = breaker.snapshot();
+        // An echo of the same trusted 429 is neither a fresh charge nor recovery.
+        await settleDirectWorker(admission, outcome);
+        expect(breaker.snapshot()).toEqual(settled);
+      }
+      expect(trace).toEqual(['closed', 'open']);
+      expect(breaker.getState('quota:shared')).toMatchObject({ state: 'open', resetAtMs: 300_000, nextProbeAtMs: 300_000 });
+      for (const time of [120_000, 299_999]) {
+        now = time;
+        const denied = await admitDirectWorker({ ...admissionOptions, invocationId: `early-${time}` });
+        expect(denied.refused).toMatchObject({ code: 'RECOVERY_SCOPE_OPEN', nextEligibleAt: 300_000 });
+        expect(breaker.snapshot().attemptsObserved).toBe(3);
+        expect(fetchImpl).not.toHaveBeenCalled();
+      }
+      now = 300_000;
+      recovering = admitDirectWorker({ ...admissionOptions, invocationId: 'canary' });
+      await probing;
+      expect(breaker.getState('quota:shared').state).toBe('half-open');
+      expect((await admitDirectWorker({ ...admissionOptions, invocationId: 'second-probe' })).refused.code).toBe('RECOVERY_SCOPE_OPEN');
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(breaker.snapshot().attemptsObserved).toBe(3);
+      release(new Response(null, { status: 200 }));
+      const canary = await recovering;
+      expect(canary.token.canaryKeys).toEqual(['quota:shared']);
+      expect(trace).toEqual(['closed', 'open', 'half-open', 'canary-ready', 'canary']);
+      expect((await admitDirectWorker({ ...admissionOptions, invocationId: 'second-canary' })).refused.code).toBe('RECOVERY_SCOPE_OPEN');
+      await dispatch(canary);
+      await settleDirectWorker(canary, { kind: 'succeeded', evidenceSource: 'launcher', confirmedStop: true });
+      await settleDirectWorker(canary, { kind: 'succeeded', evidenceSource: 'launcher', confirmedStop: true });
+      expect(trace).toEqual(['closed', 'open', 'half-open', 'canary-ready', 'canary', 'closed']);
+      expect(breaker.snapshot()).toMatchObject({ attemptsObserved: 5, canariesObserved: 1, reservationsOutstanding: 0 });
+      expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(endpoint, { method: 'HEAD', redirect: 'error', signal: expect.any(AbortSignal) });
+      expect((await admitDirectWorker({ ...admissionOptions, invocationId: 'sixth-charge' })).refused.code).toBe(ALLOWANCE_EXHAUSTED_CODE);
+      expect(breaker.snapshot().attemptsObserved).toBe(5);
+    } finally { release(new Response(null)); await recovering; breaker.destroy(); }
+  });
+
   it('automatically probes before the task canary and charges both actual dispatches', async () => {
     const { breaker, admissionOptions } = pausedFixture();
     try {

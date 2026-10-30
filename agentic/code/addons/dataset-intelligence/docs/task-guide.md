@@ -1,5 +1,13 @@
 # Dataset task guide
 
+> "Check this CSV source, preview ten records, then plan an ingest I can review before anything writes."
+
+Your assistant runs `check`, `preview`, and `plan` with explicit limits and redaction, then binds the reviewed digest at `ingest`.
+
+> "The preview looks wrong. Re-check the source revision and schema before planning."
+
+Your assistant re-verifies source revision and schema evidence and inspects the exact plan digest before any write.
+
 This guide starts from a user outcome. It does not assume that the user knows
 which schema, adapter, index, or provenance vocabulary to choose.
 
@@ -33,6 +41,12 @@ needed. There is no `monitor`, `trace`, `resume`, or `retire` CLI action.
 
 ## Exact CLI surface
 
+> "Show me the exact dataset commands for source through retry so I can copy them."
+
+Your assistant lists the thirteen `aiwg dataset` actions with their required files, digests, and keys.
+
+### Command reference
+
 ```bash
 aiwg dataset source --file source.json --json
 aiwg dataset check source:example --json
@@ -56,6 +70,10 @@ emit the `aiwg.dataset-orchestration/v1` envelope with `--json`.
 
 ## Support status
 
+> "Which dataset evidence cells are stable, and what stays mode-dependent?"
+
+Your assistant reports stable, qualified, and mode-dependent cells with their claim boundaries.
+
 | Evidence cell | Status | Claim boundary |
 |---|---|---|
 | local JSONL and CSV real sources | stable | bounded reference adapters only |
@@ -69,6 +87,20 @@ pinned cross-repository receipt reports 14 pass and 1 experimental live pending
 cell and is stable-eligible; live qualification remains separately evidence-bound.
 
 ## Default routing
+
+> "Brief a worker to ingest this source without letting it touch connectors or checkpoints directly."
+
+Your assistant routes assessment through the `dataset-intelligence` skill and bounded addon skills, which may only delegate operations to `aiwg dataset`.
+
+**Conductor-to-worker brief (example):**
+
+```brief
+Objective: ingest the reviewed plan for source:example; nothing else.
+Inputs: plan-input.json at the current revision; approved digest and idempotency key attached. Must not touch: connectors, checkpoints, indexes, or deletes.
+Acceptance: ingest receipt with the bound digest plus rejection report.
+Limits: explicit record/byte limits; redaction on. Uncertainty policy: stop-and-report.
+Return: receipt and checkpoint reference for review; search success is not verification.
+```
 
 Start with the `dataset-intelligence` skill. It delegates assessment to the
 bounded addon skills, which in turn may only delegate operations to `aiwg
