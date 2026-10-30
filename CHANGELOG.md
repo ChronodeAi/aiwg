@@ -14,6 +14,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Preserve OMP rule-file ownership through activation-selected projection,
   refusing operator-file collisions and canonicalizing owned macOS
   deployment staging paths.
+- Reject staged OMP writes and cleanup through operator symlinks while
+  preserving unrelated linked operator skills.
 
 ## [2026.10.16] - 2026-10-30
 

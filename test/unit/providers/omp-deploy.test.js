@@ -190,6 +190,87 @@ describe('OMP native deployment', () => {
     expect(fs.readdirSync(outside)).toEqual(kind === 'directory' ? [] : ['operator']);
     if (kind !== 'directory') expect(fs.readFileSync(path.join(outside, 'operator'), 'utf8')).toBe('Operator bytes.');
   });
+  it.each([
+    ['.omp', 'dir'],
+    ['.omp/agents', 'dir'],
+    ['.omp/prompts', 'dir'],
+    ['.omp/extensions', 'dir'],
+    ['.agents/skills', 'dir'],
+    ['.omp/agents/review.md', 'file'],
+    ['.agents/skills/kernel/SKILL.md', 'file'],
+    ['.omp/AGENTS.md', 'file'],
+    ['.omp/RULES-BOUND.md', 'file'],
+    ['.omp/.aiwg-manifest.json', 'file'],
+  ])('refuses the original %s link before promoting any OMP output', async (relative, type) => {
+    const corpus = path.join(root, 'source');
+    const source = path.join(corpus, 'agentic/code/frameworks/fixture');
+    for (const directory of ['agents', 'commands', 'skills/kernel', 'rules']) {
+      fs.mkdirSync(path.join(source, directory), { recursive: true });
+    }
+    fs.writeFileSync(path.join(source, 'agents/review.md'), '---\nname: review\ndescription: review\n---\nReview.');
+    fs.writeFileSync(path.join(source, 'commands/review.md'), '---\ndescription: review\n---\nReview.');
+    fs.writeFileSync(path.join(source, 'skills/kernel/SKILL.md'), '---\nname: kernel\ndescription: kernel\nkernel: true\n---\nWork.');
+    fs.writeFileSync(path.join(source, 'rules/policy.md'), '---\nactivation: kernel\n---\nPolicy.');
+    fs.mkdirSync(path.join(corpus, 'agentic/code/providers/omp'), { recursive: true });
+    fs.mkdirSync(path.join(corpus, 'agentic/code/addons'), { recursive: true });
+    fs.writeFileSync(path.join(corpus, 'package.json'), '{"name":"aiwg","version":"2026.10.16"}');
+    fs.writeFileSync(path.join(source, 'package.json'), '{"name":"fixture","version":"2026.10.16"}');
+    fs.writeFileSync(path.join(corpus, 'agentic/code/providers/omp/aiwg-bridge.ts'), 'export const fixtureBridge = true;\n');
+    const target = path.join(root, 'project');
+    const destination = path.join(target, relative);
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.mkdirSync(outside);
+    const backing = path.join(outside, 'operator');
+    fs.writeFileSync(backing, '{"managed":{}}');
+    if (relative === '.agents/skills/kernel/SKILL.md') {
+      fs.writeFileSync(path.join(path.dirname(destination), '.aiwg-manifest.json'), JSON.stringify({
+        managed: { 'SKILL.md': { provider: 'omp', transformation: 'omp-skill',
+          hash: `sha256:${createHash('sha256').update('{"managed":{}}').digest('hex')}` } },
+      }));
+    }
+    fs.symlinkSync(type === 'dir' ? outside : backing, destination, type);
+    await expect(deploy({ srcRoot: source, target, deployCommands: true, deploySkills: true, quiet: true,
+      pinConfigs: { project: {}, user: {} } })).rejects.toThrow('symlink destination');
+    expect(fs.readdirSync(outside)).toEqual(['operator']);
+    expect(fs.readFileSync(backing, 'utf8')).toBe('{"managed":{}}');
+    expect(fs.lstatSync(destination).isSymbolicLink()).toBe(true);
+  });
+  it('preserves an unrelated linked operator skill while deploying a selected kernel skill', async () => {
+    const source = path.join(root, 'source');
+    fs.mkdirSync(path.join(source, 'skills/kernel'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'skills/kernel/SKILL.md'), '---\nname: kernel\ndescription: kernel\nkernel: true\n---\nKernel work.');
+    const target = path.join(root, 'project');
+    const skills = path.join(target, '.agents/skills');
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(skills, { recursive: true });
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'SKILL.md'), 'Operator skill.');
+    fs.symlinkSync(outside, path.join(skills, 'operator'), 'dir');
+    await deploy({ srcRoot: source, target, skillsOnly: true, quiet: true });
+    expect(fs.readFileSync(path.join(skills, 'kernel/SKILL.md'), 'utf8')).toContain('Kernel work.');
+    expect(fs.lstatSync(path.join(skills, 'operator')).isSymbolicLink()).toBe(true);
+    expect(fs.readdirSync(outside)).toEqual(['SKILL.md']);
+    expect(fs.readFileSync(path.join(outside, 'SKILL.md'), 'utf8')).toBe('Operator skill.');
+  });
+  it('refuses lazy standard-skill cleanup through a linked owned skill directory', async () => {
+    const source = path.join(root, 'source');
+    const skill = path.join(source, 'skills/standard');
+    fs.mkdirSync(skill, { recursive: true });
+    fs.writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: standard\ndescription: standard\n---\nStandard work.');
+    const target = path.join(root, 'project');
+    deploySkills([skill], target, { copyStandardSkills: true });
+    const destination = path.join(target, '.agents/skills/standard');
+    const outside = path.join(root, 'outside');
+    fs.renameSync(destination, outside);
+    fs.symlinkSync(outside, destination, 'dir');
+    const before = fs.readdirSync(outside).map(name => [name, fs.readFileSync(path.join(outside, name), 'utf8')]);
+    await expect(deploy({ srcRoot: source, target, skillsOnly: true, quiet: true }))
+      .rejects.toThrow('symlink destination');
+    expect(fs.readdirSync(outside).map(name => [name, fs.readFileSync(path.join(outside, name), 'utf8')])).toEqual(before);
+    expect(fs.lstatSync(destination).isSymbolicLink()).toBe(true);
+    expect(fs.existsSync(path.join(target, '.aiwg'))).toBe(false);
+  });
   it('rejects colliding activated rule basenames before promoting any output', async () => {
     const sources = ['first', 'second'].map(name => path.join(root, name));
     for (const [index, source] of sources.entries()) {

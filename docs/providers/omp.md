@@ -39,6 +39,10 @@ name or reviewing the file; force does not authorize replacing operator edits.
 Removal deletes only unchanged files owned by the OMP deployment. User-scope
 removal uses `--scope user` and the same profile environment as deployment.
 
+Deployment refuses symlinked native resource destinations and managed startup
+files. Shared skill writes and cleanup also refuse linked destinations;
+unrelated operator-linked skills remain unchanged.
+
 Pi and OMP can coexist. They have different native directories and separate
 AIWG identities. Their shared `.agents/skills` discovery surface can contain
 operator or other-provider resources, which OMP deployment must preserve.

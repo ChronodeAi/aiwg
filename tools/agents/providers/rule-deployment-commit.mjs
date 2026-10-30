@@ -10,10 +10,11 @@ import {
   listSkillDirs,
 } from './base.mjs';
 import { writeContextFileSync } from './context-write.mjs';
+import { assertNoSymlinkPath } from './provider-paths-staging.mjs';
 import {
   fileDigest,
   PREPARATION_HOOK,
-  promoteDirectories,
+  planDirectoryPromotions,
   put,
   read,
   walk,
@@ -46,7 +47,6 @@ export function commitRuleDeploymentPlan(plan) {
     const stale = plan.preimages.filter(item => JSON.stringify(capturePreimage(item.path)) !== JSON.stringify(item.state)).map(item => item.path);
     if (stale.length) throw new RuleDeploymentStaleError(`Provider deployment preimage changed: ${stale.join(', ')}`, stale);
     const { target, stage, rootNames } = plan;
-    for (const dir of plan.workspaceDirs || []) fs.mkdirSync(path.join(target, dir), { recursive: true });
     const mappings = plan.mappings.map(({ from, to, before }) => ({ from, to, before: new Map(before) }));
     const normalize = content => {
       for (const mapping of [...mappings].sort((a, b) => b.to.length - a.to.length)) content = content.split(mapping.to).join(mapping.from);
@@ -56,26 +56,49 @@ export function commitRuleDeploymentPlan(plan) {
     const delegated = (from, rel) => mappings.some(mapping => mapping.from !== from
       && mapping.from.startsWith(`${from}${path.sep}`)
       && (path.join(from, rel) === mapping.from || path.join(from, rel).startsWith(`${mapping.from}${path.sep}`)));
-    for (const { from, to, before } of mappings) {
-      if (!fs.existsSync(to)) {
-        if (before.size) fs.rmSync(from, { recursive: true, force: true });
-        continue;
-      }
-      promoteDirectories(to, from, rel => delegated(from, rel));
+    const operations = mappings.map(({ from, to, before }) => {
+      if (!fs.existsSync(to)) return { from, removeRoot: before.size > 0, directories: [], removals: [], writes: [] };
       const after = new Set(walk(to).map(file => path.relative(to, file)).filter(rel => !delegated(from, rel)));
+      const removals = [];
       for (const rel of before.keys()) if (!delegated(from, rel) && !after.has(rel)) {
-        fs.rmSync(path.join(from, rel), { force: true });
-        // A pruned managed skill must disappear as a directory too. Remove
-        // only empty parents absent from the staged result; preserve siblings.
+        const parents = [];
         let parent = path.dirname(rel);
         while (parent !== '.' && !fs.existsSync(path.join(to, parent))) {
-          try { fs.rmdirSync(path.join(from, parent)); } catch { break; }
+          parents.push(path.join(from, parent));
           parent = path.dirname(parent);
         }
+        removals.push({ file: path.join(from, rel), parents });
       }
+      const writes = [];
       for (const rel of after) {
         const file = path.join(to, rel);
-        if (before.get(rel) === fileDigest(file)) continue;
+        if (before.get(rel) !== fileDigest(file)) writes.push({ file, destination: path.join(from, rel) });
+      }
+      return { from, removeRoot: false, directories: planDirectoryPromotions(to, from, rel => delegated(from, rel)), removals, writes };
+    });
+    // Validate the actual OMP mutations before any target write. Unchanged
+    // operator links in the shared skill tree are not deployment destinations.
+    if (plan.report.provider === 'omp') {
+      for (const operation of operations) {
+        if (operation.removeRoot) assertNoSymlinkPath(operation.from, 'OMP');
+        for (const directory of operation.directories) assertNoSymlinkPath(directory, 'OMP');
+        // Checking a removed file also checks all candidate empty parents.
+        for (const removal of operation.removals) assertNoSymlinkPath(removal.file, 'OMP');
+        for (const write of operation.writes) assertNoSymlinkPath(write.destination, 'OMP');
+      }
+    }
+    for (const dir of plan.workspaceDirs || []) fs.mkdirSync(path.join(target, dir), { recursive: true });
+    for (const operation of operations) {
+      if (operation.removeRoot) { fs.rmSync(operation.from, { recursive: true, force: true }); continue; }
+      for (const directory of operation.directories) fs.mkdirSync(directory, { recursive: true });
+      for (const removal of operation.removals) {
+        fs.rmSync(removal.file, { force: true });
+        // Only empty parents absent from the staged result may disappear.
+        for (const parent of removal.parents) {
+          try { fs.rmdirSync(parent); } catch { break; }
+        }
+      }
+      for (const { file, destination } of operation.writes) {
         const buffer = fs.readFileSync(file);
         // Provider output includes binary skill resources; normalize text only.
         let output = buffer.includes(0) ? buffer : Buffer.from(normalize(buffer.toString('utf8')));
@@ -93,9 +116,9 @@ export function commitRuleDeploymentPlan(plan) {
           }
           output = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
         }
-        fs.mkdirSync(path.dirname(path.join(from, rel)), { recursive: true });
-        if (plan.contextWrites.includes(file)) writeContextFileSync(path.join(from, rel), output);
-        else fs.writeFileSync(path.join(from, rel), output);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        if (plan.contextWrites.includes(file)) writeContextFileSync(destination, output);
+        else fs.writeFileSync(destination, output);
       }
     }
     for (const name of rootNames) if (fs.existsSync(path.join(stage, name))) {

@@ -8,6 +8,7 @@ import { withRuleDeployment, collectFrameworkArtifacts, getAddonFiles, isKernelS
 
 import { withModelWrapper } from './model-wrapper.mjs';
 import { writeContextFileSync } from './context-write.mjs';
+import { assertNoSymlinkPath } from './provider-paths-staging.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
 export const paths = { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules' };
@@ -48,23 +49,16 @@ function roots(target, opts = {}) {
   const user = opts.global || opts.user || opts.scope === 'user';
   return { native: user ? resolved.agentDir : path.join(target, '.omp'), agents: user ? resolved.resourceDirs.agents : path.join(target, '.omp/agents'), kernel: user ? path.join(resolved.agentDir, 'skills') : path.join(target, kernelSkillsPath) };
 }
-function assertNoSymlink(destination) {
-  let current = path.resolve(destination);
-  while (true) {
-    try { if (fs.lstatSync(current).isSymbolicLink()) throw new Error(`OMP preserves symlink destination: ${current}`); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const parent = path.dirname(current); if (parent === current) break; current = parent;
-  }
-}
-// Staging materializes links. Validate the logical rule tree first so the
-// shared projector cannot turn an operator link into an ordinary owned file.
-function assertRuleTree(directory) {
+function assertNoSymlink(destination) { assertNoSymlinkPath(destination, 'OMP'); }
+// Staging materializes links. Validate original resource destinations first so
+// promotion cannot write or delete through an operator's link.
+function assertDestinationTree(directory) {
   assertNoSymlink(directory);
   if (!fs.existsSync(directory)) return;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const file = path.join(directory, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`OMP preserves symlink destination: ${file}`);
-    if (entry.isDirectory()) assertRuleTree(file);
+    if (entry.isDirectory()) assertDestinationTree(file);
   }
 }
 function readReceipt(dir) {
@@ -249,8 +243,16 @@ export async function postDeploy(target, opts) {
 }
 export const getFileExtension = () => '.md';
 export async function deploy(opts) {
+  const root = roots(opts.target, opts);
+  for (const directory of [root.agents, path.join(root.native, 'prompts'), path.join(root.native, 'extensions')]) {
+    assertDestinationTree(directory);
+  }
+  assertNoSymlink(root.kernel);
+  for (const filename of ['AGENTS.md', 'RULES-BOUND.md', '.aiwg-manifest.json']) {
+    assertNoSymlink(path.join(root.native, filename));
+  }
   if (!opts.deferRuleProjection && (opts.kernelOnly || opts.deployRules || opts.rulesOnly || (!opts.skillsOnly && !opts.commandsOnly))) {
-    assertRuleTree(path.isAbsolute(paths.rules) ? paths.rules : path.join(opts.target, paths.rules));
+    assertDestinationTree(path.isAbsolute(paths.rules) ? paths.rules : path.join(opts.target, paths.rules));
   }
   return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, async staged => {
     let count = await deploySelected(staged);

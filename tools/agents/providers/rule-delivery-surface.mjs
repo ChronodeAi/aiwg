@@ -59,15 +59,18 @@ export function fileDigest(file) {
   }
 }
 // Empty directories are part of workspace and skill-resource scaffolds too.
-export function promoteDirectories(source, destination, skip = () => false, prefix = '') {
-  const entries = fs.readdirSync(source, { withFileTypes: true });
-  if (!entries.length && !fs.existsSync(destination)) fs.mkdirSync(destination, { recursive: true });
-  for (const entry of entries) {
-    const rel = path.join(prefix, entry.name);
-    if (entry.isDirectory() && !skip(rel)) {
-      promoteDirectories(path.join(source, entry.name), path.join(destination, entry.name), skip, rel);
+export function planDirectoryPromotions(source, destination, skip = () => false) {
+  const directories = [];
+  function visit(from, to, prefix = '') {
+    const entries = fs.readdirSync(from, { withFileTypes: true });
+    if (!entries.length && !fs.existsSync(to)) directories.push(to);
+    for (const entry of entries) {
+      const rel = path.join(prefix, entry.name);
+      if (entry.isDirectory() && !skip(rel)) visit(path.join(from, entry.name), path.join(to, entry.name), rel);
     }
   }
+  visit(source, destination);
+  return directories;
 }
 export const read = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
 export const structural = file => /^(RULES-INDEX|RULES-ONDEMAND)\.(md|mdc)$/.test(path.basename(file));
