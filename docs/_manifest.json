@@ -193,6 +193,7 @@
     "references/REF-003-agentic-development-antipatterns",
     "references/REF-066-mcp-specification-2025",
     "releases",
+    "releases/v2026.10.16-announcement",
     "releases/v2026.10.15-announcement",
     "releases/v2026.10.14-announcement",
     "releases/v2026.10.12-announcement",
@@ -1633,6 +1634,13 @@
       "title": "Releases",
       "summary": "Release notes and changelog",
       "collapsed": true
+    },
+    {
+      "id": "releases/v2026.10.16-announcement",
+      "title": "v2026.10.16 — Start With a Prompt and Check Room for Helpers",
+      "summary": "Guides that open with what to ask your assistant, one resource check before starting helper workers, no AI co-author trailer by default, one AIWG.md, and safer research tools.",
+      "file": "releases/v2026.10.16-announcement.md",
+      "parent": "releases"
     },
     {
       "id": "releases/v2026.10.15-announcement",
