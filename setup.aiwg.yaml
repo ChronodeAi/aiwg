@@ -99,10 +99,12 @@ spec:
         duplicate or shadowed binaries and identify the exact paths affected. Obtain
         approval before any installation, update, unlink, PATH/profile edit, Git pull,
         or provider-file mutation. If more than one provider is requested, explain
-        that deployment and regeneration must be verified separately for each one.
+        that guided apply and deployment verification must cover every selected provider.
         If the environment is CI, headless, a container, SSH-only, offline, or
         read-only, stop using this interactive manifest and route to the documented
-        non-interactive or offline flow instead of improvising prompts or mutations.
+        non-interactive or offline bootstrap flow instead of improvising prompts or mutations.
+        After a healthy CLI is available, guided setup accepts the same answers as
+        flags with --non-interactive, and headless apply requires --yes.
     - id: repair-or-install
       type: agentic
       depends_on:
@@ -119,38 +121,70 @@ spec:
         Stop and explain if a required operation would overwrite work or needs
         administrator access.
       on_fail: diagnose-install
-    - id: deploy-complete-system
+    - id: guided-interview
       type: agentic
       depends_on:
         - repair-or-install
       instruction: >-
-        From PROJECT_DIR, run the selected healthy AIWG executable to deploy the
-        preferred complete system with aiwg use all --provider PROVIDER --json. This
-        one command deploys the selected surface, refreshes capability indices,
-        regenerates canonical project context and provider adapters, verifies the
-        resulting disk state, and returns aiwg.use.result.v1. Preserve project-authored
-        files and report every conflict instead of forcing an overwrite. This is a
-        project-local deployment unless the user explicitly requested and approved
-        user or global scope. For a monorepo, confirm whether PROJECT_DIR is the
-        repository root or an intentionally isolated package before writing provider
-        files. Never initialize Git or create a new project structure unless the user
-        explicitly requested it.
+        From PROJECT_DIR, run the healthy CLI with aiwg setup --scope project
+        --providers PROVIDER to record the guided interview plan. Ask about targets,
+        intent, providers, configuration locations, and optional capabilities. Use
+        --scope user only when that provider scope was explicitly selected; global
+        npm installation and provider scope are separate decisions. Confirm monorepo
+        root versus an observed package before applying. Scan additional directories
+        only by explicit opt-in. Preserve existing answers and settings. Plans save
+        credential references, never secrets; accept env:NAME, file:absolute-path,
+        or stdin references. The interview writes no provider configuration. Jev and
+        direct workers remain optional and require explicit opt-in. Explain Jev's
+        external service/account and usage charges, and worker account quotas and
+        installed-versus-qualified state. Interactive cancel retains the last saved
+        plan. For headless operation, provide the same choices as flags with
+        --non-interactive; never prompt or invent a required missing answer.
+    - id: guided-review
+      type: agentic
+      depends_on:
+        - guided-interview
+      instruction: >-
+        Run aiwg setup --review from PROJECT_DIR to inspect the saved plan without
+        writes. Explain selected workspaces, providers, scope, framework, optional
+        integrations, conflicts, stale facts, missing references, and affected files.
+        A bare aiwg setup --dry-run also reviews an existing saved plan. Use --json
+        when structured review output is needed. Obtain approval for the concrete
+        plan before apply. Re-run the interview when discovery facts are stale or
+        choices need changing; do not force past scope conflicts or overwrite
+        project-authored files. Guided intent selects sdlc for code/mixed, writing
+        for docs, and ops for ops; aiwg use all --provider PROVIDER --json remains
+        available for a direct complete-system deployment outside the guided plan.
+    - id: apply-guided-plan
+      type: agentic
+      depends_on:
+        - guided-review
+      instruction: >-
+        Run aiwg setup --apply for the approved saved plan. In headless operation,
+        use aiwg setup --apply --yes --non-interactive --json only after approval.
+        Apply delegates to existing configuration, deployment, registry, Jev, and
+        worker qualification owners and saves a receipt after each action. A fully
+        successful repeat apply makes no writes; after partial failure or
+        interruption, review and reapply only unfinished actions. If an external
+        side effect occurred before its receipt was saved, inspect that owner
+        before retrying. Never initialize Git or create a new project structure
+        unless explicitly requested.
       on_fail: diagnose-install
     - id: verify-engagement
       type: agentic
       depends_on:
-        - deploy-complete-system
+        - apply-guided-plan
       instruction: >-
-        Read the aiwg.use.result.v1 response from the deployment command. Confirm that
-        its project root, provider, scope, requested bundle, phase results, findings,
-        final state, and restart requirement match the approved plan. A ready,
-        ready-restart-required, or advisory-only degraded result completes ordinary
-        setup; do not make index, regenerate, status, or doctor commands mandatory
-        follow-up steps. Run aiwg status --probe --json or aiwg doctor only when the
-        result requests that recovery action or the user asks for an independent
-        audit. Also verify that the current agent can read the generated bootstrap and
-        discover an AIWG capability. When multiple providers were selected, inspect
-        the per-provider evidence for every provider.
+        Inspect aiwg.setup.apply.v1 from guided apply: classification, action status,
+        workspace/provider, and core versus optional failures. A partial result means
+        core setup applied while an optional action failed or was skipped; report it
+        honestly and preserve the plan for retry. A failure means core setup is not
+        ready. Successful deployment actions consume aiwg.use.result.v1 verification
+        through the existing owner. Check every selected provider and verify that
+        the current agent can read the resulting bootstrap and discover a capability.
+        Do not make index, regenerate, status, or doctor commands mandatory follow-up
+        steps. Use aiwg status --probe --json or aiwg doctor only for a requested
+        audit or an indicated recovery action. Explain any actual reload requirement.
       on_fail: diagnose-install
     - id: session-handoff
       type: agentic
@@ -180,9 +214,9 @@ spec:
             a generic recovery step.
   briefing:
     success: >-
-      AIWG is installed or repaired, the complete system is deployed for the selected
-      provider, and the one-command result verifies its artifacts, indices, project
-      context, provider adapter, and restart requirement.
+      AIWG is installed or repaired, the guided interview plan was reviewed and
+      applied, and the readiness report identifies verified core setup for each
+      selected provider plus the outcome of every selected optional integration.
     next_steps:
       - Ask the agent what AIWG can help with in this project.
       - Run aiwg status --probe --json whenever you want evidence that AIWG is engaged.

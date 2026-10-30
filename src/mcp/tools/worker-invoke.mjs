@@ -12,8 +12,7 @@
  *   - #2890 ProviderAdapter.parseWorkerFinal + assembleWorkerResult
  *     (tools/ralph-external/lib/provider-adapter.mjs, mission-protocol/codecs.ts)
  *
- * This module is the FIRST MCP-side consumer of that pipeline end-to-end,
- * without a shell/CLI round trip and without Mission/MC state. It is
+ * This bridge runs without a shell/CLI round trip or Mission/MC state. It is
  * intentionally conservative where the pipeline cannot yet produce a fully
  * attested identity: verification is always left `pending` here (never
  * self-accepted) — a separate verifier is required before a direct result is
@@ -157,8 +156,16 @@
  * @issues #2892, #2896 (review reference, not reused as-is)
  */
 
+import { workerFailureDiagnostics } from './worker-failure-diagnostics.mjs';
 import { signalChild } from '../../process/signal-child.mjs';
 import { z } from 'zod';
+
+// Keep accepting existing UUID-shaped identifiers regardless of version bits.
+const invocationUuid = () => z.string().check(ctx => {
+  if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(ctx.value)) {
+    ctx.issues.push({ code: 'invalid_format', format: 'uuid', input: ctx.value, message: 'Invalid uuid' });
+  }
+}).meta({ format: 'uuid' });
 import { createHash, randomUUID } from 'node:crypto';
 import {
   realpath, readlink as fsReadlink, open as fsOpen, lstat, unlink,
@@ -171,6 +178,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mcpError, mcpJson } from '../helpers.mjs';
 import { buildShellStopControl, waitForUnitTermination } from './worker-shell-control.mjs';
 import { launchPreparedShellWorker, sweepWorkerStdin } from './worker-stdin-runtime.mjs';
+// NOTE: no static import of ../../config/worker-context.js here. That
+// module is TypeScript: a literal relative import resolves under vitest
+// but throws ERR_MODULE_NOT_FOUND under raw node (e.g. `node
+// src/mcp/cli.mjs`, which test/unit/mcp exercises directly). The
+// request-time loader below resolves it through importImpl (dist when
+// built, source otherwise), so merely loading this bridge never touches
+// it. See tools/_resolve-impl.mjs (#3062).
 
 const execFileAsync = promisify(execFile);
 
@@ -635,6 +649,64 @@ function describeGateFailures(failures) {
   return `worker dispatch gate blocked: ${failures.map(f => `${f.signal} (${f.reason})`).join('; ')}`;
 }
 
+/** Request-time loader for the TypeScript worker-context module (see the
+ * import note above): resolved through importImpl so production uses the
+ * compiled `dist` tree while a checkout falls back to source. Cached for
+ * the process lifetime; only request paths that actually ensure worker
+ * context ever trigger the load. */
+let cachedWorkerContextModule = null;
+async function loadWorkerContextModule() {
+  if (!cachedWorkerContextModule) cachedWorkerContextModule = await importImpl('config/worker-context.js');
+  return cachedWorkerContextModule;
+}
+
+/** Map the worker CLI to its provider and ensure its bootstrap is present
+ * in the worker workdir (#3685 round 2). Deploys the resolved union set
+ * (config providers plus orchestration CLIs) in one pass when the worker
+ * provider's bootstrap is missing; an unmappable CLI refuses with the
+ * typed diagnostic, since no deploy could target it. */
+async function ensureWorkerContextForInvocation({ invocation, config }) {
+  const { ensureWorkerContextBootstrap, mapCliToProviderId, resolveWorkerContextProvidersFromConfig, WorkerContextBootstrapError } =
+    await loadWorkerContextModule();
+  const cli = invocation?.selected?.cli;
+  const mapped = mapCliToProviderId(cli, config?.parallelism);
+  if (!('provider' in mapped) || !mapped.provider) {
+    throw new WorkerContextBootstrapError(
+      `cannot ensure worker context: CLI '${cli}' maps to no AIWG provider (${mapped.skipped ?? 'unmapped'})`,
+      `configure parallelism.clis.${cli} with a providers:<id> adapter, or dispatch a CLI whose adapter maps to a known provider`,
+      { workdir: invocation?.cwd },
+    );
+  }
+  let providers = [mapped.provider];
+  try {
+    providers = [...new Set([...resolveWorkerContextProvidersFromConfig(config).providers, mapped.provider])];
+  } catch {
+    providers = [mapped.provider];
+  }
+  return ensureWorkerContextBootstrap({ workdir: invocation?.cwd, provider: mapped.provider, providers });
+}
+
+/** Refuse a failed bootstrap ensure as a typed blocked diagnostic that
+ * names the remedy — never a bare string the operator cannot act on.
+ * `code`/`remedy`/`provider`/`workdir` survive on any error object that
+ * carries them (the tools-side ensure throws a duck-typed refusal, not
+ * necessarily this module's class instance); only genuinely bare failures
+ * fall back to the generic code and remedy. */
+function toWorkerContextDiagnostic(error) {
+  const fields = (error !== null && typeof error === 'object') ? error : {};
+  // Duck-typed on purpose: the worker-context module loads lazily (see
+  // above), so no class identity is available at module scope. Every
+  // refusal path sets `code`/`remedy` on the thrown object instead.
+  const code = (typeof fields.code === 'string' && fields.code ? fields.code : 'OG_WORKER_CONTEXT_UNAVAILABLE');
+  const remedy = (typeof fields.remedy === 'string' && fields.remedy ? fields.remedy
+    : 'ensure the worker CLI maps to a known AIWG provider and the aiwg CLI is installed (AIWG_BIN), then retry the run');
+  return { code,
+    message: error instanceof Error ? error.message : String(error?.message ?? error),
+    remedy,
+    ...(fields.provider !== undefined ? { provider: fields.provider } : {}),
+    ...(fields.workdir !== undefined ? { workdir: fields.workdir } : {}) };
+}
+
 // Audited observer; refresh the historical baseline graph after rebase.
 const waitForUnitTerminationBaseline = waitForUnitTermination;
 export { waitForUnitTerminationBaseline as __testOnlyWaitForUnitTerminationBaseline };
@@ -751,6 +823,7 @@ export class ChildProcessTransport {
     // cap since a long-lived connection could otherwise grow it unbounded.
     this._rawResponses = new Map();
     this._buffer = undefined;
+    this._bufferBytes = 0;
   }
 
   async start() {
@@ -762,7 +835,7 @@ export class ChildProcessTransport {
       try {
         // Check each frame BEFORE concatenation or UTF-8 decoding.
         let offset = 0;
-        let frameBytes = this._buffer?.length ?? 0;
+        let frameBytes = this._bufferBytes;
         while (offset < chunk.length) {
           const newline = chunk.indexOf(10, offset);
           const end = newline === -1 ? chunk.length : newline;
@@ -775,8 +848,7 @@ export class ChildProcessTransport {
           frameBytes = 0;
           offset = newline + 1;
         }
-        this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
-        this._drain();
+        this._drain(chunk);
       } catch (error) { this.onerror?.(error); }
     });
     child.stdout?.on('error', error => this.onerror?.(error));
@@ -792,6 +864,7 @@ export class ChildProcessTransport {
     if (this._closed) return;
     this._closed = true;
     this._buffer = undefined;
+    this._bufferBytes = 0;
     this._rawResponses.clear();
     this.onclose?.();
   }
@@ -800,6 +873,7 @@ export class ChildProcessTransport {
     if (this._failure) return;
     this._failure = Object.assign(new Error(code), { code });
     this._buffer = undefined;
+    this._bufferBytes = 0;
     this._rawResponses.clear();
     // Start stopping before pipe closure can exit the leader; onclose rejects
     // pending SDK requests immediately while termination proof is awaited.
@@ -818,14 +892,26 @@ export class ChildProcessTransport {
   // (own-property-preserving, retained in `_rawResponses` — see
   // constructor doc) and once through the SDK's own `JSONRPCMessageSchema`
   // (routed to `onmessage`, unchanged behavior for the Client/Protocol).
-  _drain() {
-    while (this._buffer) {
-      const index = this._buffer.indexOf('\n');
-      if (index === -1) return;
-      const line = this._buffer.toString('utf8', 0, index).replace(/\r$/, '');
-      this._buffer = this._buffer.subarray(index + 1);
+  _drain(chunk) {
+    // Retain fragments without copying or rescanning the growing partial
+    // frame on every pipe read. Join once, only when a newline arrives.
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10, offset);
+      const end = newline === -1 ? chunk.length : newline;
+      if (end > offset) {
+        (this._buffer ??= []).push(chunk.subarray(offset, end));
+        this._bufferBytes += end - offset;
+      }
+      if (newline === -1) return;
+      const frame = this._buffer?.length === 1
+        ? this._buffer[0] : Buffer.concat(this._buffer ?? [], this._bufferBytes);
+      const line = frame.toString('utf8').replace(/\r$/, '');
+      this._buffer = undefined;
+      this._bufferBytes = 0;
       this._handleLine(line);
-      if (this._buffer?.length === 0) this._buffer = undefined;
+      if (this._closed || this._failure) return;
+      offset = newline + 1;
     }
   }
 
@@ -898,6 +984,7 @@ export class ChildProcessTransport {
       try { signalChild(child, 'SIGKILL'); } catch { /* already gone */ }
     }
     this._buffer = undefined;
+    this._bufferBytes = 0;
   }
 }
 
@@ -1532,12 +1619,12 @@ function publicStatus(entry, healthHook) {
 // Tool registration.
 // ===========================================================================
 
-const inputSchema = z.object({
+const inputSchema = z.strictObject({
   // #2915 round 8 (D4): `reconcile_stopped` is an explicit operator-
   // authorized reconciliation operation on this SAME handler (never a
   // mailbox file, never a new breaker) — see `reconcileStopped` below.
   operation: z.enum(['run', 'status', 'cancel', 'reconcile_stopped', 'reset_recovery_scope']),
-  invocation_id: z.string().uuid().optional(),
+  invocation_id: invocationUuid().optional(),
   scope_id: z.string().min(1).max(512).optional(),
   request_id: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_.:-]+$/).optional(),
   role: z.enum(['efficiency', 'coding', 'reasoning']).optional(),
@@ -1553,8 +1640,8 @@ const inputSchema = z.object({
   // configuration exists yet for the MCP shell-launch path — see
   // session-launcher.mjs `verifyRetryPredecessor`, which the CLI entry
   // point already uses). Omission is unrelated work, as always.
-  retry_of: z.string().uuid().optional(),
-}).strict();
+  retry_of: invocationUuid().optional(),
+});
 
 /**
  * #2892 B1: `options.projectRoot` is REQUIRED — the caller (`server.mjs`,
@@ -1726,11 +1813,35 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
       if (plan.invocation?.readiness !== 'launchable') {
         return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: plan.diagnostics ?? [] });
       }
+      if (plan.invocation.isolation === 'native-sandbox') {
+        return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [{
+          code: 'OG_POLICY_RELAXATION', pointer: '/worker/isolation',
+          message: 'MCP worker-invoke run does not support pinned native-sandbox isolation',
+        }] });
+      }
       prefix = { root, snapshot, drivers, invocation: plan.invocation };
     } catch (error) {
       return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [error.message] });
     }
     const { root, snapshot, drivers, invocation } = prefix;
+
+    // #3685 round 2: the worker CLI's AIWG bootstrap must be present in
+    // the worker workdir before dispatch — a context-free worker would run
+    // with no project rules/skills/hooks. Present: no-op. Missing: exactly
+    // one `aiwg use all` pass into the workdir (never elsewhere). A failed
+    // ensure refuses as `blocked` with the typed diagnostic (never a
+    // launch). Default on; `ensureWorkerContext: false` skips (synthetic
+    // tests), a function value replaces the ensure.
+    if (options.ensureWorkerContext !== false) {
+      try {
+        const ensure = typeof options.ensureWorkerContext === 'function'
+          ? options.ensureWorkerContext
+          : ensureWorkerContextForInvocation;
+        await ensure({ invocation, config: snapshot.config });
+      } catch (error) {
+        return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [toWorkerContextDiagnostic(error)] });
+      }
+    }
 
     // =========================================================================
     // #2915 round 8 (D6): ONE decision, immediately after the prefix, from
@@ -1888,7 +1999,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // diagnostic below. A duplicate-key/planted-marker probe showed
           // this exact kind of path can otherwise reflect attacker/worker-
           // controlled input text straight back out to the caller.
-          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_BRIEF_NOT_STRUCTURED'] });
+          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerDirectBrief', 'OG_BRIEF_NOT_STRUCTURED') });
         }
         mcpBriefDigest = `sha256:${createHash('sha256').update(briefBytes).digest('hex')}`;
       }
@@ -2009,7 +2120,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // parser error message, which can echo attacker/worker-controlled
         // input text back out (a duplicate-key probe reflected a planted
         // marker through this exact path before the fix).
-        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_WORKER_FINAL_INVALID'] });
+        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerClaims', 'OG_WORKER_FINAL_INVALID') });
       }
       const assembled = await tryAssembleDirectResult({ request, invocation, observation, claims, root,
         briefDigest: mcpBriefDigest, requireStructuredBrief: invocation.transport === 'mcp' });
@@ -2215,7 +2326,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
           // #2915 review 6 (finding 4): zero workers dispatched — same
           // proven-never-dispatched settlement as above.
           settleRecovery({ kind: 'uncertain', confirmedStop: true });
-          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_BRIEF_NOT_STRUCTURED'] });
+          return markTerminal({ status: 'blocked', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerDirectBrief', 'OG_BRIEF_NOT_STRUCTURED') });
         }
         mcpBriefDigest = `sha256:${createHash('sha256').update(briefBytes).digest('hex')}`;
       }
@@ -2577,7 +2688,7 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         // parser error message, which can echo attacker/worker-controlled
         // input text back out (a duplicate-key probe reflected a planted
         // marker through this exact path before the fix).
-        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: [typeof error?.code === 'string' ? error.code : 'OG_WORKER_FINAL_INVALID'] });
+        return registry.markTerminal(entry.invocationId, { status: 'failed', termination: 'confirmed', diagnostics: workerFailureDiagnostics(error, 'workerClaims', 'OG_WORKER_FINAL_INVALID') });
       }
       const assembled = await tryAssembleDirectResult({ request, invocation, observation, claims, root,
         briefDigest: mcpBriefDigest, requireStructuredBrief: invocation.transport === 'mcp' });
@@ -2694,6 +2805,9 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
   }
 
   async function status(input) {
+    const { projectRecoveryStatus, mergeRecoveryStatuses } = await importImpl('mission-protocol/worker-status.js');
+    const recoveryStatus = breaker => projectRecoveryStatus(typeof breaker?.recoveryStatus === 'function'
+      ? { ...breaker.recoveryStatus(), observedAt: now().toISOString() } : null, 'live');
     if (!input.invocation_id) {
       // #2915 round 8 (D4): ordinary status, read-only, no id — lists every
       // invocation this server currently tracks as a `dispatched` reservation
@@ -2712,11 +2826,19 @@ export async function registerWorkerInvokeToolset(server, options = {}) {
         .filter(scope => scope.state === 'operator-intervention')
         .map(scope => ({ scopeId: scope.scopeKey, reason: scope.operatorReason,
           resetInstruction: { operation: 'reset_recovery_scope', scope_id: scope.scopeKey } })));
-      return { unresolvedReservations, interventionScopes };
+      const recovery = mergeRecoveryStatuses([...breakers].map((breaker, index) => {
+        const status = recoveryStatus(breaker);
+        if (breakers.size > 1) {
+          for (const scope of status.scopes) scope.owner = `owner-${index + 1}`;
+          for (const transition of status.transitions) transition.owner = `owner-${index + 1}`;
+        }
+        return status;
+      }));
+      return { unresolvedReservations, interventionScopes, recovery };
     }
     const entry = registry.get(input.invocation_id);
     if (!entry) throw new Error('Unknown invocation_id');
-    return publicStatus(entry, healthHook);
+    return { ...publicStatus(entry, healthHook), recovery: recoveryStatus(entry.recoveryBreaker ?? registry.recoveryOwner) };
   }
 
   /**

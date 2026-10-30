@@ -19,7 +19,7 @@ commandHint:
 >
 > ```bash
 > aiwg discover "<capability>"
-> aiwg show skill <name>
+> aiwg show skill <name> --body
 > ```
 >
 > Claude Code deployments also mirror selected operator workflows into `.claude/commands/`; this skill is available there as `/aiwg-setup-project`. See [skill-discovery rule](../../../addons/aiwg-utils/rules/skill-discovery.md).

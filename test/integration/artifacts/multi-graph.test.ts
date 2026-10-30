@@ -34,12 +34,17 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
 const AIWG_DIR = resolveProjectAiwgDir(REPO_ROOT);
 const SRC_DIR = path.join(REPO_ROOT, 'src');
 const AGENTIC_DIR = path.join(REPO_ROOT, 'agentic');
+// `aiwg use` scaffolds these directories empty, so a corpus needs at least one file in them (#3696).
 const PROJECT_CORPUS_AVAILABLE = fs.existsSync(AIWG_DIR) && [
   'requirements',
   'architecture',
   'planning',
   'security',
-].some(dir => fs.existsSync(path.join(AIWG_DIR, dir)));
+].some(dir => {
+  const full = path.join(AIWG_DIR, dir);
+  return fs.existsSync(full)
+    && fs.readdirSync(full, { recursive: true, withFileTypes: true }).some(entry => entry.isFile());
+});
 const ARTIFACT_ENV_KEYS = [
   'AIWG_ARTIFACTS_PATH',
   'AIWG_PROJECT_ARTIFACTS_PATH',
@@ -180,7 +185,8 @@ describe('Multi-Graph Index Architecture (integration)', () => {
 
     it('should resolve framework graph to XDG data directory', () => {
       const fwDir = getGraphIndexDir(REPO_ROOT, 'framework');
-      expect(fwDir).toContain('aiwg/index/framework');
+      // The framework index is keyed by AIWG root (#3308): <xdg>/aiwg/index/roots/<sha256>/framework.
+      expect(fwDir).toMatch(/aiwg\/index\/roots\/[0-9a-f]{64}\/framework$/);
     });
 
     it('should resolve project graph to the configured artifact-root index', () => {
@@ -568,7 +574,8 @@ describe('Multi-Graph Index Architecture (integration)', () => {
       // resolve there. But with outputDir override, data is in tmpDir.
       // Verify the getGraphIndexDir function resolves to XDG path
       const fwDir = getGraphIndexDir(tmpDir, 'framework');
-      expect(fwDir).toContain('aiwg/index/framework');
+      // The framework index is keyed by AIWG root (#3308): <xdg>/aiwg/index/roots/<sha256>/framework.
+      expect(fwDir).toMatch(/aiwg\/index\/roots\/[0-9a-f]{64}\/framework$/);
     });
 
     it('should return null for non-existent graph', () => {

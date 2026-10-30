@@ -43,6 +43,19 @@
       "required": ["schema_version", "source_schema_version", "contract_valid", "lossless", "losses"]
     },
     "consumers": {
+      "oneOf": [
+        { "$ref": "#/$defs/artifactConsumers" },
+        { "$ref": "#/$defs/sessionConsumers" }
+      ]
+    },
+    "advertisement": {
+      "type": "object",
+      "required": ["advertised", "default_profile", "reason"]
+    },
+    "coordination": { "type": "object" }
+  },
+  "$defs": {
+    "artifactConsumers": {
       "type": "object",
       "required": ["pglite", "fortemi"],
       "properties": {
@@ -58,13 +71,56 @@
         }
       }
     },
-    "advertisement": {
+    "sessionConsumers": {
       "type": "object",
-      "required": ["advertised", "default_profile", "reason"]
+      "additionalProperties": false,
+      "required": ["session", "fortemi"],
+      "properties": {
+        "session": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["phase", "clock", "producer_sources", "session_count", "event_count"],
+          "properties": {
+            "phase": { "enum": ["producer", "consumer"] },
+            "clock": { "type": "string", "minLength": 1 },
+            "producer_sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/artifact" } },
+            "session_count": { "type": "integer", "minimum": 1 },
+            "event_count": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "fortemi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "commit", "status", "reason"],
+          "properties": {
+            "repository": { "const": "https://git.integrolabs.net/Fortemi/fortemi.git" },
+            "commit": { "$ref": "#/$defs/commit" },
+            "status": { "enum": ["pending", "passed"] },
+            "reason": { "type": "string", "minLength": 1 },
+            "runtime_receipt": { "$ref": "#/$defs/artifact" },
+            "clean_destination": { "const": true },
+            "semantic_reexport": { "const": true },
+            "repeated_imports": { "type": "integer", "minimum": 2 },
+            "zero_mutation_on_failure": { "const": true },
+            "component_count": { "const": 33 }
+          },
+          "if": { "properties": { "status": { "const": "passed" } } },
+          "then": {
+            "required": ["runtime_receipt", "clean_destination", "semantic_reexport", "repeated_imports", "zero_mutation_on_failure", "component_count"]
+          },
+          "else": {
+            "not": { "anyOf": [
+              { "required": ["runtime_receipt"] },
+              { "required": ["clean_destination"] },
+              { "required": ["semantic_reexport"] },
+              { "required": ["repeated_imports"] },
+              { "required": ["zero_mutation_on_failure"] },
+              { "required": ["component_count"] }
+            ] }
+          }
+        }
+      }
     },
-    "coordination": { "type": "object" }
-  },
-  "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "artifact": {

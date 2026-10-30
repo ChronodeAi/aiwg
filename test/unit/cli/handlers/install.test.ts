@@ -115,6 +115,25 @@ describe('installHandler', () => {
       expect(result.exitCode).toBe(0);
     });
 
+    it('forwards credential references without resolving them in the handler', async () => {
+      const { installHandler } = await import('../../../../src/cli/handlers/install.js');
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      await installHandler.execute(makeCtx(['github:synthetic/package', '--token-env', 'EXAMPLE_TOKEN']));
+      expect(mockInstallPackage).toHaveBeenCalledWith('github:synthetic/package', expect.objectContaining({
+        tokenInput: { prefix: 'token', env: 'EXAMPLE_TOKEN' },
+      }));
+    });
+
+    it('refuses credentials in direct URLs before logging the reference', async () => {
+      const { installHandler } = await import('../../../../src/cli/handlers/install.js');
+      const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const result = await installHandler.execute(makeCtx(['https://fixture-sensitive-token@example.invalid/package.git']));
+      expect(result.exitCode).toBe(1);
+      expect(result.message).not.toContain('fixture-sensitive-token');
+      expect(output).not.toHaveBeenCalled();
+      expect(mockInstallPackage).not.toHaveBeenCalled();
+    });
+
     it('passes --refresh flag to installPackage', async () => {
       const { installHandler } = await import('../../../../src/cli/handlers/install.js');
 

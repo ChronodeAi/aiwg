@@ -356,7 +356,7 @@ async function migrateWorkspace(args) {
     console.log('');
 
     // Step 5: Confirm migration
-    if (options.interactive) {
+    if (options.interactive && !options.dryRun) {
       const proceed = await confirm('Proceed with migration?', true);
 
       if (!proceed) {

@@ -257,6 +257,15 @@ describe('DeepSeek Harness transport safety', () => {
     // are real; startup gets a separately bounded readiness handshake.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let settled = false;
+    let signalAtSettle: string | null | undefined;
+    let exitAtSettle: number | null | undefined;
+    const noteSettlement = () => {
+      // Capture child state synchronously at settlement: a rejection that
+      // precedes child exit must fail here even if the child exits later.
+      signalAtSettle = child?.signalCode;
+      exitAtSettle = child?.exitCode;
+      settled = true;
+    };
     const operation = runDshHeadless({
       binary: fakeDsh,
       prompt: 'hang-headless',
@@ -269,8 +278,8 @@ describe('DeepSeek Harness transport safety', () => {
       version: '0.1.3-alpha.1',
       timeoutMs: 100,
       terminateGraceMs: 40,
-    }).then(value => { settled = true; return { value, error: undefined }; },
-      error => { settled = true; return { value: undefined, error }; });
+    }).then(value => { noteSettlement(); return { value, error: undefined }; },
+      error => { noteSettlement(); return { value: undefined, error }; });
     try {
       await waitForRealCondition(() => output.split('\n').includes('headless-ready'));
       expect(child?.pid).toBeGreaterThan(0);
@@ -285,6 +294,8 @@ describe('DeepSeek Harness transport safety', () => {
       await waitForRealCondition(() => settled);
       const result = await operation;
       expect(result.error?.message).toBe('DeepSeek Harness run timed out');
+      expect(signalAtSettle, 'child must have exited by SIGKILL before the operation rejects').toBe('SIGKILL');
+      expect(exitAtSettle, 'a SIGKILL exit carries no exit code').toBeNull();
       expect(child?.exitCode).toBeNull();
       expect(child?.signalCode).toBe('SIGKILL');
     } finally {

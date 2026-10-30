@@ -1,4 +1,17 @@
 ---
+activation: paths
+summary: "Define governed schemas for persistent or exchanged structured data; record authority, ownership, compatibility, fixtures, and projection evidence or a reviewed opt-out."
+bound_to:
+  skills:
+    - schema-author
+    - schema-evolve
+    - schema-intake
+    - schema-onboard
+    - schema-review
+  agents:
+    - schema-architect
+    - schema-reviewer
+    - schema-steward
 enforcement: high
 paths: ["src/**", "schemas/**", "agentic/code/**", ".aiwg/requirements/**", ".aiwg/architecture/**"]
 ---

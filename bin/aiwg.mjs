@@ -27,6 +27,14 @@ import { existsSync, readFileSync } from 'fs';
 import os from 'os';
 import { randomUUID } from 'crypto';
 
+// Every exit path calls process.exit() right after writing. On a pipe, Node
+// queues writes the reader has not consumed yet and process.exit() drops them,
+// so a slow reader saw JSON reports cut off at the 64 KiB pipe buffer. Blocking
+// pipe writes finish before the next statement runs, so nothing is lost.
+for (const stream of [process.stdout, process.stderr]) {
+  if (!stream.isTTY) stream._handle?.setBlocking?.(true);
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, '..');
@@ -258,7 +266,15 @@ maybeWarnUnbuiltDist();
 
 // Propagate the strict no-write contract through helpers that may resolve
 // installation/channel state before the command context exists.
-if (process.argv.slice(2).includes('--dry-run')) {
+function isReadOnlyReport(args) {
+  return (args[0] === 'memory' && (['audit', 'cost', 'recommend', 'plan', 'verify'].includes(args[1]) || args.includes('--preview') || args.includes('--help') || args.includes('-h')))
+    || (args[0] === 'help' && args[1] === 'memory')
+    || (args[0] === 'rules' && ['inventory', 'list'].includes(args[1]))
+    || (['doctor', '-doctor', '--doctor'].includes(args[0]) && args.includes('--decision-offload'))
+    || (args[0] === 'steward' && args[1] === 'decision-offload');
+}
+const readOnlyReport = isReadOnlyReport(process.argv.slice(2));
+if (process.argv.slice(2).includes('--dry-run') || readOnlyReport) {
   process.env['AIWG_CLI_DRY_RUN'] = '1';
 }
 
@@ -304,8 +320,8 @@ trace('bin:entry');
  * Qualifying commands, and why:
  *   - `mcp profile login` — reads an API key via `--api-key-env`,
  *     `--api-key-stdin`, or `--api-key-file`.
- *   - `decision setup jev` — without `--token-stdin`, reads the token
- *     directly from `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY`.
+ *   - `decision setup jev`, `auth secret` — resolve standard sensitive inputs.
+ *   - `init` / `setup` — apply saved credential references as well as flags.
  *
  * Checked and left out, with reasons (see the go/no-go review response):
  *   - `auth login` — an OAuth device/browser flow; it does not read a
@@ -328,6 +344,8 @@ function isCredentialHandlingCommand(args) {
   }
   if (positionals[0] === 'mcp' && positionals[1] === 'profile' && positionals[2] === 'login') return true;
   if (positionals[0] === 'decision' && positionals[1] === 'setup' && positionals[2] === 'jev') return true;
+  if (positionals[0] === 'auth' && positionals[1] === 'secret') return true;
+  if (positionals[0] === 'init' || positionals[0] === 'setup') return true;
   return false;
 }
 
@@ -351,8 +369,8 @@ async function runUpdateNotifierBootstrap() {
 
 const cliArgs = process.argv.slice(2);
 const indexRefresh = cliArgs[0] === 'index' && cliArgs[1] === 'refresh';
-if (indexRefresh) {
-  trace('notifier:skip (index refresh)');
+if (indexRefresh || readOnlyReport) {
+  trace(`notifier:skip (${indexRefresh ? 'index refresh' : 'read-only report'})`);
 } else if (isCredentialHandlingCommand(cliArgs)) {
   trace('notifier:skip (credential-handling command)');
 } else {
@@ -462,7 +480,7 @@ async function applyVerbosityFromArgs(args, routerPath) {
       setInvocationId(invocationId);
       // One-shot prune of old JSONL files on startup. Bounded work; safe to
       // call on every invocation because the work is a single directory list.
-      pruneOldLogs();
+      if (!readOnlyReport) pruneOldLogs();
     }
   } catch {
     // If the logger isn't importable yet (fresh clone without dist/), the
@@ -484,6 +502,7 @@ const RECOVERY_SAFE_COMMANDS = new Set([
 const RECOVERY_SAFE_INDEX_SUBCOMMANDS = new Set(['query', 'deps', 'stats']);
 
 function isRecoverySafeCommand(args) {
+  if (isReadOnlyReport(args)) return true;
   const command = args.find((arg) => !arg.startsWith('-'));
   if (!command) return false;
   if (RECOVERY_SAFE_COMMANDS.has(command)) return true;
@@ -534,7 +553,7 @@ async function main() {
       process.exit(1);
     }
     const { assertCanonicalInstallation, formatInstallationDiagnostic } = await import(pathToFileURL(identityPath).href);
-    const readOnlyPreview = args.includes('--dry-run') || indexRefresh;
+    const readOnlyPreview = args.includes('--dry-run') || indexRefresh || readOnlyReport;
     try {
       assertCanonicalInstallation({
         actualRoot: activePackageRoot,

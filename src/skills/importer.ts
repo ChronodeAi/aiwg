@@ -15,10 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { projectAiwgPath } from '../config/project-artifacts.js';
-import {
-  listProviderDefinitions,
-  resolveProviderPathValue,
-} from '../providers/provider-definitions.js';
+import { higherLocalSkillOwner } from './collision-discovery.js';
 import {
   AGENT_SKILLS_BASELINE,
 } from './agent-skills.js';
@@ -990,41 +987,6 @@ function resultFromRecord(
   };
 }
 
-function higherPrecedenceCollision(
-  name: string,
-  projectDir: string,
-  managedStore: string,
-): { origin: 'project' | 'user'; path: string } | undefined {
-  const candidates = new Map<string, 'project' | 'user'>();
-  for (const definition of listProviderDefinitions()) {
-    const namespace = definition.skillNamespace;
-    const basePath = namespace.pathType === 'home-dir'
-      ? `~/${namespace.skillsBaseDir}`
-      : namespace.skillsBaseDir;
-    const resolved = resolveProviderPathValue(basePath, projectDir);
-    candidates.set(
-      path.join(resolved, name),
-      namespace.pathType === 'home-dir' ? 'user' : 'project',
-    );
-  }
-  candidates.set(path.join(projectDir, '.agents', 'skills', name), 'project');
-  candidates.set(
-    path.join(projectDir, '.claude', '.aiwg', 'skills', name),
-    'project',
-  );
-
-  const match = [...candidates.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .find(([candidate]) => {
-      if (pathContains(managedStore, candidate)) return false;
-      return (
-        fs.existsSync(path.join(candidate, 'SKILL.md'))
-        && !fs.existsSync(path.join(candidate, '.aiwg-managed'))
-      );
-    });
-  return match ? { path: match[0], origin: match[1] } : undefined;
-}
-
 function writeTree(root: string, entries: TreeEntry[]): void {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const directories = entries
@@ -1270,21 +1232,17 @@ export async function importAgentSkill(
   const digest = computeTreeDigest(materialized.entries);
   const importedStore = projectAiwgPath(projectDir, 'skills', 'imported');
   const finalRoot = path.join(importedStore, parsed.name);
-  const collision = higherPrecedenceCollision(
-    parsed.name,
-    projectDir,
-    importedStore,
-  );
+  const collision = higherLocalSkillOwner(parsed.name, 'imported', { projectDir });
   if (collision) {
     throw new AgentSkillImportError(
       'AS_IMPORT_COLLISION',
-      `${collision.origin}-owned skill "${parsed.name}" already exists at ${collision.path}`,
+      `${collision.origin}-owned skill "${parsed.name}" takes precedence over imported-owned skill at ${collision.path}`,
       [
         diagnostic(
           'AS_IMPORT_COLLISION',
-          collision.path,
+          collision.path ?? '.',
           '$.name',
-          `${collision.origin}-owned skill "${parsed.name}" has higher precedence`,
+          `${collision.origin}-owned skill "${parsed.name}" has higher precedence than imported-owned skill`,
           'Rename the imported skill or remove the higher-precedence collision explicitly.',
         ),
       ],

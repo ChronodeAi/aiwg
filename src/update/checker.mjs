@@ -395,3 +395,17 @@ export async function forceUpdateCheck() {
     }
   }
 }
+
+/** Check-only owner API for non-interactive maintenance. Never prompts or installs.
+ * Edge has no read-only remote probe contract here; callers must report unsupported.
+ */
+export async function checkUpdateStatus({ channel = 'stable' } = {}) {
+  if (!['stable', 'next', 'nightly'].includes(channel)) {
+    return { status: 'unsupported', channel, checkOnly: true, reason: 'unsupported-channel' };
+  }
+  const packageJson = JSON.parse(await fs.readFile(path.join(getPackageRoot(), 'package.json'), 'utf8'));
+  const latest = await fetchNpmDistTag(channel === 'stable' ? 'latest' : channel);
+  if (!latest) throw new Error('Update registry probe failed');
+  return { status: 'ok', channel, checkOnly: true, current: packageJson.version, latest,
+    available: isNewerVersion(packageJson.version, latest) };
+}

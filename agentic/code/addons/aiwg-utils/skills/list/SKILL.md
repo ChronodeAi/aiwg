@@ -17,6 +17,8 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 - "which frameworks are active" → show installed frameworks
 - "do I have sdlc installed" → check registry for specific framework
 - "is the marketing framework here" → check registry for specific framework
+- "list applicable workspace rules" → inspect `aiwg rules inventory`
+- "show rules for a framework or addon" → inspect `aiwg rules inventory --capability <id>`
 
 ## Trigger Patterns Reference
 
@@ -26,8 +28,14 @@ Alternate expressions and non-obvious activations (primary phrases are matched a
 | Show addons | "list addons" | Run `aiwg list` |
 | Existence check | "is sdlc installed?" | Run `aiwg list` and filter output |
 | Version check | "what version of sdlc is deployed?" | Run `aiwg list` and extract version |
+| Rule inventory | "list workspace rules" | Run `aiwg rules inventory --scope workspace` |
 
 ## Behavior
+
+For a rule inventory request, run `aiwg rules inventory --scope workspace` or
+select `--capability <id>`; use `--json` for structured output and `--bodies`
+only when complete rule text is requested. Preserve the report's distinction
+between configured, available, delivered, and unknown session-loaded states.
 
 When triggered:
 

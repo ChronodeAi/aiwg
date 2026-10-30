@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * OpenClaw Provider
  *
@@ -17,7 +18,6 @@
  *
  * See: docs/openclaw-guide.md
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -26,6 +26,7 @@ try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs;
 import path from 'path';
 import os from 'os';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -51,14 +52,11 @@ import {
   createAgentsMdFromTemplate,
   createManagedMdFromTemplate,
 } from './base.mjs';
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'openclaw';
 export const aliases = [];
-
 const openclawHome = path.join(os.homedir(), '.openclaw');
 
 export const paths = {
@@ -140,7 +138,8 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 // Content Transformation (passthrough — OpenClaw uses AIWG native format)
 // ============================================================================
 
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('openclaw', translateAgent);
+function translateAgent(srcPath, content, opts) {
   // AIWG's catalog intentionally records configured/<role> placeholders for
   // OpenClaw because the exact provider/model namespace is installation
   // specific. Omit the portable Markdown pin and inherit the configured
@@ -191,7 +190,7 @@ function deploySkills(skillDirs, opts) {
   // Standard: ~/.openclaw/.aiwg/skills/ (no extra aiwg/ — the .aiwg/ segment IS the namespace)
   const standardDestDir = paths.skills;
   // Kernel: ~/.openclaw/skills/aiwg/ (preserves legacy 2-level namespacing)
-  const kernelDestDir = path.join(kernelSkillsPath, 'aiwg');
+  const kernelDestDir = path.join(opts.kernelSkillsPath || kernelSkillsPath, 'aiwg');
 
   deploySkillsWithKernelRouting(skillDirs, standardDestDir, kernelDestDir, opts);
 
@@ -396,6 +395,10 @@ export function getFileExtension(type) {
 // ============================================================================
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath, resolveOpenClawWorkspace }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     mode,
@@ -485,9 +488,9 @@ export async function deploy(opts) {
     // (`aiwg use` invokes deploy-agents.mjs once per framework + addon
     // batch).
     {
-      const _kernelDestDir = path.isAbsolute(kernelSkillsPath)
+      const _kernelDestDir = opts.kernelSkillsPath || (path.isAbsolute(kernelSkillsPath)
         ? kernelSkillsPath
-        : path.join(target, kernelSkillsPath);
+        : path.join(target, kernelSkillsPath));
       pruneStaleAiwgSkills(_kernelDestDir, computeAllKernelNames(srcRoot), opts);
     }
   }
@@ -549,7 +552,7 @@ export async function deploy(opts) {
       srcRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'templates', 'openclaw', 'AGENTS.md.aiwg-template',
     );
     if (fs.existsSync(templatePath)) {
-      const workspace = resolveOpenClawWorkspace();
+      const workspace = opts.activeWorkspace || resolveOpenClawWorkspace();
       ensureDir(workspace, dryRun);
       if (verbose || !opts.quiet) {
         console.log(`\nBridging AIWG context into ${path.join(workspace, 'AGENTS.md')} + SOUL.md (#1562/#1572)...`);

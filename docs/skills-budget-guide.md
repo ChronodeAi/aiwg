@@ -7,6 +7,35 @@ AIWG ships ~480 skills across the SDLC, forensics, research, marketing, and ops 
 For runtime costs after a Claude Code skill or subagent is invoked, see
 [`docs/providers/claude-context-budget.md`](providers/claude-context-budget.md).
 
+## The three budgets (do not conflate them)
+
+1. **Startup skill listing** — skill `name` + `description` entries inlined
+   every session. Claude Code: `skillListingBudgetFraction` of the context
+   window (AIWG default assumption `0.01 × 200,000`; `aiwg doctor` compares
+   `ceil(chars / 4)` listing tokens against
+   `floor(fraction × window / 4)` — see `tools/cli/doctor.mjs`
+   `resolveClaudeListingBudget`). Codex: upstream 2% skills-metadata ceiling
+   (source: `docs/agents/providers/codex.md`, citing
+   `codex-rs/core-skills/src/render.rs:18`), plus AIWG's enforced
+   deployer-side cap of 8,000 startup-listing chars
+   (`tools/skills/deploy-skills-codex.mjs` `CODEX_LISTING_CHAR_CAP`).
+2. **Bridge bytes** — generated always-loaded context files, measured
+   **per file** by `tools/lint/context-size-guard.mjs`
+   (`DEFAULT_BRIDGE_CEILING_BYTES = 8 KiB`; default files `AGENTS.md`,
+   `WARP.md`, `.hermes.md`, `.github/copilot-instructions.md`; check with
+   `npm run lint:context-sizes`). This guard does not scan `CLAUDE.md`;
+   the memory-plus-rules aggregate (including `CLAUDE.md`) is measured by
+   the startup-context scan in `tools/lint/claude-context-inventory.mjs`
+   against a 200,000-token standard baseline. Codex's separate per-file
+   ingestion cap `project_doc_max_bytes` (default 32 KiB) is upstream, not
+   the guard.
+3. **Runtime reattachment** — full `SKILL.md` bodies and subagent definitions
+   loaded on demand after invocation. Inventoried (not always loaded) by
+   `tools/lint/claude-context-inventory.mjs`: skill bodies flagged above
+   24 KiB (`DEFAULT_SKILL_CEILING_BYTES`), agent definitions above 16 KiB
+   (`DEFAULT_AGENT_CEILING_BYTES`); `--strict` also fails when aggregate
+   startup context is over budget.
+
 ---
 
 ## Quick fix by platform
@@ -15,10 +44,10 @@ For runtime costs after a Claude Code skill or subagent is invoked, see
 |----------|---------|---------|----------------------------|
 | Claude Code | `skillListingBudgetFraction` in `~/.claude/settings.json` | `0.01` (1% of context) | Raise to `0.05` (5%) |
 | Claude Code | `skillListingMaxDescChars` | `1536` | Lower to `1024` to keep more skills full-length |
-| Codex (OpenAI) | `project_doc_max_bytes` for AGENTS.md | 32 KiB | Nest AGENTS.md per-subdir; do not raise blindly |
-| Codex | Skill listing cap (upstream) | ~2% of context / 8000 chars | Fixed by Codex; reduce skill count or split workspaces |
-| Codex | AIWG startup-listing cap | 8,000 chars | `--listing-cap <chars>` or `AIWG_CODEX_LISTING_CAP` (`0` disables) |
-| Cursor / Warp / Windsurf | Aggregated AGENTS.md | platform-defined | See "Reduce footprint" below |
+| Codex (OpenAI) | `project_doc_max_bytes` for AGENTS.md (bridge bytes, per-file upstream ingestion cap) | 32 KiB | Nest AGENTS.md per-subdir; do not raise blindly |
+| Codex | Skill listing ceiling (upstream) | 2% of model context (source: `docs/agents/providers/codex.md`, `codex-rs/core-skills/src/render.rs:18`) | Fixed by Codex; reduce skill count or split workspaces |
+| Codex | AIWG startup-listing cap (deployer-enforced) | 8,000 chars | `--listing-cap <chars>` or `AIWG_CODEX_LISTING_CAP` (`0` disables) |
+| Cursor / Warp / Windsurf | Startup hook (AGENTS.md or WARP.md) | 8 KiB AIWG bridge ceiling | Kernel and indexes live in harness rules files |
 
 ---
 
@@ -80,14 +109,21 @@ Codex uses **progressive disclosure**: only skill `name`, `description`, and fil
 
 | Limit | Value | Setting |
 |-------|-------|---------|
-| Skill listing in initial context (Codex's own ceiling) | ~2% of model context, or ~8,000 chars | Fixed by Codex; not user-configurable |
-| AIWG's enforced startup-listing cap | 8,000 chars | `--listing-cap <chars>`, or `AIWG_CODEX_LISTING_CAP` (`0` disables) |
-| Per-AGENTS.md size | 32 KiB | `project_doc_max_bytes` (advanced config) |
+| Startup skill listing in initial context (Codex's own ceiling) | 2% of model context (source: `docs/agents/providers/codex.md`, `codex-rs/core-skills/src/render.rs:18`) | Fixed by Codex; not user-configurable |
+| AIWG's enforced startup-listing cap (deployer-side) | 8,000 chars (`tools/skills/deploy-skills-codex.mjs` `CODEX_LISTING_CHAR_CAP`) | `--listing-cap <chars>`, or `AIWG_CODEX_LISTING_CAP` (`0` disables) |
+| Bridge bytes per generated file (AIWG guard) | 8 KiB per file (`tools/lint/context-size-guard.mjs` `DEFAULT_BRIDGE_CEILING_BYTES`; `npm run lint:context-sizes`) | Reduce generated bridge content; move detail to Tier 3 |
+| Per-AGENTS.md ingestion size (upstream) | 32 KiB | `project_doc_max_bytes` (advanced config) |
 
 Codex's ceiling is not adjustable. AIWG's cap — the budget the deployer enforces
 so it never writes past that ceiling — is.
 
 When the AGENTS.md size limit is hit, **Codex stops adding files silently** ([openai/codex#7138](https://github.com/openai/codex/issues/7138), [#13386](https://github.com/openai/codex/issues/13386)). Instructions near the end of an oversized file are ignored without warning.
+
+AIWG's managed AGENTS.md block contains the WORKSPACE.md → AIWG.md bootstrap,
+precedence, compact core rules and one hook per deployed harness. Codex's hook
+requires reading `.codex/rules/RULES-INDEX.md` and every listed kernel file before
+every task and subagent task. Kernel bodies and summary/path indexes stay in
+rule files; this is prose-directed loading, not an automatic Codex rule loader.
 
 ### How to fix in Codex
 
@@ -237,9 +273,15 @@ Doctor also warns when the total deployed skill inventory exceeds a platform def
 
 | Platform | Budget |
 |----------|--------|
-| Claude Code | `skillListingBudgetFraction × context_window` (default `1% × 200,000 = 2,000 tokens`) |
-| Codex | Fixed 8,000-char built-in cap |
+| Claude Code | Startup skill listing: `floor(skillListingBudgetFraction × context_window / 4)` listing tokens by doctor's ~4 chars/token heuristic (defaults `0.01 × 200,000 / 4 = 500` tokens; see `tools/cli/doctor.mjs` `resolveClaudeListingBudget`) |
+| Codex | Startup skill listing: AIWG deployer-enforced 8,000-char cap (`tools/skills/deploy-skills-codex.mjs` `CODEX_LISTING_CHAR_CAP`; `aiwg doctor` compares startup-visible kernel-dir chars against it), under Codex's upstream 2% ceiling |
 | Other | Info-only line — no documented budget |
+
+Bridge bytes are not part of this check: `npm run lint:context-sizes`
+enforces the 8 KiB per-file bridge-bytes ceiling
+(`tools/lint/context-size-guard.mjs`), and on-demand skill bodies are
+inventoried by `npm run lint:claude-context` (skill bodies above 24 KiB,
+agent definitions above 16 KiB).
 
 The check honors:
 - Your existing `~/.claude/settings.json` override (or `~/.config/claude/settings.json` fallback). When the user is already at e.g. `0.05`, the verdict reads **EXCEEDS OVERRIDE** rather than the misleading "EXCEEDS DEFAULT".

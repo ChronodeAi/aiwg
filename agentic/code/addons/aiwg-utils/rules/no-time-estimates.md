@@ -2,8 +2,40 @@
 enforcement: medium
 id: no-time-estimates
 severity: HIGH
-applies_to: [all-agents, orchestrators, planners, task-decomposers]
-tags: [estimation, planning, scope, agents, parallelism]
+applies_to:
+  - all-agents
+  - orchestrators
+  - planners
+  - task-decomposers
+tags:
+  - estimation
+  - planning
+  - scope
+  - agents
+  - parallelism
+activation: summary
+summary: Estimate work using scope units, agent roles, parallelism, passes, and measurable gates; avoid wall-clock estimates unless the user accepts their variance.
+bound_to:
+  skills:
+    - aiwg-mission
+    - mission-control
+    - ralph
+    - ralph-external
+    - ralph-resume
+    - agent-loop
+    - agent-loop-ext
+    - parallel-dispatch
+    - rlm-batch
+    - rlm-query
+    - artifact-orchestration
+    - orchestrate-project
+    - sdlc-accelerate
+  agents:
+    - executive-orchestrator
+    - recovery-orchestrator
+    - ralph-loop
+    - consortium-coordinator
+    - project-manager
 ---
 
 # No Time Estimates — Agent-Oriented Estimation Instead

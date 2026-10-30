@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import os from 'node:os';
 import { resolveMuseXdgSkillsDir } from '../providers/muse-paths.js';
+import { helperEnvironment } from '../process/cli-command.mjs';
 
 // Mirrors tools/agents/providers/muse-hooks.mjs. src/ cannot import tools/:
 // tools/ is not part of the compiled dist/ tree.
@@ -47,7 +48,7 @@ function deepEqual(a, b) {
 
 function inspectMuseCli(env) {
   const result = spawnSync('muse', ['--version'], {
-    env,
+    env: helperEnvironment(env),
     encoding: 'utf8',
     timeout: MUSE_VERSION_TIMEOUT_MS,
     killSignal: 'SIGKILL',

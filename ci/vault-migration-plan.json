@@ -9,6 +9,8 @@
     "VAULT_ADDR",
     "GT_NPM_TOKEN_VAULT_PATH",
     "GT_NPM_TOKEN_VAULT_FIELD",
+    "AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH",
+    "AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD",
     "GT_RELEASE_TOKEN_VAULT_PATH",
     "GT_RELEASE_TOKEN_VAULT_FIELD",
     "GH_MIRROR_TOKEN_VAULT_PATH",
@@ -48,6 +50,14 @@
       "env": "NODE_AUTH_TOKEN",
       "type": "api-token",
       "purpose": "Gitea package publish token"
+    },
+    {
+      "id": "github-release-evidence-token",
+      "path_variable": "AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH",
+      "field_variable": "AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD",
+      "env": "AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE",
+      "type": "api-token",
+      "purpose": "Dedicated GitHub authenticated-user API release evidence token"
     },
     {
       "id": "gitea-release-token",

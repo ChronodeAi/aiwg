@@ -10,6 +10,7 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
+import { isRefId, refIdFromFilename } from '../research/identity.js';
 import { resolveProjectAiwgDir } from '../config/project-artifacts.js';
 import type { HybridQuery } from './address-parser.js';
 
@@ -146,7 +147,7 @@ export class ArtifactIndex {
   findDependents(artifactPath: string): ArtifactInfo[] {
     const normalized = artifactPath.replace(/^\.aiwg\//, '');
     return this.artifacts.filter((a) =>
-      a.references.some((ref) => ref.includes(normalized))
+      a.references.some((ref) => referenceMatches(normalized, ref))
     );
   }
 
@@ -160,7 +161,7 @@ export class ArtifactIndex {
     if (!artifact) return [];
 
     return artifact.references
-      .map((ref) => this.artifacts.find((a) => a.relativePath.includes(ref)))
+      .map((ref) => this.artifacts.find((a) => referenceMatches(ref, a.relativePath)))
       .filter(Boolean) as ArtifactInfo[];
   }
 
@@ -273,4 +274,12 @@ function keywordScore(artifact: ArtifactInfo, query: string): number {
   }
 
   return matches / terms.length;
+}
+
+/** Compare a REF token or a complete path component without substring aliases. */
+function referenceMatches(reference: string, candidate: string): boolean {
+  const normalized = reference.replace(/^\.aiwg\//, '');
+  const target = candidate.replace(/^\.aiwg\//, '');
+  if (isRefId(normalized)) return refIdFromFilename(path.basename(target)) === normalized;
+  return target === normalized || target.endsWith(`/${normalized}`);
 }

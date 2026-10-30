@@ -119,6 +119,16 @@ describe('initHandler', () => {
   });
 
   describe('--non-interactive mode', () => {
+    it('honors the use bootstrap context opt-out', async () => {
+      const { initHandler } = await import('../../../../src/cli/handlers/init.js');
+      const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive', '--no-context-files']));
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
+      for (const name of ['WORKSPACE.md', 'AIWG.md', 'AGENTS.md', '.aiwg/AIWG.md']) {
+        expect(existsSync(join(tmpDir, name))).toBe(false);
+      }
+    });
+
     it('creates config with default claude provider and default scripts', async () => {
       const { initHandler } = await import('../../../../src/cli/handlers/init.js');
       const ctx = makeCtx(tmpDir, ['--non-interactive']);
@@ -135,11 +145,13 @@ describe('initHandler', () => {
       expect(cfg!.scripts['doctor']).toBe('aiwg doctor');
       expect(cfg!.scripts['sync']).toBe('aiwg sync');
 
-      const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+      const normalizedPath = join(tmpDir, 'AIWG.md');
       expect(existsSync(normalizedPath)).toBe(true);
       const normalized = readFileSync(normalizedPath, 'utf8');
       expect(normalized).toContain('## Context Finalization');
-      expect(normalized).toContain('aiwg discover');
+      // The kernel owns discovery policy; normalized context routes to it.
+      expect(normalized).toContain('aiwg show rule skill-discovery');
+      expect(normalized).toContain('aiwg show skill aiwg-utils-quickref');
     });
 
     it('keeps control files local while honoring AIWG_ARTIFACTS_PATH for the corpus', async () => {
@@ -158,9 +170,9 @@ describe('initHandler', () => {
         expect(cfg).not.toBeNull();
         expect(cfg!.providers).toEqual(['claude']);
 
-        const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+        const normalizedPath = join(tmpDir, 'AIWG.md');
         expect(existsSync(normalizedPath)).toBe(true);
-        expect(readFileSync(normalizedPath, 'utf8')).toContain('Normalized project context: `.aiwg/AIWG.md`');
+        expect(readFileSync(normalizedPath, 'utf8')).toContain('Generated framework context: `AIWG.md`');
 
         expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
       } finally {
@@ -186,9 +198,9 @@ describe('initHandler', () => {
         expect(cfg).not.toBeNull();
         expect(cfg!.providers).toEqual(['claude']);
 
-        const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+        const normalizedPath = join(tmpDir, 'AIWG.md');
         expect(existsSync(normalizedPath)).toBe(true);
-        expect(readFileSync(normalizedPath, 'utf8')).toContain('Normalized project context: `.aiwg/AIWG.md`');
+        expect(readFileSync(normalizedPath, 'utf8')).toContain('Generated framework context: `AIWG.md`');
 
         expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
       } finally {
@@ -331,16 +343,16 @@ describe('initHandler', () => {
       expect(cfg!.providers).toEqual(['claude']);
     });
 
-    it('repairs missing .aiwg/AIWG.md when config already exists', async () => {
+    it('repairs missing root AIWG.md when config already exists', async () => {
       const { initHandler } = await import('../../../../src/cli/handlers/init.js');
 
       await initHandler.execute(makeCtx(tmpDir, ['--non-interactive']));
-      rmSync(join(tmpDir, '.aiwg', 'AIWG.md'), { force: true });
+      rmSync(join(tmpDir, 'AIWG.md'), { force: true });
 
       const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive']));
       expect(result.exitCode).toBe(0);
 
-      const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+      const normalizedPath = join(tmpDir, 'AIWG.md');
       expect(existsSync(normalizedPath)).toBe(true);
       expect(readFileSync(normalizedPath, 'utf8')).toContain('## Context Finalization');
     });

@@ -29,6 +29,11 @@ export const SQLITE_SKIP_REASON =
   'optional sqlite backend unavailable — `better-sqlite3` is not installed; ' +
   'run `npm run features:sqlite` (or `aiwg features install sqlite`) to enable these suites';
 
+// Native qualification must never turn a missing prerequisite into a green skip.
+if (!sqliteAvailable && process.env.AIWG_TEST_REQUIRE_SQLITE === '1') {
+  throw new Error(`Required SQLite test prerequisite failed: ${SQLITE_SKIP_REASON}`);
+}
+
 let warned = false;
 
 /** Warn once per worker so a skipped suite is never silently invisible. */

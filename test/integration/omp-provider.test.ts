@@ -1,3 +1,4 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 import { afterAll, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -18,7 +19,7 @@ function cli(args:string[],env:Record<string,string>={}){
   const entry=pathToFileURL(join(repo,'src/cli/router.ts')).href;
   const program=`import { run } from ${JSON.stringify(entry)}; await run(process.argv.slice(1)); process.exit(process.exitCode ?? 0);`;
   const result=spawnSync(process.execPath,['--import',pathToFileURL(require.resolve('tsx')).href,'--eval',program,...args],{cwd:workspace,env:{...baseEnv,...env},encoding:'utf8',timeout:120000,maxBuffer:8*1024*1024});
-  expect(result.status,result.stderr+'\n'+result.stdout).toBe(0);
+  expect(result.status,[result.error?.message,result.signal,result.stderr,result.stdout].filter(Boolean).join('\n')).toBe(0);
   return result.stdout;
 }
 function put(name:string,body:string){const file=join(workspace,name);mkdirSync(dirname(file),{recursive:true});writeFileSync(file,body);}
@@ -36,7 +37,7 @@ describe('OMP public use command integration',()=>{
     const foreign={'.pi/AGENTS.md':'Pi operator context','.claude/CLAUDE.md':'Claude operator context','.codex/config.toml':'# Codex operator configuration','.agents/skills/operator/SKILL.md':'---\nname: operator\ndescription: operator owned\n---\nKeep this.'};
     for(const [name,body] of Object.entries(foreign))put(name,body);
     cli([...common,'--copy-all']);
-    expect(readFileSync(join(workspace,'.omp/AGENTS.md'),'utf8')).toContain('@../WORKSPACE.md');
+    assertStartupRuleDelivery(workspace, 'omp', readFileSync(join(workspace,'.omp/AGENTS.md'),'utf8'));
     expect(existsSync(join(workspace,'.omp/extensions/aiwg-bridge.ts'))).toBe(true);
     const full=files(join(workspace,'.agents/skills')).filter(f=>f.endsWith('/SKILL.md'));
     expect(full.some(f=>f.includes('/aiwg-doctor/'))).toBe(true);
@@ -48,6 +49,8 @@ describe('OMP public use command integration',()=>{
     if(preservedSupport)expect(readFileSync(preservedSupport,'utf8')).toBe('Operator-owned support update');
     expect(files(join(workspace,'.agents/skills')).filter(f=>f.endsWith('/SKILL.md'))).toEqual(full);
     cli(['use','sdlc','--provider','omp','--no-project-local','--json']);
+    const startup=readFileSync(join(workspace,'.omp/AGENTS.md'),'utf8');
+    assertStartupRuleDelivery(workspace, 'omp', startup);
     const kernel=files(join(workspace,'.agents/skills')).filter(f=>f.endsWith('/SKILL.md'));
     expect(kernel.length).toBeLessThan(full.length);
     expect(kernel.some(f=>f.includes('/aiwg-doctor/'))).toBe(true);

@@ -1,4 +1,9 @@
 ---
+activation: bound
+summary: "Synchronize the artifact index after matching artifact writes and scheduled index checks."
+bound_to:
+  agents: [context-librarian]
+  skills: [build-artifact-index]
 name: artifact-sync
 version: 1.0.0
 description: Keep the SDLC artifact index current by reacting to changes in .aiwg/

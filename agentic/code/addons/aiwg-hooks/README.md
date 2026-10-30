@@ -1,5 +1,7 @@
 # AIWG Hooks
 
+Evidence status: design intent.
+
 Claude Code hook templates for workflow tracing, permissions, and session management.
 
 ## Research Foundation

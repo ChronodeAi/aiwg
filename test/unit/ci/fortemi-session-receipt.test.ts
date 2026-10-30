@@ -1,0 +1,134 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { packTarGz, unpackTarGz } from '@fortemi/core';
+import {
+  digest, validateReceiptSchema, validateSessionPair, verifyApiObservations, verifySessionArchive, verifySessionReexport,
+} from '../../../tools/ci/verify-aiwg-fortemi-session-receipt.mjs';
+
+const root = resolve(import.meta.dirname, '../../..');
+const fixtureRoot = resolve(root, 'test/fixtures/fortemi-shard');
+const readReceipt = (phase: string) => JSON.parse(readFileSync(
+  resolve(fixtureRoot, `aiwg-session-full-v1.${phase}.receipt.json`), 'utf8',
+));
+const archive = readFileSync(resolve(fixtureRoot, 'aiwg-session-full-v1.shard'));
+const files = unpackTarGz(archive);
+const jsonLines = (name: string) => Buffer.from(files.get(name)!).toString().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+
+// Fake native API responses; no database, Docker, model, or network access.
+function apiResponses() {
+  const activities = jsonLines('provenance_activities.jsonl');
+  return jsonLines('notes.jsonl').map((note) => ({
+    note: {
+      note: { id: note.id, title: note.title, metadata: note.metadata },
+      original: { content: note.original_content }, tags: note.tags,
+    },
+    provenance: { all_activities: activities.filter((activity) => activity.note_id === note.id) },
+  }));
+}
+
+describe('session full-v1 receipt bindings (offline)', () => {
+  it('validates both pending fixtures through the existing strict receipt schema', () => {
+    const producer = readReceipt('producer'), consumer = readReceipt('consumer');
+    expect(validateSessionPair(producer, consumer)).toBe(consumer);
+    expect(consumer.consumers.fortemi.status).toBe('pending');
+    expect(consumer.consumers.fortemi).not.toHaveProperty('semantic_reexport');
+    expect(consumer.consumers.session).toMatchObject({ session_count: 2, event_count: 3 });
+  });
+
+  it.each(['producer', 'consumer'])('rejects a malformed %s revision', (phase) => {
+    const producer = readReceipt('producer'), consumer = readReceipt('consumer');
+    (phase === 'producer' ? producer : consumer).consumer.commit = 'unbound';
+    expect(() => validateSessionPair(producer, consumer)).toThrow(/schema/);
+  });
+
+  it('rejects a receipt pair pinned to a different real consumer', () => {
+    const producer = readReceipt('producer'), consumer = readReceipt('consumer');
+    producer.consumers.fortemi.commit = 'a'.repeat(40);
+    consumer.consumers.fortemi.commit = producer.consumers.fortemi.commit;
+    expect(() => validateSessionPair(producer, consumer)).toThrow(/consumer commit/);
+  });
+
+  it('rejects mismatched producer and consumer archives', () => {
+    const producer = readReceipt('producer'), consumer = readReceipt('consumer');
+    consumer.archive.sha256 = '0'.repeat(64);
+    expect(() => validateSessionPair(producer, consumer)).toThrow(/bindings differ/);
+  });
+
+  it.each(['semantic_reexport', 'clean_destination', 'runtime_receipt'])('rejects a pending receipt claiming %s', (field) => {
+    const producer = readReceipt('producer'), consumer = readReceipt('consumer');
+    consumer.consumers.fortemi[field] = field === 'runtime_receipt' ? { path: 'fake', sha256: 'a'.repeat(64) } : true;
+    expect(() => validateSessionPair(producer, consumer)).toThrow(/schema/);
+  });
+
+  it('rejects a passed claim without runtime evidence', () => {
+    const producer = readReceipt('producer'), consumer = readReceipt('consumer');
+    consumer.consumers.fortemi.status = 'passed';
+    expect(() => validateSessionPair(producer, consumer)).toThrow(/schema/);
+  });
+
+  it('accepts a schema-bound runtime receipt only with all success evidence', () => {
+    const consumer = readReceipt('consumer');
+    Object.assign(consumer.consumers.fortemi, {
+      status: 'passed', runtime_receipt: { path: 'runtime.json', sha256: 'a'.repeat(64) },
+      clean_destination: true, semantic_reexport: true, repeated_imports: 2,
+      zero_mutation_on_failure: true, component_count: 33,
+    });
+    expect(() => validateReceiptSchema(consumer)).not.toThrow();
+    consumer.consumers.fortemi.repeated_imports = 1;
+    expect(() => validateReceiptSchema(consumer)).toThrow(/schema/);
+  });
+
+  it('rejects a lossy conversion even when both receipts agree', () => {
+    const producer = readReceipt('producer'), consumer = readReceipt('consumer');
+    producer.conversion.lossless = consumer.conversion.lossless = false;
+    expect(() => validateSessionPair(producer, consumer)).toThrow(/declares loss/);
+  });
+
+  it('validates the genuine six-note archive and a semantic re-export', async () => {
+    await expect(verifySessionArchive(archive, readReceipt('consumer'))).resolves.toBeInstanceOf(Map);
+    await expect(verifySessionReexport(archive, archive)).resolves.toBeUndefined();
+  });
+
+  it('rejects archive checksum drift and wrong session/event counts', async () => {
+    await expect(verifySessionArchive(archive.subarray(1), readReceipt('consumer'))).rejects.toThrow(/SHA-256/);
+    const receipt = readReceipt('consumer');
+    receipt.consumers.session.event_count++;
+    await expect(verifySessionArchive(archive, receipt)).rejects.toThrow(/event count/);
+  });
+
+  it('rejects a re-export with internally valid checksums but changed event text', async () => {
+    const changed = new Map(files);
+    const notes = jsonLines('notes.jsonl');
+    notes.find((note) => note.metadata.aiwg_source.record_type === 'aiwg.session-event').original_content = 'Lost analysis';
+    const bytes = Buffer.from(notes.map((note) => JSON.stringify(note)).join('\n'));
+    changed.set('notes.jsonl', bytes);
+    const manifest = JSON.parse(Buffer.from(files.get('manifest.json')!).toString());
+    manifest.checksums['notes.jsonl'] = digest(bytes);
+    changed.set('manifest.json', Buffer.from(JSON.stringify(manifest)));
+    await expect(verifySessionReexport(archive, packTarGz(changed))).rejects.toThrow(/notes.jsonl/);
+  });
+});
+
+describe('native session/event note and analysis API observations (offline)', () => {
+  it('accepts complete note, tag, identity and provenance responses', () => {
+    expect(() => verifyApiObservations(archive, apiResponses())).not.toThrow();
+  });
+
+  it('rejects missing session/event notes and duplicate responses', () => {
+    expect(() => verifyApiObservations(archive, apiResponses().slice(1))).toThrow(/note count/);
+    const duplicate = apiResponses();
+    duplicate[0] = duplicate[1];
+    expect(() => verifyApiObservations(archive, duplicate)).toThrow(/duplicate API/);
+  });
+
+  it.each(['text', 'tags', 'identity', 'analysis'])('rejects lost %s in native API responses', (field) => {
+    const responses = apiResponses();
+    const event = responses.find((item) => item.note.note.metadata.aiwg_source.record_type === 'aiwg.session-event')!;
+    if (field === 'text') event.note.original.content = '';
+    if (field === 'tags') event.note.tags = [];
+    if (field === 'identity') event.note.note.metadata.aiwg_source.record_id = 'wrong';
+    if (field === 'analysis') event.provenance.all_activities = [];
+    expect(() => verifyApiObservations(archive, responses)).toThrow(/API/);
+  });
+});

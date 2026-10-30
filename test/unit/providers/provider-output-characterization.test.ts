@@ -125,7 +125,8 @@ const USE_PATH_GOLDENS = {
       agents: null,
       commands: null,
       skills: resolveHermesHomePath('skills', '.aiwg'),
-      rules: null,
+      // #3471: expose the canonical rule projection for deployment accounting.
+      rules: '.hermes/rules',
       behaviors: null,
     },
     kernelSkills: resolveHermesHomePath('skills'),
@@ -140,7 +141,7 @@ const USE_PATH_GOLDENS = {
       agents: null,
       commands: null,
       skills: '.agents/skills',
-      rules: null,
+      rules: '.muse/rules',
       behaviors: null,
     },
     kernelSkills: '.agents/skills',
@@ -178,6 +179,18 @@ const USE_PATH_GOLDENS = {
     },
     kernelSkills: '~/.openhuman/skills',
   },
+  // #3471: Pi records rule output separately from native context discovery.
+  pi: {
+    deployTarget: 'project',
+    artifacts: {
+      agents: '.agents/skills',
+      commands: '.pi/prompts',
+      skills: '.pi/.aiwg/skills',
+      rules: '.pi/rules',
+      behaviors: '.pi/extensions',
+    },
+    kernelSkills: '.agents/skills',
+  },
   warp: {
     deployTarget: 'project',
     artifacts: {
@@ -214,18 +227,18 @@ const USE_PATH_GOLDENS = {
 } as const;
 
 const REGENERATE_FILE_GOLDENS: Record<string, string[]> = {
-  claude: ['AIWG.md', '.aiwg/AIWG.md', 'CLAUDE.md'],
-  codex: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  copilot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.github/copilot-instructions.md'],
-  cursor: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  factory: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  grokbot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  hermes: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.hermes.md'],
+  claude: ['AIWG.md', 'CLAUDE.md'],
+  codex: ['AIWG.md', 'AGENTS.md'],
+  copilot: ['AIWG.md', 'AGENTS.md', '.github/copilot-instructions.md'],
+  cursor: ['AIWG.md', 'AGENTS.md'],
+  factory: ['AIWG.md', 'AGENTS.md'],
+  grokbot: ['AIWG.md', 'AGENTS.md'],
+  hermes: ['AIWG.md', 'AGENTS.md', '.hermes.md'],
   // #236: muse emits the discover-first AGENTS.md bridge (no CLAUDE.md shim).
-  muse: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  opencode: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  warp: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', 'WARP.md'],
-  windsurf: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
+  muse: ['AIWG.md', 'AGENTS.md'],
+  opencode: ['AIWG.md', 'AGENTS.md'],
+  warp: ['AIWG.md', 'AGENTS.md', 'WARP.md'],
+  windsurf: ['AIWG.md', 'AGENTS.md'],
 };
 
 describe('provider output characterization for registry migration', () => {
@@ -267,14 +280,20 @@ describe('provider output characterization for registry migration', () => {
       const result = await regenerateHandler.execute(makeCtx(tmpDir, ['--provider', provider]));
       expect(result.exitCode, provider).toBe(0);
 
+      expect(existsSync(join(tmpDir, '.aiwg/AIWG.md')), provider).toBe(false);
       for (const rel of expectedFiles) {
         const filePath = join(tmpDir, rel);
         expect(existsSync(filePath), `${provider} should emit ${rel}`).toBe(true);
         const content = readFileSync(filePath, 'utf8');
         if (rel === 'CLAUDE.md') {
           expect(content, `${provider} ${rel}`).toContain('@AIWG.md');
+        } else if (rel === 'AIWG.md' || rel === '.aiwg/AIWG.md') {
+          // ADR: templates point to the kernel routing authority instead of
+          // duplicating its normative discovery instructions in every bridge.
+          expect(content, `${provider} ${rel}`).toContain('aiwg show rule skill-discovery');
         } else {
-          expect(content, `${provider} ${rel}`).toContain('aiwg discover');
+          expect(content, `${provider} ${rel}`).toContain('AIWG.md');
+          expect(content, `${provider} ${rel}`).toContain('WORKSPACE.md');
         }
       }
 
@@ -324,6 +343,8 @@ describe('provider output characterization for registry migration', () => {
     tmpDirs.push(homeDir, projectDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('USERPROFILE', homeDir);
+    // Exercise HOME fallback even when the host session exports CODEX_HOME.
+    vi.stubEnv('CODEX_HOME', undefined);
 
     const { getProviderConfigPath, SUPPORTED_PROVIDERS } = await import('../../../src/mcp/registry.mjs');
     const {

@@ -1,10 +1,11 @@
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { closeSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { itWithSqlite } from '../../../helpers/sqlite.js';
+import { getFeaturesRoot } from '../../../../src/features/paths.js';
 
 const repo = resolve('.');
 let root: string;
@@ -27,31 +28,58 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function runCli(args: string[]) {
-  // Use an OS pipe, as with `aiwg ... | jq`, rather than Node's socket pair.
-  return spawnSync('bash', ['-o', 'pipefail', '-c', '"$@" | cat', 'sessions-stdout', process.execPath,
-    '--import', pathToFileURL(resolve(repo, 'node_modules/tsx/dist/loader.mjs')).href,
-    entry, ...args,
-  ], {
-    cwd: root,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    encoding: 'utf8',
-    timeout: 20_000,
-    maxBuffer: 8 * 1024 * 1024,
-    env: {
-      ...process.env,
-      HOME: root,
-      USERPROFILE: root,
-      CODEX_HOME: '',
-      AIWG_CONFIG: join(root, 'config'),
-      AIWG_NO_UPDATE_CHECK: '1',
-      AIWG_LOG_DISABLE: '1',
-    },
+async function runCli(args: string[]) {
+  // A FIFO supplies an actual OS pipe, as with `aiwg ... | jq`.
+  // No command string is constructed from the executable or fixture paths.
+  const fifo = join(root, 'stdout.fifo');
+  const output = join(root, 'stdout.json');
+  execFileSync('mkfifo', [fifo], { timeout: 5_000 });
+  const outputFd = openSync(output, 'w');
+  const reader = spawn(process.execPath, ['-e',
+    "require('node:fs').createReadStream(process.argv[1]).pipe(process.stdout)", fifo,
+  ], { stdio: ['ignore', outputFd, 'pipe'], timeout: 20_000 });
+  const drained = new Promise<void>((resolve, reject) => {
+    reader.once('error', reject);
+    reader.once('close', (code, signal) => code === 0 ? resolve() : reject(new Error(`FIFO reader failed: ${code ?? signal}`)));
   });
+  // The independent reader opens the other end while this open waits.
+  let fifoFd: number | undefined;
+  try {
+    fifoFd = openSync(fifo, 'w');
+    const result = spawnSync(process.execPath, [
+      '--import', pathToFileURL(resolve(repo, 'node_modules/tsx/dist/loader.mjs')).href,
+      entry, ...args,
+    ], {
+      cwd: root,
+      stdio: ['ignore', fifoFd, 'pipe'],
+      encoding: 'utf8',
+      timeout: 20_000,
+      maxBuffer: 8 * 1024 * 1024,
+      env: {
+        ...process.env,
+        HOME: root,
+        USERPROFILE: root,
+        CODEX_HOME: '',
+        AIWG_CONFIG: join(root, 'config'),
+        // Keep optional package code visible while all catalog data stays local.
+        AIWG_FEATURES_HOME: getFeaturesRoot(),
+        AIWG_NO_UPDATE_CHECK: '1',
+        AIWG_LOG_DISABLE: '1',
+      },
+    });
+    closeSync(fifoFd);
+    fifoFd = undefined;
+    await drained;
+    return { ...result, stdout: readFileSync(output, 'utf8') };
+  } finally {
+    if (fifoFd !== undefined) closeSync(fifoFd);
+    reader.kill();
+    closeSync(outputFd);
+  }
 }
 
 describe('sessions JSON with piped stdout', () => {
-  it('flushes a discovery manifest larger than 64 KiB before successful exit', () => {
+  it('flushes a discovery manifest larger than 64 KiB before successful exit', async () => {
     const sourceRoot = join(root, 'codex');
     mkdirSync(sourceRoot);
     const count = 200;
@@ -61,7 +89,7 @@ describe('sessions JSON with piped stdout', () => {
       }) + '\n');
     }
     const manifest = join(root, 'manifest.json');
-    const result = runCli([
+    const result = await runCli([
       'discover', '--workspace', root, '--provider-home', root,
       '--expected-providers', 'codex', '--codex-root', sourceRoot,
       '--manifest', manifest, '--json',
@@ -80,11 +108,11 @@ describe('sessions JSON with piped stdout', () => {
     expect(output.data.manifest.manifestId).toBe(saved.manifestId);
   });
 
-  itWithSqlite('flushes a JSON error larger than 64 KiB before nonzero exit', () => {
+  itWithSqlite('flushes a JSON error larger than 64 KiB before nonzero exit', async () => {
     const unknownCommand = `unknown-${'x'.repeat(96 * 1024)}`;
-    const result = runCli([unknownCommand, '--json']);
+    const result = await runCli([unknownCommand, '--json']);
     expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(2);
+    expect(result.status, result.stderr || JSON.stringify(JSON.parse(result.stdout).error)).toBe(2);
     expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(64 * 1024);
     expect(JSON.parse(result.stdout)).toMatchObject({
       status: 'error', data: null,

@@ -54,7 +54,8 @@ async function finalized(graph: DecisionGraph, value: (node: string, field: stri
   const plan = planDecisionGraph(graph, new Set([pin.digest]));
   const flow = decisionGraphToFlow(graph, { ...options, terminal: graph.terminals[0]! });
   const records: any[] = []; const calls: string[] = [];
-  const invokeNode = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan),
+  // A fixed budget clock keeps admission and settlement independent of CI load.
+  const invokeNode = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, [], () => 0),
     () => ({ attempts: 1, tokens: 2, costMicros: 2 }), async ({ node }: any) => {
       calls.push(node.id);
       const declared = graph.nodes.find(n => n.id === node.id)!.output;

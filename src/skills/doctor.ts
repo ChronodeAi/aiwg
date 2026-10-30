@@ -124,7 +124,7 @@ export function buildAgentSkillsDoctorSection(
           'warning',
           inspection.path,
           '$',
-          `active imported skill "${skill.name}" is not projected to provider "${provider.id}"`,
+          `active imported skill "${skill.name}" is not projected to provider "${provider.id}": ${inspection.reasons.join('; ')}`,
           `Deploy or repair the ${provider.id} Agent Skills projection.`,
         ));
       } else if (!inspection.managed || !inspection.matches) {
@@ -133,7 +133,7 @@ export function buildAgentSkillsDoctorSection(
           'error',
           inspection.path,
           '$',
-          `provider "${provider.id}" projection for "${skill.name}" differs from its expected strict managed projection`,
+          `provider "${provider.id}" projection for "${skill.name}" differs from its expected strict managed projection: ${inspection.reasons.join('; ')}`,
           `Redeploy "${skill.name}" to ${provider.id} from the managed import.`,
         ));
       }

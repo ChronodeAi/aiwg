@@ -14,9 +14,11 @@ machine-readable adapter report and a separate cross-provider report for all
 required files and zero skips. The cross-provider layer includes directory
 discovery, interrupted batch resume, writer locks, lifecycle/timeline
 derivation, stable identity and replay, and a spawned `bin/aiwg.mjs` import.
-The broader suite runs through `npm run test:ci`, with typecheck and
-build/conformance prerequisites in earlier steps; `Build` runs only after the
-Test job succeeds.
+The broader suite runs in separate required CI steps: `npm test` with a
+20-minute watchdog, followed by `npm run uat` with a 3-minute watchdog and
+the serve integration suite. Typecheck and build/conformance prerequisites run
+in earlier steps; `Build` runs only after the Test job succeeds. The local
+aggregate command `npm run test:ci` still runs the default suite and UAT.
 
 | Gate | Blocking evidence |
 |---|---|

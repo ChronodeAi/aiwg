@@ -1,5 +1,45 @@
 ---
 enforcement: high
+activation: paths
+summary: Author AIWG skills, agents, commands, rules, and templates in addon or framework source; regenerate provider copies from that source.
+bound_to:
+  skills:
+    - devkit-create-addon
+    - devkit-create-extension
+    - devkit-create-framework
+    - devkit-create-agent
+    - devkit-create-command
+    - devkit-create-skill
+    - scaffold-addon
+    - scaffold-extension
+    - scaffold-framework
+    - new-bundle
+    - add-agent
+    - add-skill
+    - add-command
+    - add-behavior
+    - add-template
+    - validate-addon
+    - validate-component
+    - devkit-validate
+    - dev-doctor
+  agents:
+    - aiwg-developer
+paths:
+  - agentic/code/**
+  - .claude/**
+  - .github/agents/**
+  - .github/prompts/**
+  - .github/instructions/**
+  - .cursor/**
+  - .warp/**
+  - .codex/**
+  - .factory/**
+  - .opencode/**
+  - .windsurf/**
+  - .openclaw/**
+  - .gitea/workflows/**
+  - .github/workflows/**
 ---
 
 # Skill Placement Rules

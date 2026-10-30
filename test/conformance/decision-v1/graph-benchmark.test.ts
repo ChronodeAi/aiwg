@@ -161,7 +161,8 @@ describe('paired offline benchmark: compiled DAG / independently authored Flow b
       // DAG path: full host admission, local beam selector and receipt finalization.
       const records: any[] = [];
       let started = performance.now();
-      const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, narrow(pattern)),
+      // A fixed budget clock keeps admission and settlement independent of CI load.
+      const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, plan, narrow(pattern), () => 0),
         () => ({ attempts: 1, tokens: 5, costMicros: 5 }), graphBeamFlowInvoker(graph, provider, narrow(pattern)),
         undefined, record => records.push(structuredClone(record)));
       const report = await executeFlowGraph(compiled, { validation: { catalogIds: new Set([skill]) },

@@ -1,4 +1,5 @@
 ---
+activation: kernel
 enforcement: critical
 ---
 

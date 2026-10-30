@@ -107,11 +107,11 @@ import { launchIsolatedWorker } from '../../tools/ralph-external/lib/worker-isol
 // tightened field-by-field by parallelism.admission.hostResources
 // (conservative defaults when unset). worker_dispatch off means legacy:
 // { enabled: false, ok: true } with no signal sampling.
-const gate = checkWorkerDispatch({ config });
+const gate = checkWorkerDispatch({ config, paths: [prepared.cwd, runDir] });
 if (!gate.ok) {
   // Queue, pick another qualified host, or reject with gate.failures
   // (each names its signal: avail-mem, load, mem-psi-avg10, mem-psi-avg60,
-  // workers, platform, thresholds). Never launch.
+  // free-disk, workers, platform, thresholds). Never launch.
 }
 const outcome = launchIsolatedWorker({
   name, memoryMaxGb, command: prepared.argv[0], args: prepared.argv.slice(1),
@@ -127,6 +127,13 @@ const outcome = launchIsolatedWorker({
 The `dispatch` preflight profile exposes the same gate on the command line
 (`node tools/scripts/resource-preflight.mjs --profile dispatch`), and
 `aiwg doctor` reports the live host state plus the isolation mode read-only.
+The saved-plan launcher samples both the worker's working directory and the
+run directory at each resource check. A refusal starts with
+`Worker dispatch resource gate refused launch` and includes bounded failing
+signal names and reasons, for example `free-disk: free 0.5GB < 2GB`.
+For missing directories, the saved-plan launcher samples the nearest existing
+ancestor directory without creating anything. Unreadable paths or missing paths
+with no existing ancestor below `/` fail closed.
 No mandatory enforcement is wired into `prepareWorkerInvocation` or the
 managed dispatch internals here; this section is the consumable API the
 Tier 0 conductor procedure and #2888 dispatch templates must call before launch:
@@ -137,9 +144,13 @@ when the supplied config has worker_dispatch off.
 
 Threshold precedence is monotonic: build dispatch, admission hostResources,
 and caller/task overlay are combined per field. Minimum thresholds take MAX;
-maximum thresholds (including max_workers) take MIN. No layer can relax another
-configured limit or the conservative defaults, which form the base layer. All
-layers are validated, including values superseded by stricter limits. At N
+maximum thresholds take MIN. `max_workers` defaults to **5** with origin `default`;
+as the sole exception to tightening defaults, a configured worker cap replaces 5,
+including values above 5. Configured worker caps still combine by MIN. Raise it with
+`aiwg config set --project parallelism.admission.hostResources.max_workers 10`
+(use an integer >= 1). All other threshold defaults remain unchanged. No layer
+can relax another configured limit. All layers are validated, including values
+superseded by stricter limits. At N
 running workers, max_workers=N blocks the next launch. Counts use current-user
 `aiwg-worker-*` service units when available; otherwise exact `codex`/`muse-bin`
 process names owned by the current UID. Legacy build bypass environment flags
@@ -163,15 +174,17 @@ recording.
 The existing Ralph command can supervise one resolved shell invocation:
 
 ```sh
-install -d -m 700 /private/attempt
+install -d -m 700 /private/attempt /absolute/worktree/.handoff
 aiwg models resolve --role coding --task implementation --group qualified-group \
-  --brief /private/brief.json --workdir /absolute/worktree \
-  --final-output /private/attempt/final.json --format=json > /private/plan.json
+  --brief /absolute/worktree/.handoff/brief.md --workdir /absolute/worktree \
+  --final-output /absolute/worktree/.handoff/final.json --format=json > /private/plan.json
 aiwg ralph-external --launch-worker --invocation /private/plan.json \
   --run-dir /private/attempt
 ```
 
-`FILE` is the complete JSON plan from `models resolve`, including its invocation
+The brief must be inside the qualified input roots (by default `--workdir`) and the
+final output inside the worker-writable roots; write the brief as plain text unless it
+is a complete, matching `workerDirectBrief`. `FILE` is the complete JSON plan from `models resolve`, including its invocation
 and input digests. The launcher rechecks it against current trusted configuration,
 catalog, installation and brief inputs before spawning; a bare argv array or an
 edited shell command cannot grant launch authority. Prepare fresh invocation and
@@ -202,15 +215,38 @@ The live dispatch gate runs first. Available isolation uses the existing
 confinement and cannot claim that boundary. This mode stays attached to exactly
 one attempt: no retry, queue, daemon, Mission or MC state is created. The legacy
 Ralph launch API and installed package paths remain the same.
-An unconfined process group can escape via `setsid`; degraded descendant stop
-therefore remains uncertain even after the direct child's owning wait completes,
-and degraded mode can never report a confirmed stop — there is no cgroup to
-prove no descendant escaped. The CLI's `--launch-worker` exit code reflects
-this directly: 0 is a confirmed success, 1 is a confirmed failure (error,
-timeout, or a confirmed stop with a nonzero/signaled exit), and 2 is an
-uncertain termination — a degraded run can look entirely clean and still
-exit 2, because "clean" is not the same claim as "confirmed." Callers must
-treat 2 as neither success nor failure, not coerce it to one.
+After a launcher-observed worker exit, `termination: confirmed` and `descendants: none`
+require an inactive systemd unit with no cgroup tasks, or both an owned process
+group returning `ESRCH` from `kill(-pgid, 0)` and a complete Linux `/proc` scan
+finding no same-uid process carrying this invocation's `AIWG_WORKER_INVOCATION_ID`.
+The launcher adds that marker through the worker environment allowlist without
+changing its own environment. The scan catches descendants that call `setsid()`
+or `setpgid()`; it is bounded to 100 ms, 4096 inventory entries and 1 MiB per
+environment. A process that started strictly before the recorded worker leader
+on the same host and boot cannot descend from it and is ignored. Any other
+unreadable same-uid environment (hardened, non-dumpable workers hide
+`/proc/<pid>/environ` but not `/proc/<pid>/stat` or `/proc/<pid>/cgroup`) is
+decided from readable links: a possible escaped descendant only when its ppid
+ancestry reaches the recorded leader, it keeps the worker's original session
+or process group, or it shares the worker's private cgroup (a cgroup shared
+with the launcher proves nothing and ancestry decides). An ancestry reaching
+another live process that predates the worker — a different conductor's
+parallel worker, a sibling subtree, a session manager — is not ours.
+Reparented-to-init/subreaper processes with no other link, unreadable start
+times, missing worker start times, unknown ownership, exceeded bounds, absent
+marker bindings and non-Linux hosts leave escaped-descendant evidence unknown. Immediate observation and
+`--check-descendants` both use the recorded leader start ticks. Observer coverage
+can remain degraded. A `/proc` group count of zero, a sent stop signal, or a
+worker-reported identity never proves emptiness.
+Missing evidence keeps termination uncertain and blocks retries and verification.
+Repeat the original `--launch-worker --retry-of-run-dir DIR` or `--verify-worker --run-dir DIR --check JSON`
+command with `--check-descendants` for a bounded check of at most two seconds; live or
+unknown descendants still refuse under the same combined group/marker proof.
+It requires private launcher records outside worker-writable roots, a captured
+containment identity on the same host and boot, and a launcher-recorded marker
+binding for non-cgroup attempts. Historical attempts without that marker remain
+uncertain. CLI exit codes remain 0 for confirmed success,
+1 for confirmed failure and 2 for uncertain termination. Process groups supply no sandbox.
 For `systemd-unit` mode, a hard timeout stops the unit itself
 (`systemctl --user stop <unit>`, which `KillMode=control-group` turns into a
 cgroup-wide kill) rather than attempting a PID/PGID signal that may still be
@@ -249,141 +285,8 @@ signal, ownership is rechecked against boot/start identity and the isolated grou
 the conductor's group, reused identities and uncertain ownership are refused.
 Completed timers are cleared so they cannot later signal a reused PID.
 
-### Manual launch and adoption
-
-An owning shell can apply the same convention without calling the Ralph helper.
-Recheck the full plan and dispatch gate first, authorize any degraded boundary,
-and use only its literal typed argv and allowlisted environment. Never evaluate
-`shellCommand` or execute a command supplied by worker output. The following Bash
-procedure uses the shell's own `wait` and Node's standard library; replace the example argv with the exact
-qualified argv, including the fresh output references:
-
-```bash
-umask 077
-run=$(mktemp -d /tmp/aiwg-worker.XXXXXXXX) || exit 1
-chmod 700 "$run" || exit 1
-brief=/absolute/private/brief.json
-plan=/absolute/private/rechecked-plan.json
-workdir=/absolute/authorized/worktree
-final=/absolute/authorized/outputs/fresh-final.json
-stdout="$final.stdout"              # Exact #2887 output bindings.
-stderr="$final.stderr"
-argv=('/absolute/qualified-binary' 'literal argument from the rechecked plan')
-record_manual() {
-  node --input-type=module - "$run" "$plan" "$1" "$$" "${worker-}" "${wait_status-}" \
-    "$workdir" "$brief" "$stdout" "$stderr" "$final" "${argv[@]}" <<'JS'
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
-import {createHash, randomUUID} from 'node:crypto';
-const [run, filename, stage, shell, child, waited, cwd, brief, stdout, stderr, final, ...argv] = process.argv.slice(2);
-const normalize = v => Array.isArray(v) ? v.map(normalize) : v && typeof v === 'object'
-  ? Object.fromEntries(Object.keys(v).sort().map(k => [k, normalize(v[k])])) : v;
-const digest = v => 'sha256:' + createHash('sha256').update(JSON.stringify(normalize(v))).digest('hex');
-const bytesDigest = v => 'sha256:' + createHash('sha256').update(v).digest('hex');
-function safe(p) {
-  if (!path.isAbsolute(p) || p.split('/').includes('..')) throw Error('unsafe path');
-  let current = '/';
-  for (const part of p.split('/').filter(Boolean)) {
-    current = path.join(current, part);
-    try { if (fs.lstatSync(current).isSymbolicLink()) throw Error('symlink'); }
-    catch (e) { if (e.code !== 'ENOENT') throw e; }
-  }
-}
-for (const p of [run, filename, cwd, brief, stdout, stderr, final]) safe(p);
-const runStat = fs.statSync(run);
-if (runStat.uid !== process.getuid() || (runStat.mode & 0o077)) throw Error('unowned/private directory');
-function read(p, limit) {
-  const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-  try { const s = fs.fstatSync(fd); if (!s.isFile() || s.nlink !== 1 || s.size > limit) throw Error('unbounded input');
-    return fs.readFileSync(fd); } finally { fs.closeSync(fd); }
-}
-function write(name, value) {
-  const target = path.join(run, name); safe(target);
-  const temp = path.join(run, '.' + randomUUID());
-  const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-  try { fs.writeFileSync(fd, JSON.stringify(value) + '\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  fs.renameSync(temp, target);
-}
-function identity(pid) {
-  if (!Number(pid)) return null;
-  try { const s = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); const f = s.slice(s.lastIndexOf(')') + 2).split(/\s+/);
-    return {pid:Number(pid), pgid:Number(f[2]), parentPid:Number(f[1]), sessionId:Number(f[3]), startTicks:f[19],
-      uid:Number(/^Uid:\s+(\d+)/m.exec(fs.readFileSync(`/proc/${pid}/status`, 'utf8'))[1]),
-      host:os.hostname(), bootId:fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), executable:fs.readlinkSync(`/proc/${pid}/exe`)};
-  } catch { return null; }
-}
-if (stage === 'before') {
-  const p = JSON.parse(read(filename, 1048576)); const i = p.invocation;
-  if (p.mode !== 'direct' || p.status !== 'eligible' || i.readiness !== 'launchable' || Date.parse(i.expiresAt) <= Date.now()
-    || JSON.stringify(i.argv) !== JSON.stringify(argv) || [i.cwd,i.briefPath,i.stdoutPath,i.stderrPath,i.finalPath].join('\0') !== [cwd,brief,stdout,stderr,final].join('\0')
-    || bytesDigest(read(brief, 262144)) !== i.briefDigest || fs.readdirSync(run).length) throw Error('plan binding changed');
-  const invocationId = randomUUID();
-  write('invocation.json', {invocationId, origin:'manual', planDigest:digest(p), invocationDigest:digest(i),
-    argv:i.argv.map((v,n) => n === 0 ? v : '<argument:' + bytesDigest(v) + '>'), argvDigest:digest(i.argv),
-    envNames:i.envNames, prompt:{path:brief,digest:i.briefDigest}, selected:i.selected,
-    cwd, worktree:{path:cwd,baseRevision:null}, paths:{stdout,stderr,final}, health:i.health,
-    attemptId:invocationId, previousAttemptId:null});
-  write('process.json', {invocationId, origin:'manual', supervisor:identity(shell), worker:null});
-} else if (stage === 'started') {
-  const old = JSON.parse(read(path.join(run,'process.json'),65536));
-  write('process.json', {...old,worker:identity(child),launchTime:new Date().toISOString(),monotonicStart:process.hrtime.bigint().toString(),ownership:'unknown'});
-} else {
-  const old = JSON.parse(read(path.join(run,'process.json'),65536)); const status = Number(waited);
-  write('exit.json', {invocationId:old.invocationId, waitStatus:status, exitCode:status < 128 ? status : null,
-    signal:null, endedAt:new Date().toISOString(), termination:'uncertain', descendants:'unknown'});
-}
-JS
-}
-record_manual before || exit 1
-# Open every capture before spawn; failure ends the attempt without a worker.
-set -C                            # Refuse existing capture/final files.
-exec {out}>"$stdout" || exit 1
-exec {err}>"$stderr" || exit 1
-: >"$final" || exit 1
-# PATH/HOME here are examples: use exactly the qualified envNames.
-# Run with job control off; verify $! against actual PID/PGID/start identity.
-set +m
-(cd "$workdir" &&
-  while IFS= read -r name; do
-    case "$name" in PATH|HOME) ;; *) unset "$name" || exit 1 ;; esac
-  done < <(compgen -e)
-  exec setsid "${argv[@]}") \
-  < /dev/null >&"$out" 2>&"$err" &
-worker=$!
-# For brief-text/brief-json, replace /dev/null with "$brief"; EOF follows the file.
-if ! record_manual started; then
-  printf '%s\n' 'Metadata unavailable; retain the shell/child references and unknown ownership in conductor context.' >&2
-fi
-if wait "$worker"; then wait_status=0; else wait_status=$?; fi
-exec {out}>&-
-exec {err}>&-
-record_manual ended || exit 1
-# Bash statuses >128 can also be ordinary exits: without native evidence, record
-# exact code/signal as null and retain wait_status. Never invent exit code zero.
-# Owned descendants not independently proven stopped => termination uncertain.
-# Extract a separate final through the qualified parser; retain both captures.
-```
-
-The metadata steps use exclusive temporary regular files
-and atomic rename under the private directory, reject symlink/hardlink aliases,
-and preserve mode 0600. Native isolation remains required whenever the profile
-needs it; `setsid` establishes a process group, not a filesystem or resource
-sandbox. A hand-launched process that shares its parent's group remains
-inspectable but grants no group-kill rights.
-
-`SessionLauncher.adoptWorker({ runDir?, invocationId?, worker?, paths? })` accepts
-known manual references with `origin: 'manual'`, returns explicit nulls for
-unknown identities/terminal facts and does not signal processes. It never scans
-by process name or trusts an adopted PID as cancellation authority. Omit
-`runDir` when writable scratch is unavailable: the returned observation stays in
-conductor context, with unavailable deadline/stop guarantees explicit. No status
-query can discover absent records, and no automatic MC fallback occurs.
-
-Retention and disposition belong to the conductor. Restricted raw prompts/logs
-default to 24 hours after confirmed termination and disposition; live or uncertain
-attempts are preserved. Dirty/partial worktrees require explicit disposition.
-This helper supplies evidence; it does not run a retention service.
+Manual shell capture and adoption follow the
+[manual worker launch procedure](worker-manual-launch.md).
 
 ## Validation limits and cleanup
 
@@ -448,6 +351,13 @@ Here `installation` is the same qualification request, including adapter metadat
 and its negative evidence. For the production loader, `effectiveConfigDigest`
 is `qualificationDigest(mergedModels.defaults.workerSelection)`.
 Environment values are reduced to names before persistence.
+The complete persisted registration (including model observations and MCP
+bindings) is signed with the configured effect-ledger key and verified against
+the existing default `delivery` keyring on load. The signature uses its own DSSE
+payload type. Restore or unlock `effects.keyProvider` and initialize the keyring
+with `aiwg effect keys init` if needed before qualifying. Unsigned legacy records
+are unqualified: this is deliberate one-time requalification, requiring
+`aiwg doctor --probe-workers --qualify` in each workspace.
 
 The host must protect this configuration directory and installed dependency
 closure from workers. The loader refuses symlinked, hardlinked or untrusted

@@ -1,5 +1,15 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Bound auto-reply conversations with explicit termination and turn limits; preserve history, honor human-input modes, and terminate gracefully on null replies or failures."
+bound_to:
+  agents: ["executive-orchestrator", "ralph-loop"]
+  skills: ["agent-loop", "agent-loop-ext", "artifact-orchestration", "flow-guided-implementation", "mission-control"]
+  flows: ["flow-guided-implementation"]
+triggers:
+  - "configure auto reply chain termination"
+  - "stop autonomous agent conversation"
+  - "limit multi agent dialogue turns"
 ---
 
 # Auto-Reply Chain Rules

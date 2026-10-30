@@ -1,0 +1,7 @@
+apiVersion: workflow.aiwg.io/v1
+kind: FlowPlaybook
+metadata:
+  name: fixture-flow
+  description: Exercise flow projection.
+spec:
+  steps: []

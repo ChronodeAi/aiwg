@@ -1,4 +1,7 @@
-import { chmod, link, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile, type FileHandle } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
+import { Worker } from 'node:worker_threads';
+import { once } from 'node:events';
+import { chmod, link, mkdir, readdir, readFile, rm, stat, symlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -7,9 +10,13 @@ import {
   ATTRIBUTION_FIELD_PATTERN,
   buildDecisionLedgerRecord,
   DECISION_LEDGER_SCHEMA,
+  DECISION_LEDGER_SCHEMA_V1,
+  DECISION_SESSION_ENV_VARS,
+  resolveDecisionSession,
   DecisionLedgerSinceError,
   decisionLedgerHistory,
   decisionLedgerStats,
+  rotateDecisionLedger,
   MAX_LEDGER_RECORD_BYTES,
   MAX_RECORDED_CHOICE_IDS,
   parseDecisionLedgerSince,
@@ -43,6 +50,7 @@ const ISOLATED_ENV_KEYS = [
   'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR',
   'AIWG_PROVIDER', 'CLAUDECODE_PROVIDER', 'AIWG_TEST_PROCESS_PROVIDER', 'AIWG_DISABLE_PROCESS_PROVIDER_DETECTION',
   'AIWG_DECISION_ENABLED', 'JEV_API_KEY', 'AIWG_DECISION_JEV_API_KEY', 'XDG_CONFIG_HOME',
+  ...DECISION_SESSION_ENV_VARS,
   ...allHarnessMarkerEnvKeys(),
 ] as const;
 
@@ -65,7 +73,7 @@ describe('decision ledger', () => {
   });
 
   async function tempRoot(): Promise<string> {
-    const directory = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-ledger-'));
+    const directory = mkdtempSync(path.join(tmpdir(), 'aiwg-decision-ledger-'));
     directories.push(directory);
     return directory;
   }
@@ -135,6 +143,239 @@ describe('decision ledger', () => {
     return path.join(projectRoot, '.aiwg', 'decision', 'ledger.jsonl');
   }
 
+  describe('retention', () => {
+    async function appendAt(projectRoot: string, id: string, daysAgo: number) {
+      const record = buildDecisionLedgerRecord(yesNoInput, answeredResult,
+        buildContext({ projectRoot, id: () => id, now: () => FIXED_NOW - daysAgo * 86_400_000 }));
+      expect(await appendDecisionLedgerRecord(record, { projectRoot })).toBe(true);
+      return record;
+    }
+
+    it('defaults to 90 days, preserves malformed bytes, and optionally reads archives offline', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'old', 91);
+      await appendAt(projectRoot, 'boundary', 90);
+      await appendAt(projectRoot, 'recent', 1);
+      const malformed = Buffer.from([0xff, 0x0d, 0x0a, 0x7b]);
+      await writeFile(ledgerFilePath(projectRoot), Buffer.concat([
+        await readFile(ledgerFilePath(projectRoot)), malformed,
+      ]));
+      const result = await rotateDecisionLedger({ projectRoot, now: () => FIXED_NOW });
+      expect(result).toMatchObject({ archived: 1, retained: 4, malformed: 2 });
+      expect((await readFile(ledgerFilePath(projectRoot))).subarray(-malformed.length)).toEqual(malformed);
+      expect((await decisionLedgerHistory(projectRoot)).records.map(record => record.id)).toEqual(['boundary', 'recent']);
+      expect(await decisionLedgerHistory(projectRoot, { includeArchives: true })).toMatchObject({ count: 3, skipped: 2 });
+      expect((await decisionLedgerStats(projectRoot, { includeArchives: true })).groups[0].totalCalls).toBe(3);
+      if (!IS_WINDOWS) {
+        expect((await stat(result.archivePath!)).mode & 0o777).toBe(0o600);
+        expect((await stat(path.dirname(result.archivePath!))).mode & 0o777).toBe(0o700);
+        expect((await stat(ledgerFilePath(projectRoot))).mode & 0o777).toBe(0o600);
+      }
+      const everything = await rotateDecisionLedger({ projectRoot, all: true });
+      expect(everything).toMatchObject({ archived: 4, retained: 0, malformed: 2 });
+      expect((await readFile(everything.archivePath!)).subarray(-malformed.length)).toEqual(malformed);
+      expect(await decisionLedgerHistory(projectRoot, { includeArchives: true })).toMatchObject({ count: 3, skipped: 2 });
+    });
+
+    it('keeps the most recent N valid records even when timestamps are out of order', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'recent', 1);
+      await appendAt(projectRoot, 'old', 100);
+      await appendAt(projectRoot, 'middle', 10);
+      const result = await rotateDecisionLedger({ projectRoot, keepLast: '2' });
+      expect(result).toMatchObject({ archived: 1, retained: 2 });
+      expect((await decisionLedgerHistory(projectRoot)).records.map(record => record.id)).toEqual(['middle', 'recent']);
+    });
+
+    it.each(['0', '0d', '-1', 'NaN', '9007199254740992', ''])('refuses rotate-all without --all (%s)', async keepLast => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'unchanged', 100);
+      const original = await readFile(ledgerFilePath(projectRoot));
+      await expect(rotateDecisionLedger({ projectRoot, keepLast })).rejects.toThrow('--all');
+      expect(await readFile(ledgerFilePath(projectRoot))).toEqual(original);
+    });
+
+    it('refuses paths outside an external resolved artifact root and paths through symlinks', async () => {
+      const projectRoot = await tempRoot();
+      const artifactRoot = await tempRoot();
+      const outside = await tempRoot();
+      process.env.AIWG_ARTIFACTS_PATH = artifactRoot;
+      const record = await appendAt(projectRoot, 'old', 100);
+      for (const to of [path.join(outside, 'archive.jsonl'), '../escape.jsonl',
+        path.join(artifactRoot + '-sibling', 'archive.jsonl')]) {
+        await expect(rotateDecisionLedger({ projectRoot, all: true, to })).rejects.toThrow('artifact root');
+      }
+      await symlink(outside, path.join(artifactRoot, 'archive'), IS_WINDOWS ? 'junction' : 'dir');
+      await expect(rotateDecisionLedger({ projectRoot, all: true })).rejects.toThrow('Unsafe');
+      expect(await readdir(outside)).toEqual([]);
+      await rm(path.join(artifactRoot, 'archive'));
+      const result = await rotateDecisionLedger({ projectRoot, all: true, to: 'archive/decision/custom.jsonl' });
+      expect(result.archivePath).toBe(path.join(artifactRoot, 'archive/decision/custom.jsonl'));
+      expect((await decisionLedgerHistory(projectRoot, { includeArchives: true })).records).toEqual([record]);
+      expect(await readdir(path.join(projectRoot, '.aiwg')).catch(() => [])).not.toContain('decision');
+    });
+
+    it('reuses the activity-log archive parent and creates a private nested decision archive', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'old', 100);
+      const archiveRoot = path.join(projectRoot, '.aiwg', 'archive');
+      await mkdir(archiveRoot, { mode: 0o755 });
+      if (!IS_WINDOWS) await chmod(archiveRoot, 0o755);
+      const result = await rotateDecisionLedger({ projectRoot, all: true,
+        to: 'archive/decision/nested/custom.jsonl' });
+      expect(result.archived).toBe(1);
+      expect((await decisionLedgerHistory(projectRoot, { includeArchives: true })).count).toBe(1);
+      if (!IS_WINDOWS) {
+        expect((await stat(archiveRoot)).mode & 0o777).toBe(0o755);
+        expect((await stat(path.dirname(result.archivePath!))).mode & 0o777).toBe(0o700);
+      }
+    });
+
+    it('refuses loose archive permissions without changing them or losing live data', async () => {
+      if (IS_WINDOWS) return;
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'old', 100);
+      const archiveDir = path.join(projectRoot, '.aiwg', 'archive', 'decision');
+      await mkdir(archiveDir, { recursive: true, mode: 0o700 });
+      await chmod(archiveDir, 0o755);
+      await expect(rotateDecisionLedger({ projectRoot, all: true })).rejects.toThrow('Unsafe');
+      expect((await stat(archiveDir)).mode & 0o777).toBe(0o755);
+      expect((await decisionLedgerHistory(projectRoot)).count).toBe(1);
+    });
+
+    it('refuses existing archive files, symlinks and hard links without changing the ledger', async () => {
+      const projectRoot = await tempRoot();
+      await appendAt(projectRoot, 'one', 100);
+      const first = await rotateDecisionLedger({ projectRoot, all: true });
+      await appendAt(projectRoot, 'two', 100);
+      const original = await readFile(ledgerFilePath(projectRoot));
+      await expect(rotateDecisionLedger({ projectRoot, all: true, to: first.archivePath! })).rejects.toThrow();
+      const archiveDir = path.dirname(first.archivePath!);
+      await symlink(first.archivePath!, path.join(archiveDir, 'link.jsonl'));
+      await expect(rotateDecisionLedger({ projectRoot, all: true, to: path.join(archiveDir, 'link.jsonl') })).rejects.toThrow();
+      await expect(decisionLedgerHistory(projectRoot, { includeArchives: true })).rejects.toThrow('symlink');
+      await rm(path.join(archiveDir, 'link.jsonl'));
+      await link(first.archivePath!, path.join(archiveDir, 'hard.jsonl'));
+      await expect(decisionLedgerHistory(projectRoot, { includeArchives: true })).rejects.toThrow('hard link');
+      expect(await readFile(ledgerFilePath(projectRoot))).toEqual(original);
+    });
+
+    it('preserves every record while a real worker appends during repeated rotation', async () => {
+      const projectRoot = await tempRoot();
+      const record = await appendAt(projectRoot, 'seed', 100);
+      const worker = new Worker(`
+        const { parentPort, workerData } = require('node:worker_threads');
+        (async () => {
+          const { appendDecisionLedgerRecord } = await import(workerData.module);
+          parentPort.postMessage('ready');
+          await new Promise(resolve => parentPort.once('message', resolve));
+          for (let i = 0; i < 120; i++) {
+            const ok = await appendDecisionLedgerRecord({ ...workerData.record, id: 'worker-' + i },
+              { projectRoot: workerData.projectRoot, warn: message => { throw new Error(message); } });
+            if (!ok) throw new Error('Worker append failed');
+          }
+          parentPort.close();
+        })().catch(error => { throw error; });
+      `, { eval: true, workerData: { projectRoot, record,
+        module: new URL('../../../dist/src/decision/ledger.js', import.meta.url).href } });
+      try {
+        const exited = once(worker, 'exit');
+        await once(worker, 'message');
+        worker.postMessage('go');
+        for (let i = 0; i < 24; i++) await rotateDecisionLedger({ projectRoot, keepLast: '1' });
+        expect((await exited)[0]).toBe(0);
+        const history = await decisionLedgerHistory(projectRoot, { includeArchives: true });
+        const ids = history.records.map(record => record.id);
+        expect(history.skipped).toBe(0);
+        expect(ids).toHaveLength(121);
+        expect(new Set(ids)).toEqual(new Set(['seed', ...Array.from({ length: 120 }, (_, i) => `worker-${i}`)]));
+      } finally { await worker.terminate(); }
+    });
+  });
+
+  it.each(DECISION_SESSION_ENV_VARS)('records session and source from %s on both transports', async key => {
+    const projectRoot = await tempRoot();
+    for (const transport of ['cli', 'mcp'] as const) {
+      const record = await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot, {
+        transport, explicitSessionId: undefined, env: { [key]: ' session-42 ' },
+      }));
+      expect(record).toMatchObject({ sessionId: 'session-42', sessionSource: key, transport });
+    }
+    expect((await decisionLedgerStats(projectRoot, { groupBy: 'session' })).groups[0]).toMatchObject({ key: 'session-42', totalCalls: 2 });
+  });
+
+  it('resolves session precedence and ignores malformed or empty harness markers', () => {
+    const env = Object.fromEntries(DECISION_SESSION_ENV_VARS.map(key => [key, key]));
+    expect(resolveDecisionSession('explicit', env)).toEqual({ sessionId: 'explicit', sessionSource: '--session' });
+    for (const key of DECISION_SESSION_ENV_VARS) {
+      expect(resolveDecisionSession(undefined, env)).toEqual({ sessionId: key, sessionSource: key });
+      delete env[key];
+    }
+    expect(resolveDecisionSession(undefined, env)).toEqual({ sessionId: 'unknown', sessionSource: 'unknown' });
+    expect(resolveDecisionSession('bad value', { AIWG_SESSION_ID: ' ', CLAUDE_CODE_SESSION_ID: 'bad value', CODEX_THREAD_ID: 'valid' }))
+      .toEqual({ sessionId: 'valid', sessionSource: 'CODEX_THREAD_ID' });
+  });
+
+  it('separates frontier avoidance from all Jev usage, preserving weights across config changes', async () => {
+    const projectRoot = await tempRoot();
+    await mkdir(path.join(projectRoot, '.aiwg'));
+    await writeFile(path.join(projectRoot, '.aiwg', 'aiwg.config'), JSON.stringify({ decision: { ask: {
+      cost: { llm_per_mtok: 20, jev_per_mtok: 0.5 }, savings: { caller_model_class: 'standard', output_tokens: 32 },
+    } } }));
+    const answered = (await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot, { caller: 'worker' })))!;
+    const fallback = (await recordDecisionAsk(yesNoInput, fallbackResult, askOptions(projectRoot, { caller: 'worker' })))!;
+    const noCall = (await recordDecisionAsk(yesNoInput, notConfiguredResult, askOptions(projectRoot, { caller: 'worker' })))!;
+    expect(answered.llm_tokens_avoided).toBe(answered.estimatedLlmTokensAvoided - 50 + 256 + 32);
+    expect(answered.estimationMethod).toMatchObject({ reasoning_tokens: 256, output_tokens: 32, llm_per_mtok: 20, jev_per_mtok: 0.5 });
+    expect(answered.cost_weighted_net_usd).toBeCloseTo((answered.llm_tokens_avoided! * 20 - 15 * 0.5) / 1e6, 12);
+    expect(fallback).toMatchObject({ llm_tokens_avoided: 0, jev_tokens: 25, cost_weighted_net_usd: -25 * 0.5 / 1e6 });
+    expect(noCall).toMatchObject({ llm_tokens_avoided: 0, jev_tokens: 0, cost_weighted_net_usd: 0 });
+    await writeFile(path.join(projectRoot, '.aiwg', 'aiwg.config'), '{}');
+    const group = (await decisionLedgerStats(projectRoot, { groupBy: 'caller' })).groups[0];
+    expect(group).toMatchObject({ key: 'worker', jev_tokens: 40, llm_tokens_avoided: answered.llm_tokens_avoided, legacyReestimatedCalls: 0 });
+    expect(group.cost_weighted_net_usd).toBeCloseTo(answered.cost_weighted_net_usd! + fallback.cost_weighted_net_usd!, 12);
+  });
+
+  it('records split rates and provenance and preserves them after config changes', async () => {
+    const projectRoot = await tempRoot();
+    await mkdir(path.join(projectRoot, '.aiwg'));
+    const cost = { jev_input_per_mtok: 0.042, jev_output_per_mtok: 0, source: 'typesafe-docs',
+      checked_at: '2026-10-23', jev_model: 'jev-1.13.0' };
+    await writeFile(path.join(projectRoot, '.aiwg/aiwg.config'), JSON.stringify({ decision: { ask: { cost } } }));
+    const record = (await recordDecisionAsk(yesNoInput, answeredResult, askOptions(projectRoot)))!;
+    expect(record.estimationMethod).toMatchObject({ ...cost, jev_rate_basis: 'split' });
+    expect(record.cost_weighted_net_usd).toBeCloseTo((record.llm_tokens_avoided! * 15 - answeredResult.usage!.inputTokens! * 0.042) / 1e6, 12);
+    await writeFile(path.join(projectRoot, '.aiwg/aiwg.config'), '{}');
+    const stats = await decisionLedgerStats(projectRoot);
+    expect(stats.skipped).toBe(0);
+    expect(stats.groups[0].ratesUsed).toEqual([expect.objectContaining({ calls: 1, method: expect.objectContaining(cost) })]);
+    expect(stats.groups[0].cost_weighted_net_usd).toBe(record.cost_weighted_net_usd);
+    expect((await decisionLedgerHistory(projectRoot)).records[0].estimationMethod).toMatchObject(cost);
+  });
+
+  it('reads mixed v1/v2 ledgers, re-estimates legacy answers and rejects malformed v2 economics', async () => {
+    const projectRoot = await tempRoot();
+    const answered = buildDecisionLedgerRecord(yesNoInput, answeredResult, buildContext({ projectRoot }));
+    const fallback = buildDecisionLedgerRecord(yesNoInput, fallbackResult, buildContext({ projectRoot }));
+    const legacy = (record: typeof answered) => {
+      const { llm_tokens_avoided, jev_tokens, cost_weighted_net_usd, sessionSource, estimationMethodV1, ...rest } = record;
+      return { ...rest, schema: DECISION_LEDGER_SCHEMA_V1, estimationMethod: estimationMethodV1 };
+    };
+    await mkdir(path.dirname(ledgerFilePath(projectRoot)), { recursive: true });
+    const records = [legacy(answered), legacy(fallback), answered,
+      { ...answered, llm_tokens_avoided: -1 }, { ...answered, estimationMethod: 'v2' },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, jev_per_mtok: -1 } },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, jev_input_per_mtok: -1 } },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, source: 'guess' } },
+      { ...answered, estimationMethod: { ...answered.estimationMethod as object, checked_at: '2026-02-30' } }];
+    await writeFile(ledgerFilePath(projectRoot), records.map(record => JSON.stringify(record)).join('\n'));
+    const stats = await decisionLedgerStats(projectRoot);
+    expect(stats.skipped).toBe(6);
+    expect(stats.groups[0]).toMatchObject({ totalCalls: 3, legacyReestimatedCalls: 2, jev_tokens: 55, llm_tokens_avoided: answered.llm_tokens_avoided! * 2 });
+    expect(stats.groups[0].cost_weighted_net_usd).toBeCloseTo(answered.cost_weighted_net_usd! * 2 - 25 * 0.2 / 1e6, 12);
+    expect((await decisionLedgerHistory(projectRoot)).records).toHaveLength(3);
+  });
+
   // ---------------------------------------------------------------------
   // Baseline acceptance criteria (#2946)
   // ---------------------------------------------------------------------
@@ -147,10 +388,12 @@ describe('decision ledger', () => {
       agreementRatio: 1, votes: { true: 10, false: 0 }, answer: true,
       confidenceSummary: { count: 10, missing: 0, mean: 0.93, min: 0.93, max: 0.93 }, passes: [],
     };
-    const answered = buildDecisionLedgerRecord(yesNoInput, { ...answeredResult, aggregate }, buildContext({ projectRoot }));
+    const answered = buildDecisionLedgerRecord(yesNoInput, { ...answeredResult, answeredBy: 'agreement',
+      aggregate: { ...aggregate, minAgreement: 0.9, agreementConfidenceFloor: 0.55 } }, buildContext({ projectRoot }));
     const fallback = buildDecisionLedgerRecord(yesNoInput, { ...fallbackResult, reason: 'low-agreement',
       aggregate: { ...aggregate, passesRun: 14, escalated: true, earlyStop: 'certain-failure', agreementRatio: 0.5 } }, buildContext({ projectRoot }));
     expect(answered).toMatchObject({ passesRequested: 10, escalationPasses: 20, passesRun: 10, escalated: false,
+      answeredBy: 'agreement', minAgreement: 0.9, agreementConfidenceFloor: 0.55,
       agreementRatio: 1, passConfidenceSummary: { mean: 0.93 } });
     await appendDecisionLedgerRecord(answered, { projectRoot });
     await appendDecisionLedgerRecord(fallback, { projectRoot });
@@ -158,10 +401,10 @@ describe('decision ledger', () => {
     const policies = await decisionLedgerStats(projectRoot, { groupBy: 'passes' });
     expect(policies.skipped).toBe(0);
     expect(policies.groups.find(group => group.key === '10/20')).toMatchObject({ totalCalls: 2, answered: 1, fallback: 1,
-      hitRate: 0.5, escalatedCalls: 1, passesRun: 24, agreement: { count: 2, mean: 0.75 } });
-    expect(policies.groups.find(group => group.key === '1/1')).toMatchObject({ hitRate: 1 });
+      hitRate: 0.5, tokensPerAnsweredDecision: 40, escalatedCalls: 1, passesRun: 24, agreement: { count: 2, mean: 0.75 } });
+    expect(policies.groups.find(group => group.key === '1/1')).toMatchObject({ hitRate: 1, tokensPerAnsweredDecision: 15 });
     const escalation = await decisionLedgerStats(projectRoot, { groupBy: 'escalation' });
-    expect(escalation.groups.find(group => group.key === 'true')).toMatchObject({ totalCalls: 1, hitRate: 0 });
+    expect(escalation.groups.find(group => group.key === 'true')).toMatchObject({ totalCalls: 1, hitRate: 0, tokensPerAnsweredDecision: null });
     expect((await decisionLedgerHistory(projectRoot)).records).toHaveLength(3);
   });
 
@@ -193,7 +436,7 @@ describe('decision ledger', () => {
     expect(record.questionDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(record.contextDigest).toBeNull();
     expect(record.estimatedLlmTokensAvoided).toBeGreaterThan(0);
-    expect(record.estimationMethod.length).toBeGreaterThan(0);
+    expect(record.estimationMethod).toMatchObject({ version: 'aiwg-decision-savings/v2', llm_per_mtok: 15, jev_per_mtok: 0.2 });
     expect(record).not.toHaveProperty('questionText');
     expect(record).not.toHaveProperty('contextText');
   });

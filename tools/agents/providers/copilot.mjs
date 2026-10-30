@@ -1,3 +1,5 @@
+import { withModelWrapper } from './model-wrapper.mjs';
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * GitHub Copilot Provider
  *
@@ -18,7 +20,6 @@
  *   - Tool mapping to Copilot built-in tools
  *   - Creates copilot-instructions.md
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -27,6 +28,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -53,12 +55,11 @@ import {
   deploySoulCompanions,
   loadRuntimeModelCatalog
 } from './base.mjs';
+import { writeContextFileSync } from './context-write.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'copilot';
 export const aliases = [];
 
@@ -187,7 +188,8 @@ export function getTools(category, toolsString) {
  * Transform AIWG agent to GitHub Copilot .agent.md format.
  * Output: YAML frontmatter with name, description, tools, model + markdown body (system prompt).
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('copilot', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { modelsConfig = {} } = opts;
 
   // Parse existing frontmatter
@@ -429,6 +431,7 @@ export function deploySkills(skillDirs, targetDir, opts) {
  * Deploy rules to .github/instructions/ as .instructions.md files
  */
 export function deployRules(ruleFiles, targetDir, opts) {
+  if (opts.ruleDelivery) return [];
   const destDir = path.join(targetDir, paths.rules);
   ensureDir(destDir, opts.dryRun);
   cleanupOldRuleFiles(destDir, opts);
@@ -475,14 +478,14 @@ export function createCopilotInstructions(target, srcRoot, dryRun) {
     if (dryRun) {
       console.log(`[dry-run] Would update existing copilot-instructions.md with AIWG section`);
     } else {
-      fs.writeFileSync(destPath, combined, 'utf8');
+      writeContextFileSync(destPath, combined, 'utf8');
       console.log('Updated copilot-instructions.md with AIWG SDLC framework section');
     }
   } else {
     if (dryRun) {
       console.log(`[dry-run] Would create copilot-instructions.md from template`);
     } else {
-      fs.writeFileSync(destPath, template, 'utf8');
+      writeContextFileSync(destPath, template, 'utf8');
       console.log('Created copilot-instructions.md from template');
     }
   }
@@ -495,8 +498,8 @@ export function createCopilotInstructions(target, srcRoot, dryRun) {
 export async function postDeploy(targetDir, opts) {
   initializeFrameworkWorkspace(targetDir, opts.mode, opts.dryRun, opts.srcRoot);
 
-  // Create copilot-instructions.md
-  createCopilotInstructions(targetDir, opts.srcRoot, opts.dryRun);
+  // copilot-instructions.md is Copilot's context file: --no-context-files leaves it alone.
+  if (opts.contextFiles !== false) createCopilotInstructions(targetDir, opts.srcRoot, opts.dryRun);
 }
 
 // ============================================================================
@@ -517,6 +520,10 @@ export function getFileExtension(type) {
 // ============================================================================
 
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,

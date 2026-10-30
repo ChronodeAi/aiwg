@@ -22,6 +22,8 @@ import { classifyDiscoveryError, runModelDiscoveryCommand } from './model-discov
 
 type Layer = { role: string; path: string; note?: string; precedence: number };
 type ParsedLayer = {
+  hasExternalAuthProvider?: boolean;
+  hasCustomModelsEndpoint?: boolean;
   defaultModel?: string;
   allowedModels?: string[];
   disabledModels?: string[];
@@ -118,6 +120,13 @@ export function parseGrokBuildModelConfig(text: string, scope: string): ParsedLa
     if (scope === 'project' && !PROJECT_ALLOWED.has(top)) {
       if (top === 'models' || top === 'model') parsed.projectModelFields = true;
       continue;
+    }
+    // Presence only: never retain the command or endpoint in discovery output.
+    if ((table === 'auth' || table === 'grok_com_config') && key === 'auth_provider_command') {
+      parsed.hasExternalAuthProvider = Boolean(unquote(value)?.trim());
+    }
+    if (table === 'endpoints' && ['models_base_url', 'models_list_url', 'models_endpoint'].includes(key)) {
+      parsed.hasCustomModelsEndpoint ||= Boolean(unquote(value)?.trim());
     }
     if (table === 'models') {
       if (key === 'default') parsed.defaultModel = unquote(value);
@@ -312,6 +321,19 @@ export async function discoverGrokBuildModels(
   const discovered = inspectModels(report, validationDiagnostics);
   const parsedByLayer = await Promise.all(layers.map(layer => layer.role === 'env_overlay'
     && layer.path.includes('(inline)') ? parseEnvOverlay(env) : readLayer(layer)));
+  // Reviewed upstream 2bdd1d6a: external auth plus a custom models endpoint
+  // discards [model.*] and ordinary allowed_models. Inspect has no effective
+  // catalog, so config reconstruction cannot establish selectable aliases.
+  // Conservatively withhold discovery when any active layer names this setup;
+  // do not execute the auth provider or fetch its endpoint to fill the gap.
+  const externalAuth = Boolean(env.GROK_AUTH_PROVIDER_COMMAND?.trim())
+    || parsedByLayer.some(layer => layer?.hasExternalAuthProvider);
+  const customEndpoint = Boolean(env.GROK_MODELS_BASE_URL?.trim() || env.GROK_MODELS_LIST_URL?.trim())
+    || parsedByLayer.some(layer => layer?.hasCustomModelsEndpoint);
+  if (externalAuth && customEndpoint) {
+    return { ...base, ...(runtimeVersion ? { runtimeVersion } : {}), errorKind: 'invalid-output',
+      error: 'Grok Build external auth with a custom models endpoint requires its runtime catalog; config model aliases and ordinary allowed_models are ignored upstream. Automatic discovery is deferred for this configuration.' };
+  }
   let requirementsDefault: ModelValueProvenance | undefined;
   let requirementsAllowed: ModelValueProvenance | undefined;
   for (let i = 0; i < layers.length; i++) {

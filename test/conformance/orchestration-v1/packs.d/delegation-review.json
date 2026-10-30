@@ -1,0 +1,14 @@
+{
+  "T-OG-01": {
+    "testFiles": ["test/conformance/mission-v1/worker-delegation.test.ts"]
+  },
+  "T-OG-04": {
+    "testFiles": ["test/unit/mission-protocol/worker-review-gate.test.ts", "test/conformance/mission-v1/worker-delegation.test.ts"]
+  },
+  "T-OG-07": {
+    "testFiles": ["test/unit/mission-protocol/worker-review-gate.test.ts", "test/conformance/mission-v1/worker-delegation.test.ts"]
+  },
+  "T-OG-14": {
+    "testFiles": ["test/unit/mission-protocol/worker-review-gate.test.ts", "test/conformance/mission-v1/worker-delegation.test.ts"]
+  }
+}

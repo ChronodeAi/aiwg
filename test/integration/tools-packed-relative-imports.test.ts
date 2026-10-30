@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { checkPackedRelativeImports } from '../helpers/packed-relative-imports.mjs';
+import { buildCliPackage } from '../../tools/release/build-cli-package.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 
@@ -64,12 +65,14 @@ describe('shipped tools/**, bin/**, and dist/src/** relative imports resolve (#3
 describe('installed user entry points load their shipped implementations (#3077)', () => {
   let scratch: string;
   let installed: string;
+  let cliInstalled: string;
   let consumer: string;
   let env: NodeJS.ProcessEnv;
 
-  function run(entry: string, args: string[], expectedStatus = 0) {
-    const result = spawnSync(process.execPath, [path.join(installed, entry), ...args], {
-      cwd: consumer, env, encoding: 'utf8', timeout: 30_000,
+  function run(entry: string, args: string[], expectedStatus = 0, packageRoot = installed) {
+    const result = spawnSync(process.execPath, [path.join(packageRoot, entry), ...args], {
+      cwd: consumer, env: { ...env, AIWG_CONFIG: path.join(packageRoot, '.smoke-config') },
+      encoding: 'utf8', timeout: 30_000,
     });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr + result.stdout).toBe(expectedStatus);
@@ -77,26 +80,31 @@ describe('installed user entry points load their shipped implementations (#3077)
     return result;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     scratch = mkdtempSync(path.join(tmpdir(), 'aiwg-import-smoke-'));
     installed = path.join(scratch, 'installed');
     consumer = path.join(scratch, 'consumer');
-    mkdirSync(installed);
     mkdirSync(consumer);
     // Only package files, with third-party dependencies shared read-only.
     // Ignore lifecycle scripts: this test checks the current build, offline.
-    const pack = spawnSync('npm', ['pack', '--offline', '--ignore-scripts', '--json',
-      '--cache', path.join(scratch, 'cache'), '--pack-destination', scratch], {
-      cwd: ROOT, encoding: 'utf8', timeout: 120_000, maxBuffer: 64 * 1024 * 1024,
-    });
-    expect(pack.status, pack.stderr).toBe(0);
-    const tarball = path.join(scratch, JSON.parse(pack.stdout)[0].filename);
-    const unpack = spawnSync('tar', ['-xzf', tarball, '-C', installed, '--strip-components=1'], {
-      encoding: 'utf8', timeout: 30_000,
-    });
-    expect(unpack.status, unpack.stderr).toBe(0);
-    symlinkSync(path.join(ROOT, 'node_modules'), path.join(installed, 'node_modules'), 'dir');
-    expect(existsSync(path.join(installed, 'src'))).toBe(false);
+    const stage = path.join(scratch, 'cli-stage');
+    await buildCliPackage({ outputDir: stage });
+    cliInstalled = path.join(scratch, 'cli-installed');
+    for (const [source, destination] of [[ROOT, installed], [stage, cliInstalled]]) {
+      mkdirSync(destination);
+      const pack = spawnSync('npm', ['pack', '--offline', '--ignore-scripts', '--json',
+        '--cache', path.join(scratch, 'cache'), '--pack-destination', scratch], {
+        cwd: source, encoding: 'utf8', timeout: 120_000, maxBuffer: 64 * 1024 * 1024,
+      });
+      expect(pack.status, pack.stderr).toBe(0);
+      const tarball = path.join(scratch, JSON.parse(pack.stdout)[0].filename);
+      const unpack = spawnSync('tar', ['-xzf', tarball, '-C', destination, '--strip-components=1'], {
+        encoding: 'utf8', timeout: 30_000,
+      });
+      expect(unpack.status, unpack.stderr).toBe(0);
+      symlinkSync(path.join(ROOT, 'node_modules'), path.join(destination, 'node_modules'), 'dir');
+      expect(existsSync(path.join(destination, 'src'))).toBe(false);
+    }
     env = {
       PATH: process.env.PATH, HOME: scratch, AIWG_CONFIG: path.join(scratch, 'config'),
       XDG_CONFIG_HOME: path.join(scratch, 'config'), NO_UPDATE_NOTIFIER: '1',
@@ -112,6 +120,38 @@ describe('installed user entry points load their shipped implementations (#3077)
     expect(run('bin/aiwg.mjs', ['mcp', '--help', '--provider', 'omp']).stdout).toContain('omp');
     expect(run('bin/aiwg.mjs', ['remove', 'omp', '--provider', 'omp', '--dry-run']).stdout)
       .toContain('Would remove 0 unchanged OMP-owned files');
+  });
+
+  it.each(['aiwg', '@aiwg/cli'])('%s routes daemon help and status offline (#3758)', name => {
+    const packageRoot = name === 'aiwg' ? installed : cliInstalled;
+    for (const args of [['daemon', '--help'], ['daemon', 'start', '--help']]) {
+      expect(run('bin/aiwg.mjs', args, 0, packageRoot).stdout).toContain('aiwg daemon start');
+    }
+    expect(run('bin/aiwg.mjs', ['daemon', 'status'], 0, packageRoot).stdout).toContain('Daemon: stopped');
+    expect(JSON.parse(run('bin/aiwg.mjs', ['housekeeper', 'status', '--json'], 0, packageRoot).stdout))
+      .toMatchObject({ command: 'housekeeper.status', status: 'ok', mode: 'offline', pid: null });
+    expect(existsSync(path.join(consumer, '.aiwg/daemon.pid'))).toBe(false);
+  });
+
+  it.each(['aiwg', '@aiwg/cli'])('%s loads corpus resolve from its tarball offline (#2326)', name => {
+    const packageRoot = name === 'aiwg' ? installed : cliInstalled;
+    const result = run('bin/aiwg.mjs', ['corpus', 'resolve', '--help'], 0, packageRoot);
+    expect(result.stdout).toContain('aiwg corpus resolve "<title | URL | arXiv ID | DOI | bibliography line>"');
+    expect(result.stdout).toContain('aiwg corpus resolve --from-file refs.txt');
+    // The public router delegates --help to corpus help; importing that owner
+    // eagerly loads resolve-cli and the complete resolver dependency graph.
+    expect(result.stdout).toContain('resolve verifies paper identities, refuses ambiguous matches (exit 2)');
+    expect(result.stderr).toBe('');
+  });
+
+  it('plans rule probes from packed defaults without invoking a model', () => {
+    const previousPath = env.PATH;
+    env.PATH = path.join(scratch, 'no-binaries');
+    try {
+      const result = run('tools/rules/run-rule-probes.mjs', ['--dry-run', '--rule', 'human-authorization', '--n', '1']);
+      expect(JSON.parse(result.stdout).call_count).toBe(3);
+      expect(existsSync(path.join(installed, 'test/fixtures/rule-binding/project/README.md'))).toBe(true);
+    } finally { env.PATH = previousPath; }
   });
 
   it('loads the Docker manager before reporting an unavailable Docker binary', () => {

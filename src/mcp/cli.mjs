@@ -8,6 +8,7 @@
 
 import { startServer, createServer } from './server.mjs';
 import { assertConfigDestination, assertConfigObject, assertProjectCredentials, isPathInsideDir, classifyMcpDestination, projectCredentialRemedy, writeConfigAtomic, writeConfigTransaction } from './config-file.mjs';
+import { replaceServer } from './toml-editor.mjs';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -28,7 +29,7 @@ import {
   prepareClaudePermissions,
   resolveToolFilters,
 } from './tool-filters.mjs';
-import { assertCredentialPolicy, CREDENTIAL_POLICIES, installPolicyCheckedServer, redactCredentialArgs, redactCredentialText, redactCredentialRecord, resolveCredentialPolicy } from './credentials.mjs';
+import { assertCredentialPolicy, CREDENTIAL_POLICIES, credentialReferenceInput, validateCredentialReferences, hasSecretLookingLiterals, installPolicyCheckedServer, redactCredentialArgs, redactCredentialText, redactCredentialRecord, resolveCredentialPolicy } from './credentials.mjs';
 import { getMcpInjectionDefinition } from '../providers/provider-definitions.mjs';
 import { manageOmpMcp } from './omp-config.mjs';
 import { claudeDesktopConfigPath, resolveClaudeInstallTarget, legacyClaudeMigration } from './claude-install.mjs';
@@ -175,13 +176,15 @@ Server Options (for add/update):
   --url <url>          Server URL (for http/sse types)
   --type <type>        Server type: http (default), stdio, sse
   --command <cmd>      Command to run (for stdio type)
-  --args <a1,a2,...>   Command arguments (comma-separated, for stdio)
+  --args <a1,a2,...>   Literal command arguments (visible on argv; prefer env/header references)
   --env <K=V,...>      Environment variables (comma-separated K=V pairs)
   --headers <K=V,...>  HTTP headers (comma-separated K=V pairs)
-  --header-env <K=ENV,...>
-                       Resolve HTTP header values from environment variables
-  --env-from <K=ENV,...>
-                       Resolve stdio server variables from environment variables
+  --header-env <K=SOURCE,...>
+                       HTTP header references: ENV_NAME, file:ABSOLUTE_PATH, store:NAME
+  --env-from <K=SOURCE,...>
+                       Stdio variable references (same sources; repeatable)
+                       File/store require the AIWG runtime client; native configs use ENV_NAME
+                       stdin:STORE_NAME / interactive:STORE_NAME save one value to the OS store
   --description <text> Optional description
 
 Inject Options:
@@ -335,16 +338,14 @@ enabled_tools = [
           if (error.code !== 'ENOENT') throw error;
         }
 
-        // Check if AIWG MCP already configured
-        if (existing.includes('[mcp_servers.aiwg]')) {
+        // Parse before deciding whether to write, including already configured files.
+        const edited = replaceServer(existing, 'aiwg', tomlContent.trim());
+        if (edited.alreadyPresent) {
           console.log('AIWG MCP already configured in ~/.codex/config.toml');
           return true;
         }
 
-        // Append TOML config
-        const updated = existing.trimEnd() + '\n' + tomlContent.trim() + '\n';
-
-        await writeConfigAtomic(configPath, updated, { userScope: true });
+        await writeConfigAtomic(configPath, edited.text, { userScope: true });
         console.log(`MCP configuration appended to: ${configPath}`);
         console.log(`\nTo use AIWG MCP server with Codex:`);
         console.log(`  1. Restart Codex CLI`);
@@ -604,10 +605,11 @@ POSITIONING:
   MCP is optional and provider-agnostic. Baseline AIWG reachability is file
   deployment plus CLI discovery: aiwg discover / aiwg show <type> <name>.
 
-CORE TOOLS (16, always registered):
+CORE TOOLS (17, always registered):
   discover                         Cross-type ranked catalog search
   skill-list / skill-show           Skill catalog and SKILL.md body fetch
   command-list / command-show       CLI command catalog and command spec fetch
+  rule-inventory                    Scoped rule activation and binding inventory
   rule-list / rule-show             Rule catalog and rule body fetch
   agent-list / agent-show           Agent catalog and agent definition fetch
   template-list / template-show      Template catalog and raw template fetch
@@ -701,6 +703,83 @@ function parseKVPairs(str) {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function parseHeaderPairs(str) {
+  if (!str) return undefined;
+  const entries = str.split(',').flatMap(pair => {
+    const delimiter = pair.search(/[=:]/);
+    return delimiter < 0 ? [] : [[pair.slice(0, delimiter).trim(), pair.slice(delimiter + 1).trim()]];
+  });
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+/** Validate every occurrence, retaining the existing comma-separated spelling. */
+function parseCredentialReferences(args, flag) {
+  let result;
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (token === '--') break;
+    if (token !== flag && !token.startsWith(`${flag}=`)) continue;
+    const value = token === flag ? args[++index] : token.slice(flag.length + 1);
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires KEY=ENV_NAME, KEY=file:ABSOLUTE_PATH, or KEY=store:NAME.`);
+    for (const pair of value.split(',')) {
+      const equals = pair.indexOf('=');
+      const key = pair.slice(0, equals).trim();
+      if (equals < 1 || !key) throw new Error(`${flag} requires KEY=ENV_NAME, KEY=file:ABSOLUTE_PATH, or KEY=store:NAME.`);
+      const reference = pair.slice(equals + 1).trim();
+      credentialReferenceInput(reference.replace(/^(?:stdin|interactive):/, 'store:'), flag);
+      result = { ...result, [key]: reference };
+    }
+  }
+  return result;
+}
+
+/** Transient input is saved by the existing raw-value store; registry receives only its name. */
+export async function persistCredentialInputs(server, dependencies) {
+  const inputs = [];
+  for (const field of ['envFrom', 'headerEnv']) {
+    for (const [key, reference] of Object.entries(server[field] || {})) {
+      const match = /^(stdin|interactive):(.+)$/.exec(reference);
+      if (match) {
+        credentialReferenceInput(`store:${match[2]}`, field === 'envFrom' ? '--env-from' : '--header-env');
+        inputs.push({ field, key, source: match[1], name: match[2] });
+      }
+    }
+  }
+  if (inputs.filter(input => input.source === 'stdin').length > 1) {
+    throw new Error('Only one --env-from/--header-env value may use stdin:STORE_NAME per invocation; use file:PATH or store:NAME for additional values.');
+  }
+  const persistent = Object.fromEntries(['envFrom', 'headerEnv'].map(field => [field,
+    Object.fromEntries(Object.entries(server[field] || {}).map(([key, reference]) => [key, reference.replace(/^(?:stdin|interactive):/, 'store:')]))]));
+  validateCredentialReferences(persistent);
+  if (!inputs.length) return;
+  const { resolveSensitiveInput, namedSensitiveStore } = dependencies
+    ?? await import(pathToFileURL(path.join(findOwnPackageRoot(), 'dist', 'src', 'auth', 'sensitive-input.js')).href);
+  // Read/validate all requested inputs before changing the store.
+  const pending = [];
+  for (const input of inputs) {
+    try {
+      const value = await resolveSensitiveInput({ prefix: 'value', [input.source]: true });
+      pending.push({ ...input, value });
+    } catch (error) {
+      const flag = input.field === 'envFrom' ? '--env-from' : '--header-env';
+      const message = error instanceof Error ? error.message : 'MCP credential input failed';
+      throw new Error(message.replace(/--value-(interactive|stdin|file|store|env)(?: <(?:path|name)>)?/g, (_, source) =>
+        `${flag} KEY=${['interactive', 'stdin'].includes(source) ? `${source}:STORE_NAME` : source === 'env' ? 'ENV_NAME' : source === 'file' ? 'file:ABSOLUTE_PATH' : 'store:NAME'}`));
+    }
+  }
+  for (const { field, key, name, value } of pending) {
+    try { await namedSensitiveStore(name).saveSecret(value); }
+    catch { throw new Error('MCP credential input could not be saved to the native store; use --env-from/--header-env with file:PATH or ENV_NAME instead.'); }
+    server[field][key] = `store:${name}`;
+  }
+}
+
+function warnLiteralCredentials(server) {
+  if (hasSecretLookingLiterals(server)) {
+    console.error('Warning: secret-bearing --env/--headers literals are deprecated; argv and saved config expose their values. Use --env-from/--header-env references. See docs/cli/sensitive-values.md.');
+  }
+}
+
 /**
  * Handle `aiwg mcp add <name> [opts]`
  */
@@ -718,8 +797,8 @@ async function handleAdd(args) {
   const argsStr = parseFlag(args, '--args');
   const envStr = parseFlag(args, '--env');
   const headersStr = parseFlag(args, '--headers');
-  const headerEnvStr = parseFlag(args, '--header-env');
-  const envFromStr = parseFlag(args, '--env-from');
+  const headerEnv = parseCredentialReferences(args, '--header-env');
+  const envFrom = parseCredentialReferences(args, '--env-from');
   const description = parseFlag(args, '--description');
 
   if (type === 'stdio' && !command) {
@@ -732,24 +811,28 @@ async function handleAdd(args) {
   }
 
   const registry = new McpServerRegistry();
-  await registry.add({
+  const definition = {
     name,
     type,
     url,
     command,
     args: argsStr ? argsStr.split(',') : undefined,
     env: parseKVPairs(envStr),
-    headers: parseKVPairs(headersStr),
-    headerEnv: parseKVPairs(headerEnvStr),
-    envFrom: parseKVPairs(envFromStr),
+    headers: parseHeaderPairs(headersStr),
+    headerEnv,
+    envFrom,
     description,
-  });
+  };
+  warnLiteralCredentials(definition);
+  if ([...Object.values(definition.envFrom || {}), ...Object.values(definition.headerEnv || {})].some(ref => /^(?:stdin|interactive):/.test(ref)) && await registry.get(name)) throw new Error(`MCP server "${name}" already exists`);
+  await persistCredentialInputs(definition);
+  await registry.add(definition);
 
   console.log(`Added MCP server: ${name}`);
   if (url) console.log(`  URL: ${redactUrlUserinfo(url)}`);
   if (command) console.log(`  Command: ${redactCredentialText(command)}`);
   console.log(`  Type: ${type}`);
-  for (const [key, values] of [['env', parseKVPairs(envStr)], ['headers', parseKVPairs(headersStr)]]) {
+  for (const [key, values] of [['env', definition.env], ['headers', definition.headers]]) {
     if (values) console.log(`  ${key}: ${Object.keys(values).join(', ')}`);
   }
   console.log(`\nUse "aiwg mcp inject --provider <name>" to inject into a provider config.`);
@@ -790,8 +873,8 @@ async function handleUpdate(args) {
   const argsStr = parseFlag(args, '--args');
   const envStr = parseFlag(args, '--env');
   const headersStr = parseFlag(args, '--headers');
-  const headerEnvStr = parseFlag(args, '--header-env');
-  const envFromStr = parseFlag(args, '--env-from');
+  const headerEnv = parseCredentialReferences(args, '--header-env');
+  const envFrom = parseCredentialReferences(args, '--env-from');
   const description = parseFlag(args, '--description');
 
   if (url !== undefined) updates.url = url;
@@ -799,9 +882,9 @@ async function handleUpdate(args) {
   if (command !== undefined) updates.command = command;
   if (argsStr !== undefined) updates.args = argsStr.split(',');
   if (envStr !== undefined) updates.env = parseKVPairs(envStr);
-  if (headersStr !== undefined) updates.headers = parseKVPairs(headersStr);
-  if (headerEnvStr !== undefined) updates.headerEnv = parseKVPairs(headerEnvStr);
-  if (envFromStr !== undefined) updates.envFrom = parseKVPairs(envFromStr);
+  if (headersStr !== undefined) updates.headers = parseHeaderPairs(headersStr);
+  if (headerEnv !== undefined) updates.headerEnv = headerEnv;
+  if (envFrom !== undefined) updates.envFrom = envFrom;
   if (description !== undefined) updates.description = description;
 
   if (Object.keys(updates).length === 0) {
@@ -810,6 +893,9 @@ async function handleUpdate(args) {
   }
 
   const registry = new McpServerRegistry();
+  warnLiteralCredentials(updates);
+  if ([...Object.values(updates.envFrom || {}), ...Object.values(updates.headerEnv || {})].some(ref => /^(?:stdin|interactive):/.test(ref)) && !(await registry.get(name))) throw new Error(`MCP server "${name}" not found`);
+  await persistCredentialInputs(updates);
   await registry.update(name, updates);
   console.log(`Updated MCP server: ${name}`);
   for (const [key, value] of Object.entries(updates)) {
@@ -1124,7 +1210,7 @@ Usage:
   aiwg mcp profile import <file>
   aiwg mcp profile export <name> [--out <file>]
   aiwg mcp profile init-presets
-  aiwg mcp profile login <name> [--api-key-stdin | --api-key-file <path> | --api-key-env <ENV_VAR_NAME>]
+  aiwg mcp profile login <name> [--api-key-interactive | --api-key-stdin | --api-key-file <path> | --api-key-store <name> | --api-key-env <ENV_VAR_NAME>]
 
 Profiles let you define named subsets of your registered MCP servers:
   aiwg mcp profile add dev --servers git-gitea,memory-fortemi --description "Dev work"
@@ -1162,10 +1248,10 @@ Logging in to a Codex profile's isolated runtime home (#3062):
                                                      $OPENAI_KEY; visible to every other
                                                      child process this shell starts
   In every case the key reaches codex over stdin only; it never appears on
-  argv, in logs, or in error messages. Exactly one of the three may be
-  given. Without a terminal and without any of the three, this errors
-  naming all three. See "Supplying credentials safely" in the docs:
-  docs/mcp/codex-profiles.md#supplying-credentials-safely
+  argv, in logs, or in error messages. Use --api-key-store <name> for a named
+  OS-store entry, or --api-key-interactive for hidden terminal entry. Give
+  sources in preference order; a missing source without a terminal errors naming the options.
+  See docs/cli/sensitive-values.md for exposure details and manager examples.
 `);
 }
 
@@ -1419,59 +1505,18 @@ async function handleProfileInitPresets() {
   }
 }
 
-/**
- * Read all of stdin and return it as one trimmed string (go/no-go review,
- * blocker 1C's `--api-key-stdin`). Mirrors `src/cli/handlers/decision.ts`'s
- * own private `readStdin()` + `.trim()` for `--token-stdin` — duplicated
- * rather than imported for the same source/dist reason documented on
- * `requireFlagValue` above (this file runs both compiled and directly from
- * source). Input is expected to be a single line; a value containing
- * additional lines is not specially rejected, matching that precedent.
- */
-async function readStdinAll() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  return Buffer.concat(chunks).toString('utf8');
-}
-
-/**
- * Handle `aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME> |
- * --api-key-stdin | --api-key-file <path>]` (#3062, #3069, go/no-go review
- * blocker 1C).
- *
- * Wires `loginInProfile()` (src/mcp/adapters/codex-runtime.ts), which
- * already implements the full headless-safe behavior this command needs:
- * with a terminal attached and none of the three given, it runs the
- * interactive `codex login` OAuth flow. Exactly one credential source may
- * be given; more than one is a usage error naming the flags given. In
- * every case the key reaches `loginInProfile()` only as an in-memory value
- * (or, for `--api-key-env`, a variable *name*) — never on argv, in logs, or
- * in an error message — and travels to `codex` only on its stdin (see
- * `spawnCodexLoginWithApiKey()`'s own doc comment). Without a terminal and
- * without any of the three, `loginInProfile()` itself refuses, naming all
- * three flags.
- *
- * `--api-key-env` reads the key from that named environment variable, as
- * before. `--api-key-stdin` reads one line from this process's own stdin
- * (refusing if stdin is a terminal, or if it is empty) — the least
- * observable source, since the key then never exists in any environment or
- * on any command line. `--api-key-file <path>` reads the key from a file
- * that `readApiKeyFromFile()` requires to be a non-symlink, single-hard-
- * link, regular file owned by the current user with no group/other
- * permission bits on POSIX — refused otherwise, without ever printing the
- * path's contents. `--api-key-env` remains the least preferred of the
- * three (see "Supplying credentials safely" in the docs): the named
- * variable is visible to every other child process this shell starts.
- */
+/** Standard sensitive input; the Codex adapter still receives only an in-memory key. */
 async function handleProfileLogin(args) {
   let apiKeyEnv;
   let apiKeyFilePath;
+  let apiKeyStore;
   try {
     // rejectEmpty: an explicitly-given-but-empty variable name/path can
     // never name a real environment variable or file (#3062 second review,
     // finding 4; go/no-go review blocker 1C).
     apiKeyEnv = requireFlagValue(args, { rejectEmpty: true }, '--api-key-env');
     apiKeyFilePath = requireFlagValue(args, { rejectEmpty: true }, '--api-key-file');
+    apiKeyStore = requireFlagValue(args, { rejectEmpty: true }, '--api-key-store');
   } catch (err) {
     if (err instanceof MissingFlagValueError) {
       console.error(`${err.message}.`);
@@ -1480,16 +1525,6 @@ async function handleProfileLogin(args) {
     throw err;
   }
   const useStdin = args.includes('--api-key-stdin');
-
-  const sourcesGiven = [
-    apiKeyEnv !== undefined ? '--api-key-env' : null,
-    useStdin ? '--api-key-stdin' : null,
-    apiKeyFilePath !== undefined ? '--api-key-file' : null,
-  ].filter(Boolean);
-  if (sourcesGiven.length > 1) {
-    console.error(`Only one credential source may be given; got ${sourcesGiven.join(', ')}.`);
-    process.exit(2);
-  }
 
   // Skip --api-key-env's/--api-key-file's own value when hunting for the
   // positional profile name, so e.g. `login --api-key-env FOO` (missing
@@ -1500,46 +1535,24 @@ async function handleProfileLogin(args) {
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === '--') break;
-    if (token === '--api-key-env' || token === '--api-key-file') { i += 1; continue; }
+    if (token === '--api-key-env' || token === '--api-key-file' || token === '--api-key-store') { i += 1; continue; }
     if (!token.startsWith('--')) positional.push(token);
   }
   const name = positional[0];
   if (!name) {
-    console.error('Usage: aiwg mcp profile login <name> [--api-key-env <ENV_VAR_NAME> | --api-key-stdin | --api-key-file <path>]');
+    console.error('Usage: aiwg mcp profile login <name> [--api-key-interactive | --api-key-stdin | --api-key-file <path> | --api-key-store <name> | --api-key-env <ENV_VAR_NAME>]');
     process.exit(1);
   }
 
-  let apiKey;
-  if (useStdin) {
-    if (process.stdin.isTTY) {
-      console.error(
-        '--api-key-stdin requires piped input, not a terminal; run ' +
-        `\`aiwg mcp profile login ${name}\` with no credential flag for the interactive login instead.`,
-      );
-      process.exit(2);
-    }
-    apiKey = (await readStdinAll()).trim();
-    if (!apiKey) {
-      console.error('--api-key-stdin received no key (stdin was empty).');
-      process.exit(2);
-    }
-  } else if (apiKeyFilePath !== undefined) {
-    const { readApiKeyFromFile } = await loadCodexRuntimeAdapter();
-    try {
-      apiKey = await readApiKeyFromFile(apiKeyFilePath);
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err));
-      process.exit(2);
-    }
-    if (!apiKey) {
-      console.error(`--api-key-file "${apiKeyFilePath}" is empty.`);
-      process.exit(2);
-    }
-  }
-
   try {
+    await loadCodexRuntimeAdapter();
+    const { resolveSensitiveInput } = await import(pathToFileURL(path.join(findOwnPackageRoot(), 'dist', 'src', 'auth', 'sensitive-input.js')).href);
+    const apiKey = await resolveSensitiveInput({
+      prefix: 'api-key', stdin: useStdin, file: apiKeyFilePath, store: apiKeyStore,
+      env: apiKeyEnv, interactive: args.includes('--api-key-interactive'),
+    });
     const { loginInProfile } = await loadCodexRuntimeAdapter();
-    const loginOptions = apiKey !== undefined ? { apiKey } : apiKeyEnv ? { apiKeyEnv } : {};
+    const loginOptions = { apiKey };
     await loginInProfile(name, loginOptions);
     console.log(`\nLogged in to profile "${name}".`);
   } catch (err) {

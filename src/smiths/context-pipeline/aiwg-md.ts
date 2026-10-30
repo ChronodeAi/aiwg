@@ -1,23 +1,10 @@
-/**
- * AIWG.md generator — content-rich CLAUDE.md companion for non-Claude providers.
- *
- * Per ADR-1 §0.5: AIWG.md at project root has the same content shape as
- * CLAUDE.md. Both files `@`-reference the project's `.aiwg/AIWG.md` (the
- * source of truth). Non-Claude providers reach AIWG.md transitively via the
- * provider startup adapters. WORKSPACE.md and AIWG.md contain
- * identical framework prose; they exist as two named files because Claude
- * Code looks for `CLAUDE.md` and the seven AGENTS.md providers reach
- * AIWG.md via the AGENTS.md hook-up.
- *
- * Generation strategy: read the project's CLAUDE.md (which already exists in
- * a properly-configured repo) and emit AIWG.md as the same content with the
- * AIWG signature comment in place. If CLAUDE.md is absent (early-init repos),
- * fall back to a minimal stub that points readers at `.aiwg/AIWG.md`.
- */
-
+// Render the single generated root framework context and fold in optional operator notes.
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import { projectControlPath } from '../../config/project-artifacts.js';
+import { readAiwgOperatorNotes } from './finalization.js';
+import { buildClaudeHookBlock, CLAUDE_HOOK_START, CLAUDE_HOOK_END } from './claude-hook.js';
+import { dedupeProviderBootstrap } from './workspace-context.js';
+import { dominantLineEnding, withLineEnding } from './line-endings.js';
 import { buildParallelismSection, replaceOrAppendParallelismBlock } from './parallelism-section.js';
 import { buildContextFinalizationBlock, replaceOrAppendFinalizationBlock } from './finalization.js';
 import {
@@ -27,18 +14,6 @@ import {
 
 const AIWG_SIGNATURE_COMMENT = '<!-- aiwg-managed -->';
 
-/**
- * Build the AIWG.md content for emission at project root.
- *
- * - When CLAUDE.md exists at project root: copy its content with the AIWG
- *   signature comment inserted in the second line so future runs of the
- *   generator know the file is AIWG-managed.
- * - When CLAUDE.md does not exist: emit a minimal stub directing readers to
- *   the project's `.aiwg/AIWG.md` source.
- *
- * Returns the rendered content as a string. Caller is responsible for the
- * atomic-write emission and the operator-claimed-file detection.
- */
 export async function buildAiwgMdContent(
   projectPath: string,
   stagedClaudeMdContent?: string | null,
@@ -64,10 +39,28 @@ export async function buildAiwgMdContent(
     path.join(projectPath, 'AIWG.md'),
   );
   const externalLinksSection = await buildExternalLinksSection(projectPath);
+  const { notes } = await readAiwgOperatorNotes(projectPath);
+  const foldNotes = (content: string): string => {
+    content = content.replace(/<!-- AIWG:operator-notes:start -->[\s\S]*?<!-- AIWG:operator-notes:end -->\r?\n?/g, '');
+    return notes.trim() ? `${content.trimEnd()}\n\n<!-- AIWG:operator-notes:start -->\n${notes}\n<!-- AIWG:operator-notes:end -->\n` : content;
+  };
 
   if (claudeMdContent) {
     // Insert the AIWG signature comment as the second line.
     // Top line is typically `# AIWG` or `# Project` heading; preserve it.
+    // Regenerate may mirror CLAUDE.md before its hook updater runs. Normalize
+    // that managed block here too so legacy duplicate policy never reaches
+    // AIWG.md, even on the first refresh. Operator content stays untouched.
+    claudeMdContent = dedupeProviderBootstrap(claudeMdContent);
+    // Each provider startup owns core and hooks; mirroring them would load a
+    // second copy through the shared framework companion.
+    claudeMdContent = claudeMdContent.replace(/<!-- AIWG:(rule-core|rule-startup|rule-hook-[\w-]+):start -->[\s\S]*?<!-- AIWG:\1:end -->\r?\n?/g, '');
+    const start = claudeMdContent.indexOf(CLAUDE_HOOK_START);
+    const end = claudeMdContent.indexOf(CLAUDE_HOOK_END, start);
+    if (start >= 0 && end >= start) {
+      const hook = withLineEnding(buildClaudeHookBlock(), dominantLineEnding(claudeMdContent));
+      claudeMdContent = claudeMdContent.slice(0, start) + hook + claudeMdContent.slice(end + CLAUDE_HOOK_END.length);
+    }
     const lines = claudeMdContent.split('\n');
 
     // #1268: strip `@AIWG.md` self-include directives. CLAUDE.md uses
@@ -75,7 +68,22 @@ export async function buildAiwgMdContent(
     // context, so the directive becomes a self-reference when copied through.
     // Match the directive when it appears on its own line (possibly indented).
     const SELF_INCLUDE_PATTERN = /^\s*@AIWG\.md\s*$/;
-    const filtered = lines.filter((line) => !SELF_INCLUDE_PATTERN.test(line));
+    // #3451: CLAUDE.md already `@`-imports WORKSPACE.md; a second `@` path to
+    // the same file would load it twice, so AIWG.md refers to it in plain text.
+    const CONFIG_IMPORT_PATTERN = /^\s*@\S*aiwg\.config\s*$/;
+    const WORKSPACE_IMPORT_PATTERN = /^\s*@(?:\.\.\/)?WORKSPACE\.md\s*$/;
+    const filtered = lines
+      .filter((line) => !SELF_INCLUDE_PATTERN.test(line) && !/^\s*@(?:\.\/)?\.aiwg\/AIWG\.md\s*$/.test(line))
+      .map((line) => {
+        if (WORKSPACE_IMPORT_PATTERN.test(line)) {
+          return 'WORKSPACE.md is the canonical project context (loaded by CLAUDE.md; read it first if your harness did not).';
+        }
+        // Legacy CLAUDE.md files may still `@`-import the raw JSON config.
+        if (CONFIG_IMPORT_PATTERN.test(line)) {
+          return 'Project configuration: `.aiwg/aiwg.config` (not auto-loaded; run `aiwg config show --project` to view it).';
+        }
+        return line;
+      });
 
     const firstLine = filtered[0] ?? '';
     const rest = filtered.slice(1);
@@ -87,31 +95,23 @@ export async function buildAiwgMdContent(
       : [
           firstLine,
           AIWG_SIGNATURE_COMMENT,
-          '<!-- AIWG.md is the CLAUDE.md companion for non-Claude providers; same content. -->',
+          '<!-- Generated framework context shared by all providers. -->',
           ...rest,
         ].join('\n');
 
     const withParallelism = replaceOrAppendParallelismBlock(baseContent, parallelismSection);
     const withFinalization = replaceOrAppendFinalizationBlock(withParallelism, finalizationBlock);
-    return replaceOrAppendExternalLinksBlock(withFinalization, externalLinksSection);
+    return foldNotes(replaceOrAppendExternalLinksBlock(withFinalization, externalLinksSection));
   }
 
-  // Fallback stub.
-  const normalizedPath = projectControlPath(projectPath, 'AIWG.md');
-  const normalizedRelative = path.relative(projectPath, normalizedPath).replace(/\\/g, '/');
-  const normalizedLink = normalizedRelative.startsWith('.') ? normalizedRelative : `./${normalizedRelative}`;
+  // A fresh non-Claude project has the same complete framework context.
   const stub = [
-    '# AIWG.md',
-    AIWG_SIGNATURE_COMMENT,
-    '<!-- CLAUDE.md companion for non-Claude providers. -->',
-    '',
-    'CLAUDE.md was not found at project root. AIWG.md normally mirrors that content.',
-    `See [${normalizedRelative}](${normalizedLink}) for the project framework context.`,
-    '',
+    '# AIWG.md', AIWG_SIGNATURE_COMMENT,
+    '<!-- Generated framework context. Project/operator context belongs in WORKSPACE.md. -->', '',
   ].join('\n');
   const withParallelism = replaceOrAppendParallelismBlock(stub, parallelismSection);
   const withFinalization = replaceOrAppendFinalizationBlock(withParallelism, finalizationBlock);
-  return replaceOrAppendExternalLinksBlock(withFinalization, externalLinksSection);
+  return foldNotes(replaceOrAppendExternalLinksBlock(withFinalization, externalLinksSection));
 }
 
 /**
@@ -121,6 +121,6 @@ export async function buildAiwgMdContent(
  * AIWG.local.md operator overrides, etc.) have a single entry point in the
  * surface API without callers reaching into the implementation.
  */
-export async function generateAiwgMd(projectPath: string): Promise<string> {
-  return buildAiwgMdContent(projectPath);
+export async function generateAiwgMd(projectPath: string, stagedClaudeMdContent?: string | null): Promise<string> {
+  return buildAiwgMdContent(projectPath, stagedClaudeMdContent);
 }

@@ -142,3 +142,68 @@ explicit and documented. Addon/extension [bundle
 providers](gate-providers.md) load only with an explicit opt-in and a
 verified code digest plus review attestation. D29 is the first migrated study (absolute-screening pack, HOLD ceiling);
 live criteria remain pending.
+
+## D29 scorer-pin disposition (#3730, 2026-10-28)
+
+The v6, v7 and v8 public synthetic demos were re-frozen because #3730 routes
+D29 through the verified holdout entry point. The scorer pin changed from
+`sha256:5f7d99de6c72c8ef6eb0dcf686e75c7e11990db2d638b08c5e673e4da0ddfc47` to
+`sha256:90f899c3e6c02ae1107fef81ba2ff3992a5c3377a15c1e08ae2fb3e1b144fa49` in all three versions.
+It is the SHA-256 of the current `tools/decision/studies/d29.mjs` bytes for
+**every seed**. That entry embeds checked SHA-256 pins for the two modules extracted from it,
+`d29-gates.mjs` and `d29-provenance.mjs`. Other modules on the scoring path
+(the shortcut audits, calibration, generators and `src/decision/sdlc-screening.ts`)
+are not covered by this pin; the shortcut audits carry their own per-version
+`shortcutAudit.sourceDigest`.
+The exact current-byte assertion in `V8-07` remains enforced.
+
+Regeneration used the existing `prepare('d29-study-v6' | 'd29-study-v7' |
+'d29-study-v8')` and `dryRun(prepared)` exports from that study, the same
+path exercised by `V6-04`/`V6-05`, `V7-06` and `V8-07`. It made zero provider
+calls. No corpus, gold, labels, analysis, memberships or review content changed.
+Only these fields changed: `preregistration.json:/scorerDigest`,
+`approval-template.json:/preregistrationDigest`, and
+`dry-run.json:/scorerDigest,/preregistrationDigest,/approvalTemplateDigest`.
+The fixture manifest (`test/fixtures/decision/qualification-fixtures-v1.json`)
+changes only the nine corresponding file-byte digests.
+
+For each file below, all JSON content outside those explicitly listed fields
+compared equal before and after regeneration. `Byte-identical` also means the
+full raw-file SHA-256 below is equal before and after. Paths are relative to
+`test/fixtures/decision/`; SHA-256 values omit the `sha256:` prefix.
+
+| Fixture file | Comparison | Unchanged file SHA-256 |
+|---|---|---|
+| `d29-synthetic-v6/analysis.json` | Byte-identical | `105994561813bf651bef885604e96841219b5e00a9913eae683f84feec453eb6` |
+| `d29-synthetic-v6/approval-template.json` | Only `/preregistrationDigest`; remainder equal | — |
+| `d29-synthetic-v6/corpus.json` | Byte-identical | `2a4ad43416dc3448e56d08287fec7e75b77bc7cbfce396f6308df7347fcae06d` |
+| `d29-synthetic-v6/dry-run.json` | Only `/approvalTemplateDigest`, `/preregistrationDigest`, `/scorerDigest`; remainder equal | — |
+| `d29-synthetic-v6/gold.json` | Byte-identical | `a81b0c8e25c670b48cb6e0a53fefa8073e7445138a29821b4775c85c8839e93b` |
+| `d29-synthetic-v6/preregistration.json` | Only `/scorerDigest`; remainder equal | — |
+| `d29-synthetic-v6/reviews.json` | Byte-identical | `53cddbb8a165cf8da2c391b2ecc2b11678c193a47bb4b262d6599a4d701b1ced` |
+| `d29-synthetic-v7/analysis.json` | Byte-identical | `ddfee68203c5320aaca9651cdf1497c75cd4ba61c116a4c9ead6ef6fa1559b9d` |
+| `d29-synthetic-v7/approval-template.json` | Only `/preregistrationDigest`; remainder equal | — |
+| `d29-synthetic-v7/dry-run.json` | Only `/approvalTemplateDigest`, `/preregistrationDigest`, `/scorerDigest`; remainder equal | — |
+| `d29-synthetic-v7/preregistration.json` | Only `/scorerDigest`; remainder equal | — |
+| `d29-synthetic-v7/reviews.json` | Byte-identical | `9b5abd4311cb0aaf62e0691958d194516542310bab72944e9fa43fc2af57ef5f` |
+| `d29-synthetic-v8/analysis.json` | Byte-identical | `3bd663e4d9fd33f6e8c70c409e496c872a1b5dc10b940e4674bb0b66370cfdff` |
+| `d29-synthetic-v8/approval-template.json` | Only `/preregistrationDigest`; remainder equal | — |
+| `d29-synthetic-v8/dry-run.json` | Only `/approvalTemplateDigest`, `/preregistrationDigest`, `/scorerDigest`; remainder equal | — |
+| `d29-synthetic-v8/preregistration.json` | Only `/scorerDigest`; remainder equal | — |
+| `d29-synthetic-v8/reviews.json` | Byte-identical | `0c1f3dc4d78b94d5d9dd1ee2f89f6402f056d653b6792b56020ddb68a7d887e9` |
+
+Full regenerated corpus and gold rows are intentionally not added to the slim
+fixtures. Their canonical digests reproduced the **pre-amendment** dry-run pins
+below; gold includes every label. Analysis likewise reproduced its old pin
+and is also byte-identical on disk, as shown above.
+
+| Version | Unchanged corpus digest | Unchanged gold/labels digest |
+|---|---|---|
+| v6 | `sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549` | `sha256:cc96a3359b53cab0b20d083fb9fba11ac8fd6d3c7e06c4e943e3b9925536443e` |
+| v7 | `sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de` | `sha256:b175f64db211e5710c3fff11efa479f4797cf631a96913f3a65da366bd70044e` |
+| v8 | `sha256:ecf148eaea5e7da9e65e481698e12b7d3ecbc431ded55e61cb2fb97a5f285dcf` | `sha256:bcad081be4d60051190c30f7c8275c73a638f4bd2766bcdeadb276ad6f099306` |
+
+The v6 `corpus.json` and `gold.json` slim headers retain every historical pin.
+The v7/v8 corpus and gold remain regenerated from their unchanged generators;
+the full-content digest comparisons above cover their absent full fixtures.
+Older v2/v3/v4 fixtures remain byte-identical.

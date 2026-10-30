@@ -108,11 +108,75 @@ and the unit gate checks that a fresh run reproduces their deterministic
 observations. Regenerate them with
 `AIWG_DECISION_LOAD_EVIDENCE=write npx vitest run --config config/vitest.config.js test/unit/decision/scheduler-load-harness.test.ts`.
 
-`decisionLoadEvidenceFlags` is the producer for gate G5. Offline
-fake-provider records set only `load-manifest-offline-passed`. G5's
-`load-manifest-qualified` flag requires a passing `staged-provider` record
-bound to its own manifest, which is the staged live run tracked separately.
-Offline evidence therefore never promotes G5.
+`decisionLoadEvidenceFlags` retains the historical offline result handling.
+Offline fake-provider records set only `load-manifest-offline-passed`.
+Offline evidence never promotes G5.
+
+## Staged-provider v3 harness
+
+[`load-manifest.v3.json`](./load-manifest.v3.json) extends the existing harness
+with a staged-provider profile; v1 and v2 remain readable. The v3 schema pins
+per-scope rpm, tokens/second, invocation cost, retained work, queue bounds,
+principal reservations, and share caps. Its budget requires explicit `maxUsd`,
+`stopAtFraction: 0.8`, `maxCalls`, `maxTokens`, and `maxWallClockSeconds`.
+Missing USD allocation fails closed.
+
+`runDecisionStagedLoad` extends the arrival/controller driver in
+`src/decision/qualification/load.ts`. The entry point is
+`tools/decision/load-qualification.mjs`, with required `--manifest`, `--commit`,
+`--network-path`, and `--output` arguments. It uses the deterministic fake
+backend by default. Only explicit `--live` selects the existing Jev adapter,
+and that requires a caller-supplied runtime environment credential (default
+variable `AIWG_JEV_LOAD_API_KEY`, selectable with `--credential-env`). The
+runner never reads credential files. It reads existing sourced
+`decision.ask.cost` pricing from project configuration without refreshing it.
+
+The driver releases seeded burst, spike, 900-second soak, and noisy-neighbour
+arrivals through real admission controls. The budget guard conservatively
+reserves calls, tokens, and sourced USD before dispatch, including retries;
+unknown actual usage does not refund reservations. Provider-reported usage
+is retained separately. It stops at 80% of `maxUsd`, the call/token/wall-clock
+ceilings, breaker-open and 429-storm duration bounds, retry amplification above
+1.25, or any cross-principal quota violation. Invalid or exceeded reservations,
+driver errors, and source drift also produce explicit stopped records.
+
+Fixed-interval process samples record RSS, heap, and CPU using
+`process.memoryUsage()` and `process.resourceUsage()`. Admission receipts
+retain queue-wait distributions, maxima, retry counts, cancellation latency,
+and quiet-principal observations. Shadow and canary stages use the new
+`profileVersion`; rollback restores the previous profile at a run boundary,
+preserving receipts, breaker transitions, and profile history even after a
+stop. The v3 manifest samples every 1,000 ms and caps provider concurrency at
+3, below the documented eight-call point. Actual sample timestamps are
+compared with the 2,000 ms maximum-gap bound, allowing ordinary timer jitter
+without accepting missing measurement coverage.
+
+Each v3 run produces a digest-bound `decision-load-result/v2` artifact of kind
+`load-manifest-qualified`, including manifest bytes, source commit, host class,
+network path, pricing snapshot, stop reason, and recomputable comparisons
+against the manifest bounds. G5 consumes and verifies the artifact rather
+than trusting a boolean flag. It requires live execution, a complete passing
+rollout, matching manifest/result digests and exact commit, and a clean source
+tree. Source checks run before and after execution. Fake-provider and stopped
+records cannot qualify G5.
+
+`reservedUsage` records conservative calls, tokens, and USD used by admission
+and budget comparisons. `reportedUsage` records calls, provider-reported input,
+output and total tokens, and USD computed from the retained sourced split
+pricing. A missing token count makes that aggregate and total cost `null`;
+unknown usage is never replaced with a reservation. A different served model
+without matching sourced pricing also leaves reported USD unknown. Receipts
+with usable reports still contribute to the explicitly labeled `knownSubtotal`;
+`incompleteCalls` counts calls missing tokens or applicable pricing. Receipts
+retain `servedModel` and `requestId` when returned. The CLI summary shows both
+usage totals. Historical v1 staged records retain their original `usage`
+reservation field, schema and digest and remain verifiable.
+
+The live run remains **DRAFT, awaiting operator approval**. The
+[preregistration](./load-live-preregistration.md) records the proposed command,
+noodle host restrictions, USD 5 combined ceiling (USD 4 stop), approval fields,
+rollback, and external D11 evidence routing. Building and testing this harness
+offline does not establish live provider qualification.
 
 ## Test identifiers
 

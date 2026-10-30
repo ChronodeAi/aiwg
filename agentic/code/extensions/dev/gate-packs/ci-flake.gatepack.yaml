@@ -1,0 +1,51 @@
+apiVersion: gates.aiwg.io/v1alpha1
+kind: GatePack
+metadata:
+  id: aiwg:dev/ci-flake
+  version: 1.0.0
+  description: Flake-gate policy for the tier-3 integration suite (#1174 cycle 3). Each of the N consecutive runs contributes one trial to the pooled observation and a non-zero exit is an event; zero failed runs are allowed, so any failed run rolls back.
+spec:
+  parameters:
+    requiredRuns:
+      type: count
+      direction: higher-is-stricter
+      default: 50
+      description: Consecutive integration-suite runs required before the gate may pass.
+    maxFailedRuns:
+      type: count
+      direction: lower-is-stricter
+      default: 0
+      description: Maximum failed runs tolerated across the pooled observation; any failed run rolls back.
+  metrics:
+    false-ready:
+      provider: test.proportion/v1
+      kind: proportion
+      description: Failed integration runs as events over per-run trials (one trial per consecutive run).
+  gates:
+    - id: run-count-minimum
+      kind: minimum-n
+      description: Minimum consecutive runs backing the flake verdict.
+      metric:
+        provider: test.proportion/v1
+        name: false-ready
+      minimumN:
+        param: requiredRuns
+      scope:
+        mode: all
+      direction: higher-is-stricter
+      onFail: HOLD
+    - id: flake-failures
+      kind: count-max
+      description: Zero failed runs tolerated; any failed run rolls back.
+      metric:
+        provider: test.proportion/v1
+        name: false-ready
+      threshold:
+        op: lte
+        param: maxFailedRuns
+      scope:
+        mode: all
+      direction: lower-is-stricter
+      onFail: ROLLBACK
+  combine:
+    rule: max-severity

@@ -1,3 +1,4 @@
+import { sdlcDeploymentRules, sourceRules } from '../unit/providers/rule-source-expectations.js';
 import { mkdtempSync } from '../helpers/temp-dir.js';
 /**
  * Provider File Locations Integration Tests
@@ -19,7 +20,7 @@ import { mkdtempSync } from '../helpers/temp-dir.js';
  * - Windsurf: .windsurf/workflows/, .windsurf/skills/, .windsurf/rules/, .agents/skills/ + AGENTS.md (aggregated agents), .windsurfrules (deprecated stub)
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import fs from 'fs/promises';
 import { rmSync } from 'fs';
 import path from 'path';
@@ -27,6 +28,9 @@ import os from 'os';
 import { execFileSync, spawnSync } from 'child_process';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
+const activationRules = sdlcDeploymentRules(REPO_ROOT);
+const uninstalledRules = sourceRules(REPO_ROOT, 'addons').filter(rule =>
+  !rule.structural && !activationRules.some(selected => selected.file === rule.file));
 function canInitGit(): boolean {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-provider-git-check-'));
   try {
@@ -230,19 +234,18 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
     let projectDir: string;
     let homeDir: string;
 
-    beforeEach(async () => {
+    beforeAll(async () => {
       const env = await createTestEnv(providerName);
       projectDir = env.projectDir;
       homeDir = env.homeDir;
-    });
+      runDeploy(config.name, projectDir, homeDir);
+    }, 75_000);
 
-    afterEach(async () => {
+    afterAll(async () => {
       await cleanupTestEnv(projectDir, homeDir);
     });
 
     it(`deploys to correct project directories`, async () => {
-      runDeploy(config.name, projectDir, homeDir);
-
       for (const expectedPath of config.projectPaths) {
         const fullPath = path.join(projectDir, expectedPath);
         const exists = await pathExists(fullPath);
@@ -252,8 +255,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.homePaths && config.homePaths.length > 0) {
       it(`deploys to correct home directories`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         for (const expectedPath of config.homePaths!) {
           const resolvedPath = expectedPath.replace('~/', '');
           const fullPath = path.join(homeDir, resolvedPath);
@@ -265,8 +266,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.rootFiles && config.rootFiles.length > 0) {
       it(`creates correct root files`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         for (const rootFile of config.rootFiles!) {
           const fullPath = path.join(projectDir, rootFile);
           const exists = await pathExists(fullPath);
@@ -277,8 +276,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.forbiddenPaths && config.forbiddenPaths.length > 0) {
       it(`does NOT create forbidden paths`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         for (const forbiddenPath of config.forbiddenPaths!) {
           const fullPath = path.join(projectDir, forbiddenPath);
           const exists = await pathExists(fullPath);
@@ -289,8 +286,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
 
     if (config.minArtifacts > 0) {
       it(`deploys at least ${config.minArtifacts} artifacts`, async () => {
-        runDeploy(config.name, projectDir, homeDir);
-
         let totalArtifacts = 0;
 
         for (const projectPath of config.projectPaths) {
@@ -308,8 +303,6 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
     }
 
     it(`does NOT place unexpected files in project root`, async () => {
-      runDeploy(config.name, projectDir, homeDir);
-
       const rootContents = await fs.readdir(projectDir);
 
       // Filter to only unexpected items
@@ -344,37 +337,35 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
   });
 
   describe('Provider Isolation', () => {
-    it('each provider creates only its own directories', async () => {
-      const providerDirs: Record<string, string[]> = {
-        claude: ['.claude'],
-        codex: ['.codex', '.agents'],  // .agents/skills/ cross-agent compat (#766)
-        factory: ['.factory'],
-        copilot: ['.github', '.agents'],   // PUW-012 #1113
-        cursor: ['.cursor'],
-        opencode: ['.opencode', '.agents'], // PUW-012 #1113
-        warp: ['.warp', '.agents'],  // Discrete files + WARP.md aggregated + .agents/skills/ cross-agent compat (#771)
-        windsurf: ['.windsurf', '.windsurfrules', '.agents'],  // .agents/skills/ cross-agent compat (#576)
-      };
+    const providerDirs: Record<string, string[]> = {
+      claude: ['.claude'],
+      codex: ['.codex', '.agents'],  // .agents/skills/ cross-agent compat (#766)
+      factory: ['.factory'],
+      copilot: ['.github', '.agents'],   // PUW-012 #1113
+      cursor: ['.cursor'],
+      opencode: ['.opencode', '.agents'], // PUW-012 #1113
+      warp: ['.warp', '.agents'],  // Discrete files + WARP.md aggregated + .agents/skills/ cross-agent compat (#771)
+      windsurf: ['.windsurf', '.windsurfrules', '.agents'],  // .agents/skills/ cross-agent compat (#576)
+    };
 
-      for (const [provider, expectedDirs] of Object.entries(providerDirs)) {
-        const { projectDir, homeDir } = await createTestEnv(`isolation-${provider}`);
+    it.each(Object.entries(providerDirs))('%s creates only its own directories', async (provider, expectedDirs) => {
+      const { projectDir, homeDir } = await createTestEnv(`isolation-${provider}`);
 
-        try {
-          runDeploy(provider, projectDir, homeDir);
+      try {
+        runDeploy(provider, projectDir, homeDir);
 
-          const rootContents = await fs.readdir(projectDir);
-          const createdDirs = rootContents.filter(item =>
-            item.startsWith('.') && !['.',  '.git', '.aiwg'].includes(item)
-          );
+        const rootContents = await fs.readdir(projectDir);
+        const createdDirs = rootContents.filter(item =>
+          item.startsWith('.') && !['.',  '.git', '.aiwg'].includes(item)
+        );
 
-          // Should only have expected provider-specific dirs
-          for (const dir of createdDirs) {
-            const isExpected = expectedDirs.some(ed => dir === ed);
-            expect(isExpected, `${provider} created unexpected directory: ${dir}`).toBe(true);
-          }
-        } finally {
-          await cleanupTestEnv(projectDir, homeDir);
+        // Should only have expected provider-specific dirs
+        for (const dir of createdDirs) {
+          const isExpected = expectedDirs.some(ed => dir === ed);
+          expect(isExpected, `${provider} created unexpected directory: ${dir}`).toBe(true);
         }
+      } finally {
+        await cleanupTestEnv(projectDir, homeDir);
       }
     });
   });
@@ -392,24 +383,18 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
           USERPROFILE: homeDir,
         };
 
-        // Run aiwg use with provider. This is the only call in this file that
-        // goes through the full bin/aiwg.mjs router → tsx cold-compile path
-        // (other calls here invoke deploy-agents.mjs directly, or git); under
-        // CPU contention from adjacent heavy integration suites (use-all-
-        // deployment.test.ts, mixed-addon-deployment.test.ts) on a
-        // resource-constrained CI runner, 60s was measured too tight and
-        // produced a deterministic spawnSync ETIMEDOUT (3/3 GitHub Actions
-        // npm-publish runs for v2026.9.14, never observed on self-hosted
-        // Gitea runners).
+        // This checks provider forwarding for agents, commands, skills and rules.
+        // Optional addon sweeps belong to use-all-deployment, not this smoke test.
         execFileSync(
           process.execPath,
-          [path.join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'sdlc', '--provider', 'codex', '--target', projectDir],
+          [path.join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'sdlc', '--no-utils', '--provider', 'codex', '--target', projectDir],
           { timeout: 150_000, cwd: REPO_ROOT, env, encoding: 'utf-8' }
         );
 
-        // Should have .codex directory
-        const hasCodex = await pathExists(path.join(projectDir, '.codex'));
-        expect(hasCodex, '.codex should exist').toBe(true);
+        for (const deployed of ['.codex/agents', '.codex/rules', '.agents/skills']) {
+          expect(await pathExists(path.join(projectDir, deployed)), deployed).toBe(true);
+        }
+        expect(await pathExists(path.join(homeDir, '.codex/prompts'))).toBe(true);
 
         // Should NOT have .claude directory
         const hasClaude = await pathExists(path.join(projectDir, '.claude'));
@@ -480,7 +465,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Edge Cases', () => {
     );
 
     expect(content).not.toBe('OLD CONTENT');
-    expect(content).toContain('# AIWG');  // Should have proper content
+    expect(content).toContain('# Rule kernel index');
   });
 });
 
@@ -512,19 +497,14 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Consolidated Rules Deployment', () => {
     // Should have RULES-INDEX.md
     expect(mdFiles).toContain('RULES-INDEX.md');
 
-    // Per PUW-016 (#1117): individual rule files now ship ALONGSIDE
-    // RULES-INDEX.md so the @-references in the index resolve. The original
-    // assertion that the consolidated index *replaces* individual files no
-    // longer holds. We instead assert that the index plus the individual
-    // files are both present — the union surface.
+    // ADR: kernel and native path bodies accompany the summary index;
+    // bound, summary and on-demand bodies stay outside the startup tree.
     const individualRules = mdFiles.filter(f => f !== 'RULES-INDEX.md');
-    const knownIndividualRules = [
-      'no-attribution.md', 'token-security.md', 'versioning.md',
-      'anti-laziness.md', 'executable-feedback.md', 'failure-mitigation.md',
-      'tao-loop.md', 'hitl-gates.md', 'provenance-tracking.md',
-    ];
-    for (const knownRule of knownIndividualRules) {
-      expect(individualRules, `${knownRule} should be deployed individually per PUW-016`).toContain(knownRule);
+    for (const rule of uninstalledRules) expect(individualRules).not.toContain(`${rule.name}.md`);
+    for (const rule of activationRules) {
+      const assertion = expect(individualRules, `${rule.name} (${rule.activation})`);
+      if (rule.fileDelivered) assertion.toContain(`${rule.name}.md`);
+      else assertion.not.toContain(`${rule.name}.md`);
     }
   });
 
@@ -534,10 +514,21 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Consolidated Rules Deployment', () => {
     const indexPath = path.join(projectDir, '.claude', 'rules', 'RULES-INDEX.md');
     const content = await fs.readFile(indexPath, 'utf-8');
 
-    expect(content).toContain('# AIWG Rules Index');
-    expect(content).toContain('## Core Rules');
-    expect(content).toContain('## SDLC Rules');
-    expect(content).toContain('## Quick Reference by Context');
+    expect(content).toContain('# Rule kernel index');
+    const summaries = activationRules.filter(rule => rule.activation === 'summary');
+    // #3460: native path contracts remain in the canonical index too.
+    for (const rule of activationRules.filter(rule => rule.activation === 'paths')) {
+      expect(content).toContain(`- ${rule.data.name || rule.name} |`);
+      expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+    }
+    expect([...content.matchAll(/^- (.*?) —/gm)].map(match => match[1]).sort())
+      .toEqual(activationRules.filter(rule => ['kernel', 'summary'].includes(rule.activation))
+        .map(rule => rule.data.name || rule.name).sort());
+    for (const rule of summaries) {
+      expect(content).toContain(rule.data.summary);
+      expect(content).toContain(`aiwg show rule ${rule.data.name || rule.name}`);
+      expect(content).not.toContain(rule.body);
+    }
   });
 
   it('preserves operator pre-existing rule files on redeploy (#1143 default-off cleanup)', async () => {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -27,23 +28,23 @@ export interface OpenCodeSessionTransport {
   snapshot(source: SelectedSource): Promise<unknown>;
 }
 
-const SessionInfoSchema = z.object({
+const SessionInfoSchema = z.looseObject({
   id: z.string().min(1),
   projectID: z.string().optional(),
   directory: z.string().optional(),
   parentID: z.string().optional(),
   title: z.string().optional(),
   version: z.string().optional(),
-  time: z.object({
-    created: z.number().optional(),
-    updated: z.number().optional(),
-    compacting: z.number().nullable().optional(),
-    archived: z.number().nullable().optional(),
-  }).passthrough().optional(),
-  share: z.object({ url: z.string().optional() }).passthrough().optional(),
-}).passthrough();
+  time: z.looseObject({
+    created: number().optional(),
+    updated: number().optional(),
+    compacting: number().nullable().optional(),
+    archived: number().nullable().optional(),
+  }).optional(),
+  share: z.looseObject({ url: z.string().optional() }).optional(),
+});
 
-const MessageInfoSchema = z.object({
+const MessageInfoSchema = z.looseObject({
   id: z.string().min(1),
   sessionID: z.string().min(1),
   role: z.string().min(1),
@@ -51,14 +52,13 @@ const MessageInfoSchema = z.object({
   modelID: z.string().optional(),
   providerID: z.string().optional(),
   model: z.object({ providerID: z.string(), modelID: z.string() }).optional(),
-  cost: z.number().optional(),
-  tokens: z.record(z.unknown()).optional(),
-  time: z.object({ created: z.number().optional(), completed: z.number().optional() })
-    .passthrough().optional(),
+  cost: number().optional(),
+  tokens: z.record(z.string(), z.unknown()).optional(),
+  time: z.looseObject({ created: number().optional(), completed: number().optional() }).optional(),
   error: z.unknown().optional(),
-}).passthrough();
+});
 
-const PartSchema = z.object({
+const PartSchema = z.looseObject({
   id: z.string().min(1),
   sessionID: z.string().min(1),
   messageID: z.string().min(1),
@@ -71,30 +71,30 @@ const PartSchema = z.object({
   filename: z.string().optional(),
   url: z.string().optional(),
   time: z.unknown().optional(),
-}).passthrough();
+});
 
-const MessageSchema = z.object({
+const MessageSchema = z.looseObject({
   info: MessageInfoSchema,
   parts: z.array(PartSchema),
-}).passthrough();
+});
 
-const ExportSchema = z.object({
+const ExportSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   info: SessionInfoSchema,
   messages: z.array(MessageSchema),
   sanitized: z.boolean().optional(),
-  sanitization: z.record(z.unknown()).optional(),
+  sanitization: z.record(z.string(), z.unknown()).optional(),
   shared: z.boolean().optional(),
-  providerDeletedAt: z.number().nullable().optional(),
-}).passthrough();
+  providerDeletedAt: number().nullable().optional(),
+});
 
-const EventSchema = z.object({
+const EventSchema = z.looseObject({
   schemaVersion: z.string().optional(),
   type: z.string().min(1),
-  properties: z.record(z.unknown()),
+  properties: z.record(z.string(), z.unknown()),
   sanitized: z.boolean().optional(),
   shared: z.boolean().optional(),
-}).passthrough();
+});
 
 type OpenCodeExport = z.infer<typeof ExportSchema>;
 type OpenCodeMessage = z.infer<typeof MessageSchema>;

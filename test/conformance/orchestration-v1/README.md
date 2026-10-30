@@ -1,15 +1,16 @@
-# Orchestration S0 wiring — #2886 / B-OG-19
+# Orchestration registry wiring — #2886 / B-OG-19
 
 This checkpoint starts the deterministic infrastructure from test strategy 09
 (levels/ownership and Revision 2 Tier 0 packs) and delivery plan 11 (B-OG-19,
-slices and release gates). It does not complete #2886 or any provider's live
-qualification. The proposal is read-only and is not required at test time.
+slices and release gates). It does not complete #2886 or verify installed
+providers. The proposal is read-only and is not required at test time.
 
-`packs.json` registers exactly T-OG-01–12, 14, 15, 17 and 19. `ownerIssue` is
+`packs.json` registers 23 packs: T-OG-01–21 and 23–24. `ownerIssue` is
 the test-delivery issue, #2886; `mechanismOwners` are the proposal's frozen
 work-package owners. `knownCheckpointIssues` maps the tracker IDs supplied for
 the concurrent S0 work. No unknown tracker IDs are guessed. `slice` is the owning
-mechanism checkpoint; `laterSlices` identifies additional runtime checkpoints.
+mechanism checkpoint; `sharedSlices` identifies shared coverage and `laterSlices`
+identifies additional runtime checkpoints whose implementation is unverified.
 All current entries are planned or partial, with empty test lists where the
 corresponding tests have not landed. Partial mappings include #2876's frozen
 schema/CLI/MCP contracts and the existing Grok headless test, plus the new fake
@@ -24,15 +25,31 @@ rather than through `packs.json` itself. `loadOrchestrationPackRegistry()` in
 `tools/testing/check-orchestration-packs.mjs` merges every fragment into the
 matching pack's `testFiles`, in sorted fragment-filename order, after
 `packs.json`'s own entries, and fails loudly on an unknown pack ID, a
-non-array fragment value, a duplicate test file, or invalid JSON. A new
+malformed fragment value, a duplicate test file, or invalid JSON. A new
 provider profile adds `packs.d/<provider>.json`; never edit `packs.json`
 `testFiles` for a provider — that is what used to make every pair of provider
 PRs collide on the same lines.
 
-`npm run lint:orchestration-packs` fails for implemented/partial packs without
-test files, missing paths, missing pack ownership, and qualification passes
-without scoped live evidence. Its report is
-`test-results/orchestration-pack-registry.json`. A successful S0 report says
+Fragments may also map a pack to an object with `testFiles`, `requirements`
+and `scenarios`; they cannot change status or ownership. See `packs.d/timing.json`.
+To declare `implemented`, a pack must enumerate nonempty `requirements` (FR-OG
+or NFR-OG IDs) and `scenarios`. Each scenario binds an ID, requirement,
+`mechanismOwner` from the pack's owners, owning/shared `slice`, registered
+`testFile` and exact `testName`. The title must contain the pack, requirement
+and scenario IDs as separate words. Every declared requirement and registered
+file must have a mapping. Partial mappings use the same validation but do not
+claim complete coverage. Owners must inventory the full requirements before
+promoting a pack; this static check cannot prove semantic completeness.
+
+`npm run lint:orchestration-packs` rejects empty/import-only files, comments or
+strings posing as tests, and files without runnable asserted tests. Mapped
+titles must identify a real asserted test; skipped/todo/conditional tests and
+skipped suites cannot support implementation claims. The TypeScript parser
+recognizes imported Vitest and node:test declarations with inline callbacks,
+Vitest matcher calls and node:assert calls. It does not run tests or infer
+ownership from filenames. Other test styles need an explicit checker update.
+
+Its report is `test-results/orchestration-pack-registry.json`. A successful report says
 `wiring-valid` and `releaseQualification: unqualified`; it never says the
 release packs passed. To validate a separately authorized qualification report,
 run `npm run lint:orchestration-packs -- --qualification-report FILE`. The JSON
@@ -48,8 +65,71 @@ are `passed`, `failed`, `blocked`, `unqualified`. A `passed` result requires
 `qualified` and `evidence.kind: live` with nonempty `version`, `account`,
 `profile`, `transport`, `reportRef`. Account is a synthetic/sanitized identity,
 never a credential. Missing, skipped or fake mechanics cannot count as live
-qualification. This is a report consistency check; S1 owns actual per-provider
-readiness, evidence freshness and qualification.
+qualification. This is a legacy optional report consistency check, not a
+required per-provider workflow. Decision 17 drops qualification runners,
+attestations and prescribed live evidence files. Installed providers use
+operator-only manual smoke; absent verification remains unverified/unqualified.
+
+The report echoes the registry's checkpoint and separates `scopes.s1`
+(direct/shared S0–S1), `scopes.managed` and `scopes.laterSlices` (S2–S5).
+Rows distinguish owner/shared/later relationships. Later rows remain unverified
+even if the owning slice is implemented. Verdicts describe registered coverage,
+with `enforcement: registry-wiring` and `acceptance: unverified`; they do not
+turn evidence traces into enforced runtime gates. `s5Audit` remains unverified
+and depends on S1–S4 exits.
+
+## Bounded synthetic timing (partial NFR-OG-001)
+
+P01 in `direct-lifecycle-timing.test.ts` measures 100 serial, unqueued fake
+launches after five warmups, p95 dispatch-to-launch ≤5,000 ms. It uses the real
+`resolveWorkerPlan`, `planDirectWorkerLaunch`, resource gate and isolation argv/
+environment preparation, with synthetic host signals and injected systemd
+clients returning a fake PID. Direct recovery admission is disabled for this
+fixture, so it creates no background unit-settlement observer.
+Timing ends at fake systemd-run submission;
+assertions and PID lookup after submission are outside that interval. The
+temporary warm workspace contains four files totaling <1 KiB; its creation
+and fixture construction precede timing. No user manager or provider runs.
+
+P02 in `worker-resolution.test.ts` measures 1,000 cached-snapshot requests
+after ten warmups, p95 per request ≤250 ms, including policy/identity/freshness
+validation, selection and plan construction. Cached means the input snapshot
+is already in memory; results are recomputed. Both use the existing synthetic
+two-member/two-model fixture. `test/fixtures/orchestration-timing.ts` computes
+nearest-rank p95 (not average or total duration). Each test prints count, p95,
+phases and the actual host's Node version, OS, architecture, CPU model/count.
+Thresholds allow shared CI hosts; each test is bounded by 30 seconds.
+
+These are direct-surface regression checks, registered as partial. They exclude
+discovery, cold start, queueing, inference, signing/storage
+and worktree creation. They do not satisfy the full warm-worktree launch gate.
+P01 in `worker-resolution.test.ts` adds the 1,000-request managed overhead
+check (T-OG-05, cached plan plus managed admission submit, same p95 ≤250 ms
+bound and warm-up style), and `shared-host-scheduler-fencing.test.ts` adds the
+100-request two-process crash admission check (T-OG-06 NFR-OG-003 P01: caps 4
+global and 2 per member, SIGKILL mid-admission with restart, zero premature
+releases and no cap overshoot). Both are registered through
+`packs.d/managed-gates.json` as partial. Changed-code coverage targets and the
+S5 audit remain follow-up work; Decision 17 leaves these managed requirements
+intact.
+
+## Managed follow-ups: Must inventory and changed-code coverage
+
+`must-requirements.json` transcribes every Must FR-OG/NFR-OG ID from the
+09-test-strategy pack tables with its owning packs; `must-allowlist.json`
+names each currently unmapped Must with a reviewed reason. The pack gate fails
+on any unmapped Must without an entry, on a stale entry whose Must became
+mapped, and on entries outside the inventory or without a reason. The Must
+gate is registry-wide: it fails the overall report but never rewrites a slice
+verdict, so the S5 audit stays `unverified` until S2–S4 owners exit.
+
+`tools/testing/orchestration-changed-coverage.mjs` gates changed files only
+(diff against the merge base): 90% statements / 85% branches for changed
+validators (`src/models`, `src/config`, `src/mission-protocol`,
+`src/serve/shared-host-*`), 80% branches for changed adapters/recovery
+(`tools/ralph-external`, `src/serve`, `src/mcp`). It runs inside the existing
+coverage CI step as `npm run test:coverage:orchestration-changed`; it is not
+a new lane.
 
 The existing `config/vitest.conformance.config.js` fixture lane imports
 `orchestrationConformanceFiles` from `config/test-lanes.mjs`; those files are
@@ -207,3 +287,5 @@ were not skipped, and no sandbox bypass was added. All test-owned temporary
 roots were removed; no real credentials, vendor calls or sockets were used by
 the original qualification fixtures (revision 2 adds the loopback probe above). Re-run blocked gates on an authorized runner
 before accepting the S1 installation checkpoint.
+
+#2927 registers T-OG-03/08/13/14 as partial for offline continuation/fresh attempts, changed bindings, shared nested Ralph allowances and SDLC gate retention. No provider breadth or live qualification is added; the conductor records CLI-version smoke under decision 17.

@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
+import { mkdtempSync } from 'node:fs';
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FileCredentialStore,
@@ -22,6 +25,43 @@ const temporary: string[] = [];
 afterEach(async () => Promise.all(temporary.splice(0).map((entry) => fs.rm(entry, { recursive: true, force: true }))));
 
 describe("credential stores", () => {
+  it('keeps synthetic values out of helper env, argv and child-process debug output', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'aiwg-store-child-environment-')); temporary.push(root);
+    const runner = path.join(root, 'runner.mjs');
+    const helper = path.join(root, 'helper.mjs');
+    const marker = 'synthetic-store-child-sensitive-value';
+    const moduleUrl = pathToFileURL(path.resolve('dist/src/auth/credential-store.js')).href;
+    await fs.writeFile(helper, `
+      let input = '';
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', chunk => input += chunk);
+      process.stdin.on('end', () => {
+        process.stdout.write(JSON.stringify({ env: process.env, argv: process.argv, received: input.length > 0 }));
+      });
+    `);
+    await fs.writeFile(runner, `
+      import { defaultCommandRunner } from ${JSON.stringify(moduleUrl)};
+      const result = await defaultCommandRunner(process.execPath, [${JSON.stringify(helper)}], process.env.SYNTHETIC_AUTH_INPUT);
+      process.stdout.write(JSON.stringify(result));
+    `);
+    const result = spawnSync(process.execPath, [runner], {
+      encoding: 'utf8', timeout: 20_000,
+      env: { PATH: process.env.PATH, HOME: root, NODE_DEBUG: 'child_process', SYNTHETIC_AUTH_INPUT: marker, UNRELATED_SECRET: marker },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain(marker);
+    expect(result.stderr).not.toContain(marker);
+    const commandResult = JSON.parse(result.stdout);
+    expect(commandResult.exitCode).toBe(0);
+    const observed = JSON.parse(commandResult.stdout);
+    expect(observed.received).toBe(true);
+    expect(observed.env.SYNTHETIC_AUTH_INPUT).toBeUndefined();
+    expect(observed.env.UNRELATED_SECRET).toBeUndefined();
+    expect(observed.env.NODE_DEBUG).toBeUndefined();
+    expect(observed.argv).toEqual([process.execPath, helper]);
+  });
+
   it("does not surface EPIPE when a credential helper exits before consuming stdin", async () => {
     const result = await defaultCommandRunner(
       process.execPath,

@@ -60,10 +60,12 @@ export function initializeRegistry() {
  *
  * @returns {string[]} Names of enabled adapters
  */
-export function discoverEnabledAdapters() {
+export function discoverEnabledAdapters(configs = {}) {
   const enabled = [];
   for (const [name, entry] of ADAPTER_REGISTRY) {
-    if (process.env[entry.envCheck]) {
+    const config = configs[name];
+    const configured = name === 'slack' ? config?.webhookUrl : config?.botToken || config?.token;
+    if (configured || process.env[entry.envCheck]) {
       enabled.push(name);
     }
   }
@@ -121,7 +123,7 @@ export async function loadAdapter(name, config = {}) {
  * @returns {Promise<Map<string, import('./adapters/base.mjs').BaseAdapter>>}
  */
 export async function loadEnabledAdapters(configs = {}) {
-  const enabled = discoverEnabledAdapters();
+  const enabled = discoverEnabledAdapters(configs);
   const loaded = new Map();
 
   for (const name of enabled) {
@@ -164,7 +166,7 @@ export function getRegistryStatus() {
       name,
       status: entry.status,
       error: entry.error,
-      enabled: !!process.env[entry.envCheck],
+      enabled: entry.status === 'ready' || !!process.env[entry.envCheck],
     });
   }
   return statuses;

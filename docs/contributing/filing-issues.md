@@ -1,6 +1,6 @@
 # Filing Issues
 
-> **Related**: [filing pull requests](./filing-pull-requests.md), [the import flow](#import-flow-cross-tracker-reports), AIWG-specific kernel skill `aiwg-issue` (run `aiwg show skill aiwg-issue`)
+> **Related**: [filing pull requests](./filing-pull-requests.md), [the import flow](#import-flow-cross-tracker-reports), AIWG-specific kernel skill `aiwg-issue` (run `aiwg show skill aiwg-issue --body`)
 
 A high-quality issue is scoped, reproducible, and captures environment. The bar is set by the May-2026 tester-report sweep — five issues filed by `sebuh-infsol` on the GitHub mirror that mirrored cleanly into Gitea (#1264–#1268) and resolved in days because each one had exact commands, exact error text, and a hypothesis.
 
@@ -127,7 +127,7 @@ Three paths, all valid:
 ```bash
 # 1. Via discovery, then the issue-create skill (handles Gitea, GitHub, Jira, Linear, local files)
 aiwg discover "issue create" --type skill
-aiwg show skill issue-create
+aiwg show skill issue-create --body
 aiwg run skill issue-create -- "<title>" --provider gitea --labels "bug"
 
 # 2. Via the Gitea MCP server (when available)
@@ -162,9 +162,9 @@ mcp__git-gitea__issue_write method=create owner=roctinam repo=aiwg title='<title
 |---|---|
 | Find existing skills/issues for a topic | `aiwg discover "<keywords>"` |
 | Bundle discover + tracker search | `aiwg run skill steward-prep-delivery -- "<terms>"` |
-| Fetch a skill body | `aiwg show skill aiwg-issue` |
-| File a new issue (skill-mediated) | `aiwg discover "issue create" --type skill`, then `aiwg show skill issue-create` |
-| Read the full kernel skill | `aiwg show skill aiwg-issue` |
+| Fetch a skill body | `aiwg show skill aiwg-issue --body` |
+| File a new issue (skill-mediated) | `aiwg discover "issue create" --type skill`, then `aiwg show skill issue-create --body` |
+| Read the full kernel skill | `aiwg show skill aiwg-issue --body` |
 
 ## Related
 

@@ -1,3 +1,6 @@
+import { ContextWriteJournal } from '../../smiths/context-pipeline/context-file-safety.js';
+import type { ContextPipelineOptions, ContextPipelineResult } from '../../smiths/context-pipeline/types.js';
+import { trackTemporaryDirectory } from '../../utils/temporary-directory.js';
 /**
  * Use Command Handler
  *
@@ -11,15 +14,17 @@
  */
 
 import fs from 'fs/promises';
+import { existsSync, rmSync, rmdirSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { pathToFileURL } from 'node:url';
-import { createHash } from 'node:crypto';
-import { canDeploySkill, sameSkillOwner, extractFrameworkSlug } from '../../providers/skill-ownership.mjs';
+import { randomUUID } from 'node:crypto';
+import { sameSkillOwner } from '../../providers/skill-ownership.mjs';
 import { resolveOmpPaths } from '../../providers/omp-paths.mjs';
 import YAML from 'yaml';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { createScriptRunner } from './script-runner.js';
+import { finalizePreparedProvider, prepareProviderDeployments } from '../services/provider-prepare-coordinator.js';
 import { getFrameworkRoot, getVersionInfo } from '../../channel/manager.mjs';
 import { getRegistry } from '../../extensions/registry.js';
 import { registerDeployedExtensions } from '../../extensions/deployment-registration.js';
@@ -30,11 +35,12 @@ import {
 } from '../cli-extension-loader.js';
 import { translateSkillsToCommands, providerNeedsCommands } from '../../plugin/skill-command-translator.js';
 import * as ui from '../ui.js';
-import { readAiwgConfig, writeAiwgConfig, updateInstalled, hashManifest, emptyConfig, getProjectDir } from '../../config/aiwg-config.js';
-import { appendGitignore } from '../../config/gitignore.js';
+import { readAiwgConfig, writeAiwgConfig, updateInstalled, hashManifest, emptyConfig, getProjectDir, getConfigPath } from '../../config/aiwg-config.js';
+import { AIWG_RUNTIME_PATTERNS, appendGitignore } from '../../config/gitignore.js';
 import { getLogger } from '../log.js';
 import { installCockpit } from './cockpit.js';
 import { initHandler } from './init.js';
+import { selectAddonProfile } from './use-addon-profile.js';
 import {
   checkCollisions,
   formatCollisionReport,
@@ -79,6 +85,7 @@ import {
   normalizeProviderDefinitionId,
   type ProviderArtifactPathStrings,
 } from '../../providers/provider-definitions.js';
+import { resolveDeployVersion } from '../../providers/deploy-version.mjs';
 import { deployedSkillRoots } from '../../providers/deployed-skill-roots.js';
 
 // Module-level guard so the iteration loops further down (which re-enter
@@ -89,6 +96,9 @@ let projectIsolationChecked = false;
 // collecting child-process output. The CLI is single-command-per-process;
 // recursive provider expansion shares this guard intentionally.
 let machineReadableUseDepth = 0;
+// Providers whose complete project projection is covered by the transferable
+// rule-delivery transaction. Other built-ins retain their serial deploy path.
+const PREPARABLE_BUILTIN_PROVIDERS = new Set(['claude', 'codex', 'cursor', 'hermes', 'pi', 'warp']);
 // Context-pipeline: emits WORKSPACE.md + AIWG.md + provider adapters last.
 // for non-Claude providers per ADR-1 (.aiwg/architecture/adr-agents-md-aggregation.md).
 // Distinct from agentsmith (which creates subagent personas).
@@ -98,8 +108,8 @@ import {
 } from '../../smiths/context-pipeline/index.js';
 import type { Platform } from '../../agents/types.js';
 import { verifyModelWrapperDeployment } from '../../models/wrapper-deployment.js';
-import { loadGraphIndexFile } from '../../artifacts/index-reader.js';
-import type { ArtifactIndex } from '../../artifacts/types.js';
+import { countDeployedBundleFiles, countDeployedBundleRules } from './use-bundle-counts.js';
+import { reconcileDeployedSkillAssets } from './use-skill-assets.js';
 import {
   aggregateUseDeploymentResult,
   buildDryRunUseResult,
@@ -118,7 +128,7 @@ import {
   resolveWebRelease,
   type WebReleaseOptions,
 } from '../../resources/web-release.js';
-import { createResourceCredentialProvider } from '../../auth/resource-credentials.js';
+import { createResourceCredentialProvider, prepareResourceCredentials } from '../../auth/resource-credentials.js';
 
 /**
  * Valid framework identifiers
@@ -154,6 +164,7 @@ export async function resolveProviderReceiptSource(options: {
   provider: string;
   scope: DeploymentScope;
   requestedBundles: string[];
+  credentialProvider?: () => Promise<string | null>;
 }): Promise<{
   sourceVerifications?: Readonly<Record<string, import('../../security/artifact-verifier.js').ArtifactVerificationResult>>;
   sourceDisposition?: 'local-source' | 'source-unavailable' | 'verification-failed';
@@ -166,7 +177,7 @@ export async function resolveProviderReceiptSource(options: {
   try {
     release = await resolveWebRelease({ ...releaseOptions, selector: versionInfo.version, offline: true });
   } catch {
-    const credentialProvider = createResourceCredentialProvider(process.env);
+    const credentialProvider = options.credentialProvider ?? createResourceCredentialProvider(process.env);
     const token = await credentialProvider();
     // Protected production resources require the authenticated release
     // credential. A configured alternate endpoint may intentionally be public.
@@ -219,10 +230,11 @@ const MODEL_OVERRIDE_VALUE_FLAGS = new Set([
 ]);
 const MODEL_DEPLOY_BOOLEAN_FLAGS = new Set(['--save', '--save-user']);
 
-/** Forward explicit user scope to every provider deploy subprocess. */
+/** Forward explicit scope to every provider deploy subprocess. */
 export function collectUseScopeDeployArgs(args: string[]): string[] {
   const scope = detectScope(args);
-  return scope === 'user' || args.includes('--user') ? ['--scope', 'user'] : [];
+  return scope === 'user' || args.includes('--user') ? ['--scope', 'user']
+    : args.includes('--scope') ? ['--scope', 'project'] : [];
 }
 
 export function collectUseModelDeployArgs(args: string[]): string[] {
@@ -491,6 +503,23 @@ export function addonPath(frameworkRoot: string, name: string): string {
 }
 
 /**
+ * Whether the provider's root deployment already collects every eligible
+ * addon for this mode. The caller still registers addon CLI contributions;
+ * this only suppresses redundant deploy-agents subprocesses.
+ */
+export function mainDeploymentIncludesAddons(
+  provider: string,
+  selectedMode: string,
+  providerDeployArgs: string[],
+): boolean {
+  return (((provider === 'claude' || provider === 'pi' || provider === 'omp')
+    && ['general', 'sdlc', 'both', 'all'].includes(selectedMode))
+    || (provider === 'codex' && selectedMode === 'all'))
+    && !providerDeployArgs.some(arg => arg === '--source' || arg.startsWith('--source='))
+    && providerDeployArgs.filter(arg => arg === '--mode').length === 1;
+}
+
+/**
  * Resolve a selected addon's required addon dependencies in deterministic
  * dependency-first order. Optional dependencies remain descriptive and are
  * never activated implicitly.
@@ -681,15 +710,24 @@ const PROVIDER_GENERATED_GITIGNORE_PATTERNS: Record<string, string[]> = {
   codex: ['.codex/', '.agents/'],
 };
 
-async function ensureProviderGeneratedDirsIgnored(
+/**
+ * Patterns `aiwg use` ensures in the project's .gitignore on every deploy:
+ * the AIWG runtime subdirs doctor expects, plus any provider-generated dirs.
+ * Append-only via appendGitignore — operator content is never rewritten (#3635).
+ */
+export function gitignorePatternsForDeploy(provider: string): string[] {
+  return [...AIWG_RUNTIME_PATTERNS, ...(PROVIDER_GENERATED_GITIGNORE_PATTERNS[provider] ?? [])];
+}
+
+export async function ensureProviderGeneratedDirsIgnored(
   projectRoot: string,
   provider: string,
   opts: { dryRun: boolean; verbose: boolean },
 ): Promise<void> {
   if (opts.dryRun) return;
 
-  const patterns = PROVIDER_GENERATED_GITIGNORE_PATTERNS[provider];
-  if (!patterns || patterns.length === 0) return;
+  const patterns = gitignorePatternsForDeploy(provider);
+  if (patterns.length === 0) return;
 
   try {
     const result = await appendGitignore(projectRoot, patterns);
@@ -838,7 +876,7 @@ async function mirrorStandardCommandSkills(opts: {
       projectPath: opts.target,
       dryRun: opts.dryRun,
       verbose: opts.verbose,
-      deployVersion: (await getVersionInfo()).version,
+      deployVersion: deploymentVersion(opts.frameworkRoot),
       nameFilter: shouldMirrorStandardCommandSkill,
     });
     count += result.translated.length;
@@ -1276,29 +1314,6 @@ async function listBundleMdStems(bundlePath: string, subdir: string): Promise<st
   }
 }
 
-async function countDeployedBundleFiles(
-  bundlePath: string,
-  subdir: string,
-  target: string,
-  deployPath: string,
-  extensions: string[],
-): Promise<number> {
-  if (!deployPath) return 0;
-  const stems = await listBundleMdStems(bundlePath, subdir);
-  if (stems.length === 0) return 0;
-  const destDir = resolveDeployPath(target, deployPath);
-  let count = 0;
-  for (const stem of stems) {
-    for (const ext of extensions) {
-      if (await fileExists(path.join(destDir, `${stem}${ext}`))) {
-        count++;
-        break;
-      }
-    }
-  }
-  return count;
-}
-
 async function listBundleSkillNameCandidates(bundlePath: string): Promise<string[][]> {
   const skillsRoot = path.join(bundlePath, 'skills');
   try {
@@ -1365,195 +1380,8 @@ async function countBundleDeployedArtifacts(
     agents: await countDeployedBundleFiles(bundlePath, 'agents', target, paths.agents, ['.md', '.toml']),
     commands: await countDeployedBundleFiles(bundlePath, 'commands', target, paths.commands, ['.md']),
     skills: await countDeployedBundleSkills(bundlePath, target, provider),
-    rules: await countDeployedBundleFiles(bundlePath, 'rules', target, paths.rules, ['.md', '.mdc']),
+    rules: await countDeployedBundleRules(bundlePath, target, paths.rules, provider),
   };
-}
-
-const SKILL_SUPPORT_REFERENCE = /(?:^|[\s`('"\[])((?:templates|references|scripts|assets)\/[A-Za-z0-9._@/+\-]+)(?=$|[\s`)'"\],:;])/gm;
-
-/** Copy one support file, preserving its executable bit. */
-async function copySkillSupportFile(source: string, destination: string, skillDir?: string): Promise<void> {
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.copyFile(source, destination);
-  await fs.chmod(destination, (await fs.stat(source)).mode & 0o777);
-  // Extend the shared copier's receipt for bundle-root assets too. Adapters
-  // without that receipt keep their own ownership and cleanup contract.
-  if (!skillDir) return;
-  const manifestPath = path.join(skillDir, '.aiwg-manifest.json');
-  let manifest;
-  try { manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')); } catch { return; }
-  if (!manifest.skillSource || !manifest.managed?.['SKILL.md']) return;
-  manifest.managed[path.relative(skillDir, destination)] = {
-    ...manifest.managed['SKILL.md'],
-    hash: `sha256:${createHash('sha256').update(await fs.readFile(destination)).digest('hex')}`,
-  };
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
-/**
- * Materialize a directory-valued support-asset reference (#2503).
- *
- * Applies the same rules the single-file path applies, per entry: symlinks are
- * refused rather than followed (a link inside a bundle can point anywhere), and
- * file modes are preserved so script packs stay executable. Empty directories
- * are still created — a reference to an empty pack is odd but not an error.
- */
-async function copySkillSupportTree(
-  source: string,
-  destination: string,
-  sourceSkillMd: string,
-  reference: string,
-  deployFile: ((from: string, to: string) => void) | null,
-  skillDir?: string,
-): Promise<void> {
-  await fs.mkdir(destination, { recursive: true });
-  const label = reference.replace(/\/+$/, '');
-  const entries = await fs.readdir(source, { withFileTypes: true });
-  for (const entry of entries) {
-    const from = path.join(source, entry.name);
-    const to = path.join(destination, entry.name);
-    if (entry.isSymbolicLink()) {
-      throw new Error(
-        `unsafe skill support asset '${label}/${entry.name}' referenced by ${sourceSkillMd}: symbolic links are not deployed`,
-      );
-    }
-    if (entry.isDirectory()) {
-      await copySkillSupportTree(from, to, sourceSkillMd, `${label}/${entry.name}`, deployFile, skillDir);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    if (deployFile) {
-      deployFile(from, to);
-      continue;
-    }
-    await copySkillSupportFile(from, to, skillDir);
-  }
-}
-
-/**
- * Skill-relative support files may live beside the skill or at the bundle root
- * (plugin payloads commonly share report templates). Materialize
- * only paths explicitly named by SKILL.md, and fail closed on missing or
- * unsafe sources so a deployed instruction can never point at absent assets.
- */
-async function reconcileDeployedSkillAssets(
-  bundlePath: string,
-  target: string,
-  provider: string,
-  options: { strictReferences?: boolean; scope?: 'user' | 'project'; skipUndeployed?: boolean; force?: boolean } = {},
-): Promise<void> {
-  const strictReferences = options.strictReferences ?? true;
-  const skillsRoot = path.join(bundlePath, 'skills');
-  let skillDirs: string[];
-  try {
-    skillDirs = (await fs.readdir(skillsRoot, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name);
-  } catch {
-    return;
-  }
-  const deployRoots = provider === 'omp' && options.scope === 'user'
-    ? [path.join(resolveOmpPaths({ cwd: target }).agentDir, 'skills')]
-    : deployedSkillRoots(target, provider);
-
-  for (const skillName of skillDirs) {
-    const sourceSkillDir = path.join(skillsRoot, skillName);
-    const sourceSkillMd = path.join(sourceSkillDir, 'SKILL.md');
-    let content: string;
-    try { content = await fs.readFile(sourceSkillMd, 'utf8'); } catch { continue; }
-    // Check each deployed tier independently: a foreign mirror must not block
-    // support assets for a tier already owned by this source.
-    const ownedRoots: string[] = [];
-    for (const root of deployRoots) {
-      const skillDir = path.join(root, skillName);
-      try {
-        const manifestPath = path.join(skillDir, '.aiwg-manifest.json');
-        const receipt = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-        if (!canDeploySkill(receipt, sourceSkillDir, options)) continue;
-        if (!sameSkillOwner(receipt, sourceSkillDir)) {
-          receipt.skillSource = path.resolve(sourceSkillDir);
-          const slug = extractFrameworkSlug(sourceSkillMd);
-          for (const record of Object.values(receipt.managed ?? {}) as Array<{ frameworkSlug?: string }>) {
-            if (slug) record.frameworkSlug = slug;
-            else delete record.frameworkSlug;
-          }
-          await fs.writeFile(manifestPath, `${JSON.stringify(receipt, null, 2)}\n`);
-        }
-      } catch { /* adapters without shared ownership receipts keep their own contract */ }
-      if (await fileExists(path.join(skillDir, 'SKILL.md'))) ownedRoots.push(root);
-    }
-    if (ownedRoots.length === 0) continue;
-    if (options.skipUndeployed && !(await Promise.all(ownedRoots.map(root =>
-      fileExists(path.join(root, skillName, 'SKILL.md'))))).some(Boolean)) continue;
-    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? '';
-    const declaredEntrypoint = frontmatter
-      .match(/^[ \t]+entrypoint:\s*["']?([^"'\s]+)["']?\s*$/m)?.[1];
-    const declaredEntrypoints = new Set(declaredEntrypoint ? [declaredEntrypoint] : []);
-    const references = [...new Set([
-      ...content.matchAll(SKILL_SUPPORT_REFERENCE),
-    ].map(match => match[1]).concat([...declaredEntrypoints]))];
-    for (const relative of references) {
-      const normalized = path.posix.normalize(relative);
-      if (normalized !== relative || normalized.startsWith('../') || path.isAbsolute(normalized)) {
-        throw new Error(`unsafe skill support reference '${relative}' in ${sourceSkillMd}`);
-      }
-      const candidates = [path.join(sourceSkillDir, normalized), path.join(bundlePath, normalized)];
-      let source: string | undefined;
-      let sourceIsDirectory = false;
-      for (const candidate of candidates) {
-        try {
-          const stat = await fs.lstat(candidate);
-          if (stat.isSymbolicLink()) continue;
-          // A reference may name a whole support directory (a templates pack,
-          // a references folder). Rejecting those as "missing" aborted the
-          // bundle deploy over a path that was present all along (#2503).
-          if (stat.isFile() || stat.isDirectory()) {
-            source = candidate;
-            sourceIsDirectory = stat.isDirectory();
-            break;
-          }
-        } catch { /* try bundle-root fallback */ }
-      }
-      if (!source) {
-        if (strictReferences || declaredEntrypoints.has(relative)) {
-          throw new Error(`missing skill support asset '${relative}' referenced by ${sourceSkillMd}`);
-        }
-        continue;
-      }
-      if (sourceIsDirectory && declaredEntrypoints.has(relative)) {
-        throw new Error(
-          `skill entrypoint '${relative}' in ${sourceSkillMd} resolves to a directory; an entrypoint must be a file`,
-        );
-      }
-
-      let deployedSkillRoot: string | undefined;
-      for (const root of ownedRoots) {
-        // The deployer may select the bulk or kernel tier; use the tier that
-        // actually contains this skill's transformed SKILL.md.
-        if (await fileExists(path.join(root, skillName, 'SKILL.md'))) {
-          deployedSkillRoot = root;
-          break;
-        }
-      }
-      if (!deployedSkillRoot) throw new Error(`deployed skill '${skillName}' not found while reconciling support assets`);
-      const destination = path.join(deployedSkillRoot, skillName, ...normalized.split('/'));
-      const deployFile = provider === 'omp'
-        ? await (async (): Promise<(from: string, to: string) => void> => {
-          const adapter = await import(pathToFileURL(path.join(await getFrameworkRoot(), 'tools/agents/providers/omp.mjs')).href);
-          return (from, to) => adapter.deploySkillSupportAsset(from, to, { quiet: true });
-        })()
-        : null;
-      if (sourceIsDirectory) {
-        await copySkillSupportTree(source, destination, sourceSkillMd, relative, deployFile, path.join(deployedSkillRoot, skillName));
-        continue;
-      }
-      if (deployFile) {
-        deployFile(source, destination);
-        continue;
-      }
-      await copySkillSupportFile(source, destination, path.join(deployedSkillRoot, skillName));
-    }
-  }
 }
 
 /**
@@ -1576,6 +1404,19 @@ function projectLocalDeployVersion(bundle: ProjectLocalBundle): string {
  *
  * @implements #1035
  */
+/**
+ * First non-blank line of a captured deploy failure, so non-verbose `aiwg
+ * use` output names the actual validation reason (#3728).
+ */
+function firstFailureLine(message: string | undefined): string {
+  if (!message) return '';
+  for (const line of message.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
 async function deployOneProjectLocalBundle(opts: {
   bundle: ProjectLocalBundle;
   ctx: HandlerContext;
@@ -1587,7 +1428,7 @@ async function deployOneProjectLocalBundle(opts: {
   quiet: boolean;
   force?: boolean;
   modelArgs: string[];
-}): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number } }> {
+}): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number }; message?: string }> {
   const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force, modelArgs } = opts;
   const sourceCounts = await countBundleSourceArtifacts(bundle.artifactPath);
   const artifactTotal = sourceCounts.agents + sourceCounts.commands + sourceCounts.skills + sourceCounts.rules;
@@ -1612,8 +1453,9 @@ async function deployOneProjectLocalBundle(opts: {
   }
 
   let exitCode = 0;
+  let deployFailureMessage = '';
   if (artifactTotal > 0) {
-    const runner = createScriptRunner(frameworkRoot);
+    const runner = createUseScriptRunner(frameworkRoot);
     const args: string[] = [
       '--source', bundle.artifactPath,
       '--deploy-commands', '--deploy-skills', '--deploy-rules',
@@ -1664,6 +1506,10 @@ async function deployOneProjectLocalBundle(opts: {
       env: { AIWG_ROOT: frameworkRoot },
     });
     exitCode = result.exitCode;
+    // In non-verbose mode the deployer's stderr is captured, not inherited —
+    // keep the reason so the caller can print it instead of a bare exit code
+    // (#3728).
+    deployFailureMessage = result.message ?? '';
     if (exitCode === 0 && !dryRun) {
       try {
         await reconcileDeployedSkillAssets(bundle.artifactPath, target, provider, { force: ctx.args.includes('--force') });
@@ -1693,7 +1539,7 @@ async function deployOneProjectLocalBundle(opts: {
     ? await countBundleDeployedArtifacts(bundle.artifactPath, target, provider)
     : sourceCounts;
   void ctx;
-  return { exitCode, counts };
+  return exitCode === 0 ? { exitCode, counts } : { exitCode, counts, message: deployFailureMessage };
 }
 
 /**
@@ -1815,7 +1661,10 @@ async function deployProjectLocalBundles(opts: {
 
     if (result.exitCode !== 0) {
       failed++;
-      ui.warn(`Failed to deploy project-local bundle '${bundle.id}' (exit ${result.exitCode})`);
+      // Surface the deployer's reason (e.g. the rule frontmatter file,
+      // field and limit) even in non-verbose output (#3728).
+      const reason = firstFailureLine(result.message);
+      ui.warn(`Failed to deploy project-local bundle '${bundle.id}' (exit ${result.exitCode})${reason ? `: ${reason}` : ''}`);
       if (!dryRun) {
         await appendProjectLocalActivity({
           event: 'deploy-failed',
@@ -1946,6 +1795,100 @@ const USE_FLAGS_WITH_VALUES = new Set([
   '--target',
 ]);
 
+// Public use options, including supported deployer passthroughs. Value flags
+// also drive positional parsing, so option values cannot become bundle names.
+for (const flag of [...MODEL_DEPLOY_VALUE_FLAGS, '--reasoning', '--coding', '--efficiency']) {
+  USE_FLAGS_WITH_VALUES.add(flag);
+}
+const USE_BOOLEAN_FLAGS = new Set([
+  '--force', '--copy-all', '--copy-standard-skills', '--dry-run', '--verbose', '-v', '--quiet', '-q',
+  '--json', '--no-project-local', '--no-context-files', '--no-workspace-md',
+  '--no-aiwg-md', '--no-agents-md', '--force-context-files', '--global', '--user',
+  '--no-utils', '--ci-hooks-enabled', '--skip-conflicts', '--no-harness-agents',
+  '--workspace-signals', '--no-workspace-signals', '--yes', '-y', '--non-interactive',
+  '--allow-over-budget', '--no-hooks', '--no-attribution', '--enable-cross-provider-hooks',
+  '--skip-commands-migration', '--listing-budget', '--mcp', '--as-agents-md',
+  '--create-agents-md', '--commands-only', '--skills-only', '--rules-only',
+  '--save', '--save-user', '--help', '-h',
+]);
+
+export function validateUseOptions(args: string[], preparedCapabilities = new Set<string>()): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--aiwg-provider-main-prepared' && preparedCapabilities.has(args[i + 1])) {
+      i++;
+      continue;
+    }
+    if (USE_FLAGS_WITH_VALUES.has(arg)) {
+      if (!args[i + 1] || args[i + 1].startsWith('-')) return `Missing value for option '${arg}'. See aiwg use --help.`;
+      i++;
+    } else if (arg.startsWith('-') && !USE_BOOLEAN_FLAGS.has(arg)) {
+      return `Unknown option '${arg}'. See aiwg use --help.`;
+    }
+  }
+  return undefined;
+}
+
+/** Pi's agent discovery path doubles as its kernel skill directory. */
+export async function countPiAgentFiles(target: string, agentsPath: string | null): Promise<number> {
+  if (!agentsPath) return 0;
+  try {
+    const dir = path.isAbsolute(agentsPath) ? agentsPath : path.join(target, agentsPath);
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries.filter(entry => entry.isFile() && entry.name.endsWith('.md')).length;
+  } catch { return 0; }
+}
+
+// Capture provider previews here: their staging summaries count source entries,
+// and additive passes can describe the same destination more than once.
+let usePreviewActions: Set<string> | undefined;
+// Recursive framework/addon/provider passes share the boundary's resolved policy.
+async function generateDeploymentContextFiles(options: ContextPipelineOptions): Promise<ContextPipelineResult> {
+  const result = await generateContextFiles(options);
+  useDeployment?.contextFiles.push(result);
+  return result;
+}
+
+let useDeployment: { resourceCredentials?: Awaited<ReturnType<typeof prepareResourceCredentials>>; version: string; skipAttribution?: boolean; skipContextFiles: boolean; contextFiles: ContextPipelineResult[] } | undefined;
+function useDeploymentArgs(args: string[]): string[] {
+  const forwarded = [...args];
+  if (useDeployment && !forwarded.includes('--deploy-version')) forwarded.push('--deploy-version', useDeployment.version);
+  if (useDeployment?.skipContextFiles && !forwarded.includes('--no-context-files')) forwarded.push('--no-context-files');
+  if (useDeployment?.skipAttribution && !forwarded.includes('--no-attribution')) forwarded.push('--no-attribution');
+  return forwarded;
+}
+function deploymentVersion(root: string): string {
+  return useDeployment?.version ?? resolveDeployVersion(root);
+}
+function createUseScriptRunner(frameworkRoot: string) {
+  const runner = createScriptRunner(frameworkRoot);
+  return {
+    async run(script: string, args: string[], options: Parameters<typeof runner.run>[2] = {}): Promise<HandlerResult> {
+      options = { ...options, omitEnv: useDeployment?.resourceCredentials?.omitEnv ?? ['AIWG_RESOURCE_TOKEN'] };
+      if (script === 'tools/agents/deploy-agents.mjs') args = useDeploymentArgs(args);
+      if (!usePreviewActions) return runner.run(script, args, options);
+      const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-preview-'));
+      const removeScratch = trackTemporaryDirectory(scratch);
+      const stdoutFile = await fs.open(path.join(scratch, 'stdout'), 'w+');
+      try {
+        // Keep the shared runner's timeout/error handling and injectable
+        // execution boundary; capture only this invocation's stdout to disk.
+        const result = await runner.run(script, args, { ...options, capture: true, stdoutFd: stdoutFile.fd });
+        const stdout = await fs.readFile(path.join(scratch, 'stdout'), 'utf8');
+        for (const line of stdout.split(/\r?\n/)) {
+          if (/^\[dry-run\] Would (write|remove|deploy|copy|create) /i.test(line)) usePreviewActions.add(line);
+        }
+        return result;
+      } catch (error) {
+        return { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+      } finally {
+        await stdoutFile.close();
+        removeScratch();
+      }
+    },
+  };
+}
+
 type OpenHumanHarnessScope = 'project' | 'user';
 
 export const OPENHUMAN_DEFAULT_HARNESS_AGENTS = [
@@ -1970,7 +1913,6 @@ interface OpenHumanHarnessProfile {
   sandboxMode: 'none' | 'read_only' | 'sandboxed';
   tokenjuiceCompression: 'auto' | 'full' | 'light' | 'off';
 }
-
 const OPENHUMAN_DEFAULT_HARNESS_PROFILE: OpenHumanHarnessProfile = {
   modelHint: 'agentic',
   temperature: 0.35,
@@ -1982,8 +1924,9 @@ const OPENHUMAN_DEFAULT_HARNESS_PROFILE: OpenHumanHarnessProfile = {
   sandboxMode: 'none',
   tokenjuiceCompression: 'auto',
 };
-
 const OPENHUMAN_HARNESS_PROFILES: Record<string, Partial<OpenHumanHarnessProfile>> = {
+  'aiwg-model-explorer': { modelHint: 'efficiency', sandboxMode: 'read_only', maxTurnOutputTokens: 1000 },
+  'aiwg-model-verifier': { modelHint: 'coding', sandboxMode: 'read_only', maxTurnOutputTokens: 1000 },
   'aiwg-model-reasoning-worker': {
     modelHint: 'reasoning',
   },
@@ -2396,13 +2339,14 @@ async function generateGlobalProjectContext(opts: {
   const userPaths = USER_SCOPE_PATHS[opts.provider];
   if (!userPaths) return;
   const skipContext = opts.args.includes('--no-context-files');
+  if (skipContext) return;
   const sections = await discoverDeployedArtifacts(opts.projectPath, {
     agents: userPaths.agents,
     rules: userPaths.rules,
     skills: userPaths.skills,
     behaviors: userPaths.behaviors,
   });
-  await generateContextFiles({
+  await generateDeploymentContextFiles({
     provider: opts.provider as Platform,
     projectPath: opts.projectPath,
     sections,
@@ -2416,23 +2360,34 @@ async function generateGlobalProjectContext(opts: {
   });
 }
 
+/** Receipt reuse applies to complete packages; selected partial sources still need an actual build. */
+async function reconcileSelectedFrameworkSource(root: string): Promise<void> {
+  const { refreshFrameworkCapabilities, resolveFrameworkCorpusRoot } = await import('../../artifacts/framework-capabilities.js');
+  if (resolveFrameworkCorpusRoot(root)) {
+    const { loadPrebuiltDeploymentIndex } = await import('../../artifacts/prebuilt-deployment.js');
+    if (loadPrebuiltDeploymentIndex(root, { strictRoot: true })) return;
+    await refreshFrameworkCapabilities(root, true, { force: true });
+    return;
+  }
+  const { buildIndex } = await import('../../artifacts/index-builder.js');
+  await buildIndex(root, { graph: 'framework', explicit: false });
+  const { syncFortemiCoreIndex } = await import('../../artifacts/fortemi-core-sync.js');
+  syncFortemiCoreIndex(root, { graph: 'framework' });
+}
+
 async function ensurePostDeployPhases(opts: {
   frameworkRoot: string;
   projectPath: string;
   provider: string;
   args: string[];
-  invocationStartedAt: string;
 }): Promise<void> {
-  const currentIndex = loadGraphIndexFile<ArtifactIndex>(opts.frameworkRoot, 'metadata.json', 'framework');
-  const builtAt = currentIndex ? Date.parse(currentIndex.builtAt) : Number.NaN;
-  const startedAt = Date.parse(opts.invocationStartedAt);
-  if (!Number.isFinite(builtAt) || builtAt + 2_000 < startedAt) {
-    try {
-      const { buildIndex } = await import('../../artifacts/index-builder.js');
-      await buildIndex(opts.frameworkRoot, { graph: 'framework', explicit: false });
-    } catch {
-      // The shared verifier reports the index failure with stable remediation.
-    }
+  // Validate source files once after deployment, including uncommitted edits
+  // that the cheap HEAD/manifest receipt intentionally cannot detect. Earlier
+  // deployment/query phases can reuse that receipt instead of rescanning.
+  try {
+    await reconcileSelectedFrameworkSource(opts.frameworkRoot);
+  } catch {
+    // The shared verifier reports the index failure with stable remediation.
   }
 
   // The Fortemi export is the default discovery backend. Rebuilding only the
@@ -2444,8 +2399,9 @@ async function ensurePostDeployPhases(opts: {
       getFortemiCoreSyncStatus,
       syncFortemiCoreIndex,
     } = await import('../../artifacts/fortemi-core-sync.js');
+    const { loadPrebuiltDeploymentIndex } = await import('../../artifacts/prebuilt-deployment.js');
     const status = getFortemiCoreSyncStatus(opts.frameworkRoot, 'framework');
-    if (!status.built || status.stale) {
+    if (!loadPrebuiltDeploymentIndex(opts.frameworkRoot, { strictRoot: true }) && (!status.built || status.stale)) {
       syncFortemiCoreIndex(opts.frameworkRoot, { graph: 'framework' });
     }
   } catch {
@@ -2461,7 +2417,7 @@ async function ensurePostDeployPhases(opts: {
     behaviors: paths.behaviors,
   });
   try {
-    await generateContextFiles({
+    await generateDeploymentContextFiles({
       provider: opts.provider as Platform,
       projectPath: opts.projectPath,
       sections,
@@ -2473,8 +2429,8 @@ async function ensurePostDeployPhases(opts: {
         agentsMd: opts.args.includes('--no-agents-md'),
       },
     });
-  } catch {
-    // The shared verifier reports context or provider-wiring failures.
+  } catch (error) {
+    throw new Error(`Context generation failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }
 
@@ -2489,6 +2445,7 @@ async function deploySourceDirectory(opts: {
   force: boolean;
   copyAll: boolean;
   kernelOnly?: boolean;
+  deferRuleProjection?: boolean;
   quiet: boolean;
   modelArgs: string[];
 }): Promise<HandlerResult> {
@@ -2507,9 +2464,10 @@ async function deploySourceDirectory(opts: {
   if (opts.force) args.push('--force');
   if (opts.copyAll) args.push('--copy-all');
   if (opts.kernelOnly) args.push('--kernel-only');
+  if (opts.deferRuleProjection) args.push('--defer-rule-projection');
   if (opts.quiet) args.unshift('--quiet');
 
-  const runner = createScriptRunner(opts.frameworkRoot);
+  const runner = createUseScriptRunner(opts.frameworkRoot);
   const result = await runner.run(
     'tools/agents/deploy-agents.mjs',
     args,
@@ -2600,7 +2558,7 @@ async function deployOmpUserSource(opts: {
   const adapter = await import(pathToFileURL(path.join(opts.frameworkRoot, 'tools/agents/providers/omp.mjs')).href);
   await adapter.deploy({ srcRoot: opts.source, target: opts.target, provider: 'omp', scope: 'user',
     mode: opts.mode ?? 'general', deployCommands: true, deploySkills: true, deployRules: true,
-    copyStandardSkills: opts.copyAll, quiet: true, deployVersion: (await getVersionInfo()).version });
+    copyStandardSkills: opts.copyAll, quiet: true, contextFiles: !useDeployment?.skipContextFiles, deployVersion: deploymentVersion(opts.frameworkRoot) });
   const sourceBundles = new Set([opts.source]);
   const { resourceDirs } = resolveOmpPaths({ cwd: opts.target });
   const entries: Record<'agents' | 'commands' | 'skills' | 'rules' | 'behaviors', string[]> = {
@@ -2741,27 +2699,72 @@ const USE_HELP = `Usage: aiwg use <bundle> [options]
 Deploy an AIWG framework, addon, or extension into the current project.
 
 Bundles:
-  all                       Kernel surface only (kernel skills, rules, behaviors)
+  all                       Kernel surface only (kernel skills, kernel and core rules, behaviors)
   sdlc | research | ops | forensics | marketing | media-curator |
   film-production | ...
                             Full framework surface (agents, commands, skills, rules)
   <addon> | <extension>     Any installed addon or extension name
 
 Options:
+  --resource-token-stdin | --resource-token-file <path> | --resource-token-store <name>
+  --resource-token-env <NAME> | --resource-token-interactive
+                            Select the optional protected release bearer
   --provider <name>         Target provider (default: .aiwg/aiwg.config providers)
   --target <dir>            Deploy into <dir> instead of the current directory
   --scope project|user      Deploy to the project (default) or the user scope
   --force                   Re-write every artifact, replacing files AIWG does
                             not currently manage. Use this to reclaim a
                             directory left behind by an older AIWG install.
-  --copy-all                Mirror standard-tier skills into the project instead
-                            of relying on index-driven discovery
+  --copy-all                Mirror standard-tier skills into the project; for
+                            all, restore the full agent, command and rule surface
   --dry-run                 Preview the deployment without writing files
+  --quiet, -q               Suppress deployer progress output
   --verbose, -v             Show per-artifact deploy decisions
   --json                    Emit the machine-readable deployment result
   --no-project-local        Skip project-local bundles under .aiwg/
-  --no-context-files        Skip WORKSPACE.md / AIWG.md / AGENTS.md emission
+  --no-context-files        Preserve WORKSPACE.md / AIWG.md / AGENTS.md, including managed blocks
   -h, --help                Show this help without deploying
+
+Additional options:
+  --platform <name>         Alias for --provider
+  --providers <a,b>         Providers for global bootstrap
+  --prefix <dir>            Alias for --target
+  --global, --user          Install to user scope
+  --copy-standard-skills    Alias for --copy-all (also restores the full surface)
+  --profile <name>          Select workspace profile (implicit target: all)
+  --workspace-signals       Show the workspace signal plan
+  --no-workspace-signals    Skip workspace signal resolution
+  --model <name>, --model-tier <tier>
+  --reasoning-model <name>, --coding-model <name>, --efficiency-model <name>
+  --reasoning <name>, --coding <name>, --efficiency <name>
+                            Override deployer model selection
+  --filter <glob>, --filter-role <role>
+                            Filter deployed agents
+  --save, --save-user        Persist model selection
+  --no-utils                Skip additive addon and extension passes
+  --no-workspace-md, --no-aiwg-md, --no-agents-md
+                            Suppress individual context files
+  --force-context-files     Replace context files
+  --no-hooks                Skip managed hooks
+  --no-attribution          Leave Claude attribution settings untouched
+  --enable-cross-provider-hooks
+                            Enable cross-provider hooks
+  --ci-hooks-enabled        Deploy CI workflows
+  --skip-conflicts          Skip the collision check
+  --allow-over-budget       Allow oversized startup context
+  --harness-agents <list>, --no-harness-agents
+                            Select OpenHuman harness agents
+  --skip-commands-migration Skip commands migration
+  --listing-budget          Honor startup listing caps with --copy-all
+  --mcp                     Opt in to the Muse MCP profile
+  --as-agents-md, --create-agents-md
+                            Select Codex context aggregation
+  --commands-only, --skills-only, --rules-only
+                            Limit artifact kinds
+  --yes, -y, --non-interactive
+                            Allow unattended setup
+
+Source installs are detected automatically; no development flag is needed.
 
 Deployment counts report what the run wrote or already manages. Files AIWG does
 not own are listed separately as unmanaged and are never counted as deployed.
@@ -2774,12 +2777,68 @@ export class UseHandler implements CommandHandler {
   category = 'framework' as const;
   aliases: string[] = [];
   private orchestrationDepth = 0;
+  private preparedProviderContinuations = new Set<string>();
 
   async help(): Promise<HandlerResult> {
     return { exitCode: 0, message: USE_HELP, rawOutput: true };
   }
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    let resourceCredentials = useDeployment?.resourceCredentials;
+    try {
+      if (!resourceCredentials) {
+        resourceCredentials = await prepareResourceCredentials(ctx.args);
+        ctx = { ...ctx, args: resourceCredentials.args };
+      }
+    } catch (error) {
+      return { exitCode: 2, message: error instanceof Error ? error.message : String(error) };
+    }
+    const invalidOption = validateUseOptions(ctx.args, this.preparedProviderContinuations);
+    if (invalidOption) return { exitCode: 2, message: invalidOption };
+    const previousDeployment = useDeployment;
+    useDeployment = {
+      resourceCredentials,
+      version: previousDeployment?.version ?? resolveDeployVersion(ctx.frameworkRoot || await getFrameworkRoot()),
+      skipAttribution: previousDeployment?.skipAttribution || ctx.args.includes('--no-attribution'),
+      skipContextFiles: previousDeployment?.skipContextFiles || ctx.args.includes('--no-context-files'),
+      contextFiles: previousDeployment?.contextFiles ?? [],
+    };
+    const journal = previousDeployment ? undefined : new ContextWriteJournal();
+    try {
+      let result: HandlerResult;
+      try { result = await this.executeDeployment(ctx); }
+      catch (error) {
+        result = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+      }
+      if (journal) {
+        const rollback = result.exitCode !== 0 ? journal.rollback() : undefined;
+        if (ctx.args.includes('--json')) {
+          let structured;
+          try { structured = JSON.parse(result.message || '{}'); }
+          catch { structured = { exitCode: result.exitCode, message: result.message }; }
+          structured.contextFiles = useDeployment.contextFiles;
+          if (rollback) structured.contextRollback = rollback;
+          result = { ...result, message: JSON.stringify(structured, null, 2), rawOutput: true };
+        } else if (rollback?.conflicts.length) {
+          result.message = [result.message, ...rollback.conflicts.map(conflict => `Context rollback conflict: ${conflict.path}: ${conflict.reason}`)].filter(Boolean).join('\n');
+        }
+      }
+      return result;
+    } finally {
+      journal?.dispose();
+      useDeployment = previousDeployment;
+    }
+  }
+
+  private async executeDeployment(ctx: HandlerContext): Promise<HandlerResult> {
+    // Normalize the physical framework directory just as addon folder aliases
+    // are normalized, before orchestration/registry bookkeeping sees the name.
+    const aliasIndex = ctx.args.indexOf('sdlc-complete');
+    if (firstUsePositional(ctx.args) === 'sdlc-complete' && aliasIndex >= 0) {
+      const args = [...ctx.args];
+      args[aliasIndex] = 'sdlc';
+      ctx = { ...ctx, args };
+    }
     const requestedBundle = firstUsePositional(ctx.args)
       ?? (ctx.args[0] === '--profile' ? 'all' : undefined);
     const bypassOrchestration = this.orchestrationDepth > 0
@@ -2788,11 +2847,21 @@ export class UseHandler implements CommandHandler {
       || ctx.args.includes('--workspace-signals');
     if (bypassOrchestration) return this.executeCore(ctx);
 
+    // Projectors share one source-index snapshot for this invocation. Full
+    // addon passes validate their bindings through the common query engine;
+    // deferred kernel passes leave the shared rule set to the final projector.
+    const previousBindingCache = process.env.AIWG_RULE_BINDING_INDEX_CACHE;
+    const bindingCache = previousBindingCache || await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-use-bindings-'));
+    const removeBindingCache = previousBindingCache ? () => {} : trackTemporaryDirectory(bindingCache);
+    process.env.AIWG_RULE_BINDING_INDEX_CACHE = bindingCache;
     this.orchestrationDepth += 1;
     try {
       return await this.executeOrchestrated(ctx, requestedBundle);
     } finally {
       this.orchestrationDepth -= 1;
+      if (previousBindingCache === undefined) delete process.env.AIWG_RULE_BINDING_INDEX_CACHE;
+      else process.env.AIWG_RULE_BINDING_INDEX_CACHE = previousBindingCache;
+      removeBindingCache();
     }
   }
 
@@ -2833,8 +2902,11 @@ export class UseHandler implements CommandHandler {
       warn: console.warn,
       error: console.error,
     };
-    if (json) {
-      machineReadableUseDepth += 1;
+    const previewActions = dryRun ? new Set<string>() : undefined;
+    const previousPreview = usePreviewActions;
+    if (previewActions) usePreviewActions = previewActions;
+    if (json || dryRun) {
+      if (!dryRun) machineReadableUseDepth += 1;
       console.log = () => {};
       console.info = () => {};
       console.warn = () => {};
@@ -2843,10 +2915,13 @@ export class UseHandler implements CommandHandler {
 
     let coreResult: HandlerResult;
     try {
-      coreResult = await this.executeCore({ ...ctx, args: coreArgs });
+      coreResult = await this.executeCore({ ...ctx, args: coreArgs }, providers);
+    } catch (error) {
+      coreResult = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
     } finally {
-      if (json) {
-        machineReadableUseDepth -= 1;
+      usePreviewActions = previousPreview;
+      if (json || dryRun) {
+        if (!dryRun) machineReadableUseDepth -= 1;
         console.log = originalConsole.log;
         console.info = originalConsole.info;
         console.warn = originalConsole.warn;
@@ -2867,13 +2942,24 @@ export class UseHandler implements CommandHandler {
     } else {
       if (coreResult.exitCode === 0 && !dryRun && !VALID_FRAMEWORKS.includes(requestedBundle as Framework)) {
         for (const provider of providers) {
-          await ensurePostDeployPhases({
-            frameworkRoot,
-            projectPath: projectDir,
-            provider,
-            args: remainingArgs,
-            invocationStartedAt: startedAt,
-          });
+          try {
+            await ensurePostDeployPhases({
+              frameworkRoot,
+              projectPath: projectDir,
+              provider,
+              args: remainingArgs,
+            });
+          } catch (error) {
+            coreResult = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+            break;
+          }
+        }
+      }
+      // Captured deploy passes suppress stderr on success; report operator choices here.
+      if (coreResult.exitCode === 0 && !dryRun && providers.includes('claude') && !useDeployment?.skipAttribution) {
+        for (const root of new Set([projectDir, ...(requestedScope === 'user' ? [os.homedir()] : [])])) {
+          const settings = await installAiwgHooks({ projectPath: root, frameworkRoot, hooks: false, dryRun: true });
+          for (const warning of settings?.warnings || []) originalConsole.warn(`Claude settings: ${warning}`);
         }
       }
       const providerResults = [];
@@ -2890,7 +2976,7 @@ export class UseHandler implements CommandHandler {
               scope: effectiveScope,
               requestedBundles: [requestedBundle],
             };
-            const sourceResolution = await resolveProviderReceiptSource(receiptOptions);
+            const sourceResolution = await resolveProviderReceiptSource({ ...receiptOptions, credentialProvider: useDeployment?.resourceCredentials?.credentialProvider });
             await finalizeProviderTransformationReceipt({ ...receiptOptions, ...sourceResolution });
           } catch (error) {
             await finalizeProviderTransformationReceipt({
@@ -2904,7 +2990,7 @@ export class UseHandler implements CommandHandler {
             originalConsole.warn(`Provider receipt finalization failed for ${provider}: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-        providerResults.push(await verifyProviderDeployment({
+        const verified = await verifyProviderDeployment({
           projectRoot: projectDir,
           frameworkRoot,
           provider,
@@ -2918,7 +3004,14 @@ export class UseHandler implements CommandHandler {
           // yet, so receipt absence belongs in doctor/status rather than
           // degrading an otherwise successful `aiwg use` result.
           reportMissingReceipt: false,
-        }));
+        });
+        // Pi exposes agents through skills. The shared verifier counts skill
+        // directories at that path as agents; report only actual agent files.
+        if (provider === 'pi') {
+          const paths = effectiveScope === 'user' ? USER_SCOPE_PATHS.pi : getProviderPaths(provider);
+          verified.counts.agents = await countPiAgentFiles(projectDir, paths.agents);
+        }
+        providerResults.push(verified);
       }
       result = aggregateUseDeploymentResult({
         projectRoot: projectDir,
@@ -2957,11 +3050,11 @@ export class UseHandler implements CommandHandler {
     });
     return {
       exitCode: result.exitCode,
-      message: [coreResult.message, rendered].filter(Boolean).join('\n'),
+      message: [coreResult.message, rendered, ...(previewActions ? [...previewActions].sort() : [])].filter(Boolean).join('\n'),
     };
   }
 
-  private async executeCore(ctx: HandlerContext): Promise<HandlerResult> {
+  private async executeCore(ctx: HandlerContext, resolvedProviders?: string[]): Promise<HandlerResult> {
     const explicitTarget = firstUsePositional(ctx.args);
 
     if (ctx.args.includes('--workspace-signals')) {
@@ -3120,6 +3213,14 @@ export class UseHandler implements CommandHandler {
       : null;
     const projectDir = getProjectDir(ctx, remainingArgs);
     let config = await readAiwgConfig(projectDir);
+    if (detectScope(remainingArgs) === 'project' && remainingArgs.includes('--scope')) {
+      for (const requested of configuredGlobalProviders(remainingArgs, config)) {
+        const resolved = await resolveProjectLocalProviderAdapter(projectDir, requested);
+        if (normalizeProviderDefinitionId(resolved.provider) === 'hermes') {
+          return { exitCode: 1, message: "Hermes does not support --scope project: it discovers skills only under HERMES_HOME/skills (default ~/.hermes/skills). Use --scope user or an isolated HERMES_HOME profile shared with Hermes." };
+        }
+      }
+    }
 
     // Auto-init when no config found (#720)
     // Check early for --provider/--platform and --providers flags
@@ -3137,6 +3238,13 @@ export class UseHandler implements CommandHandler {
       || remainingArgs.includes('-y')
       || remainingArgs.includes('--non-interactive');
 
+    // An auto-created config is removed again if the target turns out to be unknown,
+    // so a mistyped `aiwg use <name>` leaves the project untouched.
+    let autoCreatedConfig: { path: string; controlDirExisted: boolean } | null = null;
+    if (!config && !_isDryRun) {
+      const configPath = getConfigPath(projectDir);
+      autoCreatedConfig = { path: configPath, controlDirExisted: existsSync(path.dirname(configPath)) };
+    }
     if (!config) {
       if (_providersValue) {
         // --providers shorthand: write config without wizard
@@ -3157,7 +3265,9 @@ export class UseHandler implements CommandHandler {
         }
       } else if (process.stdin.isTTY) {
         // Interactive terminal with no config → run init wizard inline (#720)
-        const initResult = await initHandler.execute({ ...ctx, args: [] });
+        const initResult = await initHandler.execute({ ...ctx,
+          args: remainingArgs.includes('--no-context-files') ? ['--no-context-files'] : [],
+        });
         if (initResult.exitCode !== 0) return initResult;
         config = await readAiwgConfig(projectDir);
       }
@@ -3171,7 +3281,7 @@ export class UseHandler implements CommandHandler {
           : '';
         return {
           exitCode: 1,
-          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, film-production, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
+          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, film-production, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`aiwg list\`)\n'all' deploys the kernel surface (kernel skills, kernel and core rules, behaviors).${advisory}`,
         };
       }
       const installedNames = Object.keys(config.installed);
@@ -3236,13 +3346,19 @@ export class UseHandler implements CommandHandler {
 
       for (const providerName of providersForFiltered) {
         const kernelOnly = !copyAll;
-        for (const selected of selectedFrameworks) {
-          const frameworkDir = resolveFrameworkDir(selected);
-          if (!frameworkDir) continue;
+        const sources = [
+          ...selectedFrameworks.flatMap(selected => {
+            const directory = resolveFrameworkDir(selected);
+            return directory ? [path.join(frameworkRoot, 'agentic/code/frameworks', directory)] : [];
+          }),
+          ...selectedAddons.map(selected => addonPath(frameworkRoot, selected)),
+          ...selectedExtensions.map(selected => extensionPath(frameworkRoot, selected)),
+        ];
+        for (const [index, source] of sources.entries()) {
           const result = await deploySourceDirectory({
             ctx,
             frameworkRoot,
-            source: path.join(frameworkRoot, 'agentic/code/frameworks', frameworkDir),
+            source,
             provider: providerName,
             target,
             dryRun,
@@ -3250,42 +3366,10 @@ export class UseHandler implements CommandHandler {
             force,
             copyAll,
             kernelOnly,
-            quiet,
-            modelArgs: modelDeployArgs,
-          });
-          if (result.exitCode !== 0) return result;
-        }
-
-        for (const selected of selectedAddons) {
-          const result = await deploySourceDirectory({
-            ctx,
-            frameworkRoot,
-            source: addonPath(frameworkRoot, selected),
-            provider: providerName,
-            target,
-            dryRun,
-            verbose,
-            force,
-            copyAll,
-            kernelOnly,
-            quiet,
-            modelArgs: modelDeployArgs,
-          });
-          if (result.exitCode !== 0) return result;
-        }
-
-        for (const selected of selectedExtensions) {
-          const result = await deploySourceDirectory({
-            ctx,
-            frameworkRoot,
-            source: extensionPath(frameworkRoot, selected),
-            provider: providerName,
-            target,
-            dryRun,
-            verbose,
-            force,
-            copyAll,
-            kernelOnly,
+            // Kernel rule selection is invocation-wide, independent of the
+            // source bundle. The last pass projects once over all deployed
+            // skills, including their bound-rule pointers and startup blocks.
+            deferRuleProjection: kernelOnly && index < sources.length - 1,
             quiet,
             modelArgs: modelDeployArgs,
           });
@@ -3481,9 +3565,15 @@ export class UseHandler implements CommandHandler {
         };
       }
 
+      if (autoCreatedConfig) {
+        rmSync(autoCreatedConfig.path, { force: true });
+        if (!autoCreatedConfig.controlDirExisted) {
+          try { rmdirSync(path.dirname(autoCreatedConfig.path)); } catch { /* not empty or already gone */ }
+        }
+      }
       return {
         exitCode: 1,
-        message: `Error: Unknown target '${framework}'\nFrameworks: ${VALID_FRAMEWORKS.join(', ')}\n\n'all' deploys every framework + every addon + every extension.\nFor a single addon, run 'aiwg list' to see available addons.\nFor extensions (sys, net, it, sec, stream, dev), see $AIWG_ROOT/agentic/code/extensions/.\nFor project-local artifacts, run 'aiwg list --project-local'.\nRun 'aiwg help' for usage information.`,
+        message: `Error: Unknown target '${framework}'\nFrameworks: ${VALID_FRAMEWORKS.join(', ')}\n\n'all' deploys the kernel surface (kernel skills, kernel and core rules, behaviors).\nFor a single addon, run 'aiwg list' to see available addons.\nFor extensions (sys, net, it, sec, stream, dev), see $AIWG_ROOT/agentic/code/extensions/.\nFor project-local artifacts, run 'aiwg list --project-local'.\nRun 'aiwg help' for usage information.`,
       };
     }
 
@@ -3492,7 +3582,8 @@ export class UseHandler implements CommandHandler {
     if (isAddon || isExtension) {
       const providerIdx = remainingArgs.findIndex(a => a === '--provider' || a === '--platform');
       const explicitAddonProvider = providerIdx >= 0 && remainingArgs[providerIdx + 1] ? remainingArgs[providerIdx + 1] : null;
-      const provider = resolveBuiltInProviderForUse(explicitAddonProvider ?? (config?.providers?.[0] ?? 'claude')).provider;
+      const providers = resolvedProviders ?? [...new Set(configuredGlobalProviders(remainingArgs, config)
+        .map(provider => resolveBuiltInProviderForUse(provider).provider))];
       const targetIdx = remainingArgs.findIndex(a => a === '--target');
       const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
       const dryRunAddon = remainingArgs.includes('--dry-run');
@@ -3503,272 +3594,201 @@ export class UseHandler implements CommandHandler {
       } catch (error) {
         return { exitCode: 1, message: `Error: ${error instanceof Error ? error.message : String(error)}` };
       }
-      if (addonScope === 'user' && !USER_SCOPE_PATHS[provider]) {
-        return {
-          exitCode: 1,
-          message: `--scope user not supported for provider '${provider}' — see docs/customization/user-scope-deployment.md for the supported list`,
-        };
-      }
-
-      const runner = createScriptRunner(frameworkRoot);
-      const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
-      if (addonScope === 'user') addonBaseArgs.push('--scope', 'user');
-      // An explicitly selected upstream addon must be self-contained in the
-      // project. Unlike a full framework deploy, its standard skills cannot be
-      // left index-only: the user asked to install this specific bundle and
-      // its supporting scripts must travel with the skill directory.
-      addonBaseArgs.push('--copy-all');
-      addonBaseArgs.push(...modelDeployArgs);
-      if (provider) addonBaseArgs.push('--provider', provider);
-      if (target) addonBaseArgs.push('--target', target);
-      // Forward --copy-all (#1219) so addon-only deploys also honor it.
-      if ((remainingArgs.includes('--copy-all') || remainingArgs.includes('--copy-standard-skills'))
-          && !addonBaseArgs.includes('--copy-all')) {
-        addonBaseArgs.push('--copy-all');
-      }
-      if (dryRunAddon) addonBaseArgs.push('--dry-run');
-      if (remainingArgs.includes('--force')) addonBaseArgs.push('--force');
-
       const kind = isExtension ? 'extension' : 'addon';
-      const activationOrder = isAddon
-        ? await resolveRequiredAddonActivationOrder(frameworkRoot, framework)
-        : [framework];
-      const requiredAddons = activationOrder.slice(0, -1);
-
-      for (const dependency of requiredAddons) {
-        ui.blank();
-        ui.header(`  Deploying required ${dependency} addon...`);
-        const dependencySource = addonPath(frameworkRoot, dependency);
-        const dependencyResult = await runner.run('tools/agents/deploy-agents.mjs', [
-          '--quiet', '--source', dependencySource,
-          ...addonBaseArgs,
-        ], { capture: true });
-        if (dependencyResult.exitCode !== 0) {
-          return {
-            ...dependencyResult,
-            message: dependencyResult.message
-              || `Failed to deploy required addon '${dependency}'`,
-          };
-        }
-        if (!dryRunAddon) {
-          try {
-            await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
-          } catch (error) {
-            return {
-              exitCode: 1,
-              message: `Required addon '${dependency}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
-            };
-          }
-        }
-        try {
-          await registerSourceCliCommands({
-            source: dependencySource,
-            target,
-            provider,
-            dryRun: dryRunAddon,
-            fallbackDescription: `${dependency} addon commands`,
-          });
-        } catch (error) {
-          return {
-            exitCode: 1,
-            message: `Failed to register required addon '${dependency}' CLI commands: ${error instanceof Error ? error.message : String(error)}`,
-          };
-        }
-        ui.success(dryRunAddon
-          ? `Required ${dependency} addon activation previewed`
-          : `Required ${dependency} addon deployed`);
-      }
-
-      ui.blank();
-      ui.header(`  Deploying ${framework} ${kind}...`);
       const addonSource = isExtension
         ? extensionPath(frameworkRoot, framework)
         : addonPath(frameworkRoot, framework);
-      const addonResult = await runner.run('tools/agents/deploy-agents.mjs', [
-        '--quiet', '--source', addonSource,
-        ...addonBaseArgs,
-      ], { capture: true });
+      // Deploy, reconcile, and record exactly the provider set verification checks.
+      for (const provider of providers) {
+        if (addonScope === 'user' && !USER_SCOPE_PATHS[provider]) {
+          return {
+            exitCode: 1,
+            message: `--scope user not supported for provider '${provider}' — see docs/customization/user-scope-deployment.md for the supported list`,
+          };
+        }
 
-      if (addonResult.exitCode !== 0) {
-        return addonResult;
-      }
+        const runner = createUseScriptRunner(frameworkRoot);
+        const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
+        if (remainingArgs.includes('--allow-over-budget')) addonBaseArgs.push('--allow-over-budget');
+        if (addonScope === 'user') addonBaseArgs.push('--scope', 'user');
+        // An explicitly selected upstream addon must be self-contained in the
+        // project. Unlike a full framework deploy, its standard skills cannot be
+        // left index-only: the user asked to install this specific bundle and
+        // its supporting scripts must travel with the skill directory.
+        addonBaseArgs.push('--copy-all');
+        addonBaseArgs.push(...modelDeployArgs);
+        if (provider) addonBaseArgs.push('--provider', provider);
+        if (target) addonBaseArgs.push('--target', target);
+        // Forward --copy-all (#1219) so addon-only deploys also honor it.
+        if ((remainingArgs.includes('--copy-all') || remainingArgs.includes('--copy-standard-skills'))
+            && !addonBaseArgs.includes('--copy-all')) {
+          addonBaseArgs.push('--copy-all');
+        }
+        if (dryRunAddon) addonBaseArgs.push('--dry-run');
+        if (remainingArgs.includes('--force')) addonBaseArgs.push('--force');
 
-      if (!dryRunAddon) {
+        const activationOrder = isAddon
+          ? await resolveRequiredAddonActivationOrder(frameworkRoot, framework)
+          : [framework];
+        const requiredAddons = activationOrder.slice(0, -1);
+
+        for (const dependency of requiredAddons) {
+          ui.blank();
+          ui.header(`  Deploying required ${dependency} addon...`);
+          const dependencySource = addonPath(frameworkRoot, dependency);
+          const dependencyResult = await runner.run('tools/agents/deploy-agents.mjs', [
+            '--quiet', '--source', dependencySource,
+            ...addonBaseArgs,
+          ], { capture: true });
+          if (dependencyResult.exitCode !== 0) {
+            return {
+              ...dependencyResult,
+              message: dependencyResult.message
+                || `Failed to deploy required addon '${dependency}'`,
+            };
+          }
+          if (!dryRunAddon) {
+            try {
+              await reconcileDeployedSkillAssets(dependencySource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
+            } catch (error) {
+              return {
+                exitCode: 1,
+                message: `Required addon '${dependency}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
+              };
+            }
+          }
+          try {
+            await registerSourceCliCommands({
+              source: dependencySource,
+              target,
+              provider,
+              dryRun: dryRunAddon,
+              fallbackDescription: `${dependency} addon commands`,
+            });
+          } catch (error) {
+            return {
+              exitCode: 1,
+              message: `Failed to register required addon '${dependency}' CLI commands: ${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
+          ui.success(dryRunAddon
+            ? `Required ${dependency} addon activation previewed`
+            : `Required ${dependency} addon deployed`);
+        }
+
+        ui.blank();
+        ui.header(`  Deploying ${framework} ${kind}...`);
+        const addonResult = await runner.run('tools/agents/deploy-agents.mjs', [
+          '--quiet', '--source', addonSource,
+          ...addonBaseArgs,
+        ], { capture: true });
+
+        if (addonResult.exitCode !== 0) {
+          return addonResult;
+        }
+
+        if (!dryRunAddon) {
+          try {
+            await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
+          } catch (error) {
+            return {
+              exitCode: 1,
+              message: `${kind} '${framework}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
+        }
+
+        if (!dryRunAddon && provider === 'omp' && (detectScope(remainingArgs) === 'user' || remainingArgs.includes('--user'))) {
+          try { await deployOmpUserSource({ frameworkRoot, source: addonSource, target, bundle: framework, copyAll: true }); }
+          catch (error) { return { exitCode: 1, message: `OMP user deployment failed: ${error instanceof Error ? error.message : String(error)}` }; }
+        }
+
+        // Register only artifacts actually written by a confirmed deployment.
+        if (!dryRunAddon) {
+          try {
+            const registry = getRegistry();
+            const paths = getProviderPaths(provider);
+            await registerDeployedExtensions(registry, {
+              agentsPath: paths.agents,
+              skillsPath: paths.skills,
+              commandsPath: paths.commands,
+              rulesPath: paths.rules,
+              behaviorsPath: paths.behaviors,
+              provider,
+              cwd: target,
+            });
+            ui.success('Extension registration complete');
+          } catch (error) {
+            ui.warn(`Failed to register extensions: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
+        // Register CLI commands if addon declares them
         try {
-          await reconcileDeployedSkillAssets(addonSource, target, provider, { strictReferences: false, force: remainingArgs.includes('--force') });
+          await registerSourceCliCommands({
+            source: addonSource,
+            target,
+            provider,
+            dryRun: dryRunAddon,
+            fallbackDescription: `${framework} addon commands`,
+          });
         } catch (error) {
           return {
             exitCode: 1,
-            message: `${kind} '${framework}' skill asset deployment failed: ${error instanceof Error ? error.message : String(error)}`,
+            message: `Failed to register CLI commands: ${error instanceof Error ? error.message : String(error)}`,
           };
         }
-      }
 
-      if (!dryRunAddon && provider === 'omp' && (detectScope(remainingArgs) === 'user' || remainingArgs.includes('--user'))) {
-        try { await deployOmpUserSource({ frameworkRoot, source: addonSource, target, bundle: framework, copyAll: true }); }
-        catch (error) { return { exitCode: 1, message: `OMP user deployment failed: ${error instanceof Error ? error.message : String(error)}` }; }
-      }
-
-      // Register only artifacts actually written by a confirmed deployment.
-      if (!dryRunAddon) {
-        try {
-          const registry = getRegistry();
-          const paths = getProviderPaths(provider);
-          await registerDeployedExtensions(registry, {
-            agentsPath: paths.agents,
-            skillsPath: paths.skills,
-            commandsPath: paths.commands,
-            rulesPath: paths.rules,
-            behaviorsPath: paths.behaviors,
-            provider,
-            cwd: target,
-          });
-          ui.success('Extension registration complete');
-        } catch (error) {
-          ui.warn(`Failed to register extensions: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-
-      // Register CLI commands if addon declares them
-      try {
-        await registerSourceCliCommands({
-          source: addonSource,
-          target,
-          provider,
-          dryRun: dryRunAddon,
-          fallbackDescription: `${framework} addon commands`,
-        });
-      } catch (error) {
-        return {
-          exitCode: 1,
-          message: `Failed to register CLI commands: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-
-      if (!dryRunAddon && (provider === 'openclaw' || (provider === 'grokbot' && addonScope === 'user'))) {
-        try {
-          await recordNativeAddonDeploy(addonSource, target, provider, framework);
-        } catch (error) {
-          return { exitCode: 1, message: `Addon user registry update failed: ${error instanceof Error ? error.message : String(error)}` };
-        }
-      }
-
-      // Persist the same lifecycle record frameworks and project-local bundles
-      // receive so status, refresh, doctor, and remove can account for this
-      // upstream addon and every provider artifact it actually deployed.
-      if (!dryRunAddon && config) {
-        try {
-          const manifestPath = path.join(addonSource, 'manifest.json');
-          const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
-            version?: string;
-          };
-          // Provider rule aggregation may rename many source rules into one
-          // managed index. Record this addon's contributed artifact counts,
-          // matching framework registry semantics, rather than trying to
-          // attribute shared aggregate filenames after deployment.
-          const counts = await countBundleSourceArtifacts(addonSource);
-          const updated = updateInstalled(config, framework, provider, counts, {
-            version: manifest.version ?? (await getVersionInfo()).version,
-            source: 'bundled',
-            manifestHash: await hashManifest(manifestPath),
-            asPrimary: Boolean(explicitAddonProvider),
-          });
-          await writeAiwgConfig(projectDir, updated);
-          config = updated;
-        } catch (error) {
-          ui.warn(`Addon registry update failed for '${framework}': ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-
-      // Profile picker for addons with memory topology and multiple templates
-      try {
-        const profileManifestPath = path.join(addonSource, 'manifest.json');
-        const profileManifestContent = await fs.readFile(profileManifestPath, 'utf-8');
-        const profileManifest = JSON.parse(profileManifestContent);
-
-        const topology = profileManifest.memory?.topology;
-        const templates = profileManifest.templates;
-
-        if (topology && templates && templates.length > 1) {
-          const profileIdx = remainingArgs.findIndex(a => a === '--profile');
-          let selectedProfile: string | undefined;
-
-          if (profileIdx >= 0 && remainingArgs[profileIdx + 1]) {
-            // Explicit --profile flag
-            selectedProfile = remainingArgs[profileIdx + 1];
-            const templateFile = templates.find((t: string) =>
-              t.replace('.md', '') === selectedProfile || t === selectedProfile
-            );
-            if (!templateFile) {
-              ui.warn(`Unknown profile "${selectedProfile}". Available: ${templates.map((t: string) => t.replace('.md', '')).join(', ')}`);
-              selectedProfile = undefined;
-            }
-          } else if (_isBulkIntent || !process.stdin.isTTY) {
-            // Bulk/automation or non-TTY: silently pick 'generic' default.
-            // The profile picker is annoying during `aiwg use all`.
-            selectedProfile = 'generic';
-          } else if (process.stdin.isTTY) {
-            // Interactive profile selection via the shared `listSelect` helper
-            // (POC for spike #926). One call renders the option list, handles
-            // number-or-name matching, threads `ctx.signal` for Ctrl-C
-            // cancellation, and resolves to the fallback on timeout or empty
-            // input. The hand-rolled parse-and-branch that used to live here
-            // is now a one-liner.
-            const { createPromptInterface, listSelect } = await import('../prompt-utils.js');
-            ui.blank();
-            ui.header('  Select a topology profile:');
-            const templateNames = templates.map((t: string) => t.replace('.md', ''));
-            const options = templateNames.map((name: string) => ({
-              label: name === 'generic' ? `${name} (default)` : name,
-              value: name,
-            }));
-
-            const rl = createPromptInterface();
-            try {
-              selectedProfile = await listSelect(
-                rl,
-                '  Enter number or name [generic]: ',
-                options,
-                'generic',
-                ctx.signal,
-              );
-            } finally {
-              rl.close();
-            }
+        if (!dryRunAddon && (provider === 'openclaw' || (provider === 'grokbot' && addonScope === 'user'))) {
+          try {
+            await recordNativeAddonDeploy(addonSource, target, provider, framework);
+          } catch (error) {
+            return { exitCode: 1, message: `Addon user registry update failed: ${error instanceof Error ? error.message : String(error)}` };
           }
+        }
 
-          // Write profile config to project namespace
-          if (selectedProfile && !dryRunAddon) {
-            const namespace = topology.namespace || `.aiwg/${framework}`;
-            const configDir = path.join(target, namespace);
-            await fs.mkdir(configDir, { recursive: true });
-            const profileConfig = {
-              profile: selectedProfile,
-              pageTemplate: `templates/${selectedProfile}.md`,
-              selectedAt: new Date().toISOString(),
+        // Persist the same lifecycle record frameworks and project-local bundles
+        // receive so status, refresh, doctor, and remove can account for this
+        // upstream addon and every provider artifact it actually deployed.
+        if (!dryRunAddon && config) {
+          try {
+            const manifestPath = path.join(addonSource, 'manifest.json');
+            const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as {
+              version?: string;
             };
-            await fs.writeFile(
-              path.join(configDir, 'config.json'),
-              JSON.stringify(profileConfig, null, 2) + '\n'
-            );
-            ui.success(`Profile "${selectedProfile}" selected → ${namespace}/config.json`);
+            // Record only artifacts actually written for this provider. Bridge-only
+            // providers (e.g. project-scope grokbot) write zero native files,
+            // so source-manifest counts would leave phantom registry entries.
+            const counts = await countBundleDeployedArtifacts(addonSource, target, provider);
+            const updated = updateInstalled(config, framework, provider, counts, {
+              version: manifest.version ?? (await getVersionInfo()).version,
+              source: 'bundled',
+              manifestHash: await hashManifest(manifestPath),
+              asPrimary: Boolean(explicitAddonProvider),
+            });
+            await writeAiwgConfig(projectDir, updated);
+            config = updated;
+          } catch (error) {
+            ui.warn(`Addon registry update failed for '${framework}': ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-      } catch {
-        // Profile selection is optional — don't fail deployment
-      }
 
-      if (framework === 'aiwg-utils' && !['pi', 'omp'].includes(provider) && !remainingArgs.includes('--dry-run')) {
-        const wrapperValidation = await validateDeployedModelWrappers({
-          provider: normalizeProviderDefinitionId(provider) ?? provider,
-          target,
-          frameworkRoot,
-          modelDeployArgs,
-          filtered: remainingArgs.includes('--filter') || remainingArgs.includes('--filter-role'),
-          verbose: remainingArgs.includes('--verbose') || remainingArgs.includes('-v'),
-        });
-        if (wrapperValidation) return wrapperValidation;
+        if (framework === 'aiwg-utils' && !['pi', 'omp'].includes(provider) && !remainingArgs.includes('--dry-run')) {
+          const wrapperValidation = await validateDeployedModelWrappers({
+            provider: normalizeProviderDefinitionId(provider) ?? provider,
+            target,
+            frameworkRoot,
+            modelDeployArgs,
+            filtered: remainingArgs.includes('--filter') || remainingArgs.includes('--filter-role'),
+            verbose: remainingArgs.includes('--verbose') || remainingArgs.includes('-v'),
+          });
+          if (wrapperValidation) return wrapperValidation;
+        }
       }
+      await selectAddonProfile({
+        addonSource, framework, target, args: remainingArgs,
+        dryRunAddon, bulkIntent: _isBulkIntent, signal: ctx.signal,
+      });
 
       ui.blank();
       ui.success(dryRunAddon
@@ -3792,6 +3812,16 @@ export class UseHandler implements CommandHandler {
     const force = remainingArgs.includes('--force');
     const skipConflicts = remainingArgs.includes('--skip-conflicts');
     const explicitHarnessAgentSelectors = parseOpenHumanHarnessAgentSelector(remainingArgs);
+    const preparedFlag = '--aiwg-provider-main-prepared';
+    const preparedFlagIndex = remainingArgs.indexOf(preparedFlag);
+    const preparedCapability = preparedFlagIndex >= 0 ? remainingArgs[preparedFlagIndex + 1] : undefined;
+    let mainProviderPrepared = false;
+    if (preparedFlagIndex >= 0) {
+      if (!preparedCapability || !this.preparedProviderContinuations.delete(preparedCapability)) {
+        return { exitCode: 1, message: 'Invalid prepared-provider continuation capability.' };
+      }
+      mainProviderPrepared = true;
+    }
 
     // PUW-027 (#1128): --scope user|project per ADR-4. Default project.
     // #1156 Phase 1: --user is a shorthand for --scope user.
@@ -3817,14 +3847,14 @@ export class UseHandler implements CommandHandler {
       }
     }
     if (scope === 'user' && !deployArgs.includes('--scope')) deployArgs.push('--scope', 'user');
-    const filteredArgs = deployArgs.filter(
+    const filteredArgs = removeFlagWithOptionalValue(deployArgs, preparedFlag).filter(
       a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
     );
     const deployFilteredArgs = removeFlagWithOptionalValue(filteredArgs, '--harness-agents');
 
     // Pass --quiet to suppress deploy-agents.mjs header/footer in default mode (#460)
-    // Human dry-run remains verbose; machine-readable dry-run captures the
-    // preview so stdout stays a single JSON document.
+    // Dry-run action output is captured and consolidated at the use boundary;
+    // keep it available to the collector rather than silencing child plans.
     if (machineReadableUseDepth > 0 || (!verbose && !dryRun)) deployFilteredArgs.push('--quiet');
 
     // Extract provider and target from remainingArgs to pass to addon deployments
@@ -3845,8 +3875,84 @@ export class UseHandler implements CommandHandler {
       }
     }
 
-    // Multi-provider: loop over providers, deploying to each in sequence
+    const targetIdx = remainingArgs.findIndex(a => a === '--target');
+    const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
+
+    // Resolve companions before serial or concurrent deployment writes anything.
+    let companions: CompanionBundles;
+    try {
+      companions = await resolveCompanionBundles({ frameworkRoot, framework, skipUtils });
+    } catch (error) {
+      return { exitCode: 1, message: `Error: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (!companions.bundleMode) {
+      deployFilteredArgs.push(...(companions.addons.length > 0
+        ? ['--sweep-addons', companions.addons.join(',')]
+        : ['--no-addon-sweep']));
+    }
+
+    // Multi-provider: prepare built-in project-scope projections in at most two
+    // subprocesses, then preserve the existing provider/addon commit order.
+    // User-scope, dry-run, harness-special and project-local adapters retain the
+    // established serial path because their lifecycle is not stage-only.
     if (providers.length > 1) {
+      const preparedJobs: Array<{ order: number; provider: string; target: string; args: string[] }> = [];
+      let canPrepareConcurrently = !dryRun && scope === 'project' && explicitHarnessAgentSelectors.length === 0;
+      for (const [order, requested] of providers.entries()) {
+        const local = await resolveProjectLocalProviderAdapter(projectDir, requested);
+        if (local.requestedProvider) { canPrepareConcurrently = false; break; }
+        const unsupported = unsupportedProviderMessage(requested);
+        if (unsupported) return { exitCode: 1, message: unsupported };
+        const resolved = resolveBuiltInProviderForUse(local.provider);
+        if (!PREPARABLE_BUILTIN_PROVIDERS.has(resolved.provider)) { canPrepareConcurrently = false; break; }
+        const args = useDeploymentArgs(withProviderOverride([...deployFilteredArgs], resolved.provider));
+        if (framework === 'all') {
+          const kernelOnly = !['pi', 'omp'].includes(resolved.provider)
+            && !remainingArgs.includes('--copy-all') && !remainingArgs.includes('--copy-standard-skills');
+          if (kernelOnly) args.push('--kernel-only');
+          const batchExtensions = resolved.provider === 'omp' && mainDeploymentIncludesAddons(resolved.provider, mode, args);
+          if (batchExtensions) {
+            for (const extension of companions.extensions) {
+              args.push('--additional-source', extensionPath(frameworkRoot, extension));
+            }
+          }
+          if ((companions.extensions.length > 0 && !kernelOnly && !batchExtensions)
+            || (!mainDeploymentIncludesAddons(resolved.provider, mode, args) && companions.addons.length > 0)) {
+            args.push('--defer-rule-projection');
+          }
+        }
+        preparedJobs.push({ order, provider: resolved.provider, target: path.resolve(target), args });
+      }
+      if (canPrepareConcurrently && preparedJobs.length === providers.length) {
+        if (!skipConflicts) {
+          for (const job of preparedJobs) {
+            const canDeploy = await runPreDeployCollisionCheck({
+              frameworkRoot, framework, target, provider: job.provider, force, skipConflicts, verbose,
+            });
+            if (!canDeploy) return { exitCode: 1, message: 'Deployment blocked due to name collisions. See above for details.' };
+          }
+        }
+        let session: Awaited<ReturnType<typeof prepareProviderDeployments>> | undefined;
+        try {
+          session = await prepareProviderDeployments(frameworkRoot, preparedJobs);
+          for (const [order, requested] of providers.entries()) {
+            await session.commit(order);
+            const capability = randomUUID();
+            this.preparedProviderContinuations.add(capability);
+            try {
+              const result = await this.execute({ ...ctx, args: [framework, '--provider', requested, preparedFlag, capability, ...remainingArgs] });
+              if (result.exitCode !== 0) return result;
+            } finally {
+              this.preparedProviderContinuations.delete(capability);
+            }
+          }
+          return { exitCode: 0 };
+        } catch (error) {
+          return { exitCode: 1, message: `Concurrent provider preparation failed: ${error instanceof Error ? error.message : String(error)}` };
+        } finally {
+          await session?.dispose();
+        }
+      }
       for (const p of providers) {
         const result = await this.execute({ ...ctx, args: [framework, '--provider', p, ...remainingArgs] });
         if (result.exitCode !== 0) return result;
@@ -3877,27 +3983,17 @@ export class UseHandler implements CommandHandler {
       && !remainingArgs.includes('--copy-all')
       && !remainingArgs.includes('--copy-standard-skills');
     if (bulkKernelOnly) providerDeployArgs.push('--kernel-only');
-    // Pick what rides along with this target before any file is written, so an
-    // invalid dependency declaration stops the run instead of half-deploying.
-    let companions: CompanionBundles;
-    try {
-      companions = await resolveCompanionBundles({ frameworkRoot, framework, skipUtils });
-    } catch (error) {
-      return { exitCode: 1, message: `Error: ${error instanceof Error ? error.message : String(error)}` };
+    const allAddons = companions.addons;
+    const allExtensions = bulkKernelOnly ? [] : companions.extensions;
+    const mainIncludesAddons = mainDeploymentIncludesAddons(provider, mode, providerDeployArgs);
+    // OMP extension sources share the root transaction and binding scan.
+    const batchedOmpExtensions = provider === 'omp' && mainIncludesAddons ? allExtensions : [];
+    for (const extension of batchedOmpExtensions) {
+      providerDeployArgs.push('--additional-source', extensionPath(frameworkRoot, extension));
     }
-    // A named framework deploys itself plus those companions. The deployer's own
-    // sdlc/general/both/all mode sweep would pull every addon in again, so narrow
-    // it to the companions. It cannot simply be switched off: some providers only
-    // receive aiwg-utils agents and rules through that sweep, not through the
-    // `--source` addon run below.
-    if (!companions.bundleMode) {
-      providerDeployArgs.push(...(companions.addons.length > 0
-        ? ['--sweep-addons', companions.addons.join(',')]
-        : ['--no-addon-sweep']));
-    }
-    const targetIdx = remainingArgs.findIndex(a => a === '--target');
-    const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
-
+    const additiveSources = (mainIncludesAddons ? 0 : allAddons.length)
+      + allExtensions.length - batchedOmpExtensions.length;
+    if (framework === 'all' && additiveSources > 0) providerDeployArgs.push('--defer-rule-projection');
     if ((verbose || dryRun) && projectLocalProviderResolution.requestedProvider) {
       ui.dim(`  project-local provider '${projectLocalProviderResolution.requestedProvider}' extends '${provider}'`);
     } else if ((verbose || dryRun) && builtInProviderResolution.requestedProvider) {
@@ -3982,15 +4078,25 @@ export class UseHandler implements CommandHandler {
     const captureOpts = quiet ? { capture: true } : {};
     if (quiet) {
       const installLabel = framework === 'all'
-        ? 'Installing complete AIWG surface'
+        ? (bulkKernelOnly ? 'Installing AIWG kernel surface' : 'Installing full AIWG surface')
         : `Installing ${framework} framework`;
       const providerLabel = getProviderDefinition(provider)?.displayName ?? provider;
       ui.blank();
       console.log(`  ${ui.brandMark()} ${ui.bold(installLabel)}  ${ui.dimText(`for ${providerLabel}`)}`);
       ui.blank();
     }
-    const runner = createScriptRunner(ctx.frameworkRoot);
-    const mainResult = await runner.run('tools/agents/deploy-agents.mjs', providerDeployArgs, captureOpts);
+    const runner = createUseScriptRunner(ctx.frameworkRoot);
+    let mainResult: HandlerResult;
+    if (mainProviderPrepared) {
+      try {
+        await finalizePreparedProvider(frameworkRoot, useDeploymentArgs(providerDeployArgs));
+        mainResult = { exitCode: 0 };
+      } catch (error) {
+        mainResult = { exitCode: 1, message: `Prepared provider finalization failed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    } else {
+      mainResult = await runner.run('tools/agents/deploy-agents.mjs', providerDeployArgs, captureOpts);
+    }
 
     if (mainResult.exitCode !== 0) {
       return mainResult;
@@ -4021,6 +4127,7 @@ export class UseHandler implements CommandHandler {
 
     // Build common args for addon deployments (inherit provider and target)
     const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
+    if (remainingArgs.includes('--allow-over-budget')) addonBaseArgs.push('--allow-over-budget');
     if (scope === 'user') addonBaseArgs.push('--scope', 'user');
     if (bulkKernelOnly) addonBaseArgs.push('--kernel-only');
     addonBaseArgs.push(...modelDeployArgs);
@@ -4034,10 +4141,9 @@ export class UseHandler implements CommandHandler {
       addonBaseArgs.push('--copy-all');
     }
 
-    // Deploy the companions picked above: everything for a bundle mode, or for a
-    // named framework just aiwg-utils (unless --no-utils) and the addons its
-    // manifests require.
-    for (const addon of companions.addons) {
+    // Deploy only the selected companions, skipping artifacts collected by the
+    // root provider while retaining each companion's CLI registration.
+    for (const [index, addon] of allAddons.entries()) {
       if (verbose) {
         console.log('');
         console.log(`Deploying ${addon} addon...`);
@@ -4046,16 +4152,16 @@ export class UseHandler implements CommandHandler {
       const addonArgs = quiet
         ? ['--quiet', '--source', source, ...addonBaseArgs]
         : ['--source', source, ...addonBaseArgs];
-      const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
-      if (result.exitCode !== 0) {
-        return result;
+      if (framework === 'all' && (allExtensions.length > 0 || index < allAddons.length - 1)) {
+        addonArgs.push('--defer-rule-projection');
+      }
+      if (!mainIncludesAddons) {
+        const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
+        if (result.exitCode !== 0) return result;
       }
       try {
         await registerSourceCliCommands({
-          source,
-          target,
-          provider,
-          dryRun,
+          source, target, provider, dryRun,
           fallbackDescription: `${addon} addon commands`,
         });
       } catch (error) {
@@ -4063,11 +4169,9 @@ export class UseHandler implements CommandHandler {
       }
     }
 
-    // Deploy extensions from agentic/code/extensions/* (#1222) — `all` only.
-    // Extensions are addon-shaped bundles (manifest type: "addon") that live
-    // in a separate top-level dir to keep ops/sysops/itops/devops grouped.
-    // Frameworks no longer sweep them in; they deploy by name (`aiwg use sys`).
-    for (const ext of companions.extensions) {
+    // Extensions accompany bulk full-surface modes, never a named framework.
+    // Kernel mode leaves shared rule presentation to the final addon/root pass.
+    for (const [index, ext] of allExtensions.entries()) {
       if (verbose) {
         console.log('');
         console.log(`Deploying ${ext} extension...`);
@@ -4076,16 +4180,14 @@ export class UseHandler implements CommandHandler {
       const extArgs = quiet
         ? ['--quiet', '--source', source, ...addonBaseArgs]
         : ['--source', source, ...addonBaseArgs];
-      const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
-      if (result.exitCode !== 0) {
-        return result;
+      if (framework === 'all' && index < allExtensions.length - 1) extArgs.push('--defer-rule-projection');
+      if (!batchedOmpExtensions.includes(ext)) {
+        const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
+        if (result.exitCode !== 0) return result;
       }
       try {
         await registerSourceCliCommands({
-          source,
-          target,
-          provider,
-          dryRun,
+          source, target, provider, dryRun,
           fallbackDescription: `${ext} extension commands`,
         });
       } catch (error) {
@@ -4149,7 +4251,7 @@ export class UseHandler implements CommandHandler {
           projectPath: target,
           dryRun,
           verbose,
-          deployVersion: (await getVersionInfo()).version,
+          deployVersion: deploymentVersion(frameworkRoot),
         });
         if (verbose && translationResult.translated.length > 0) {
           ui.success(`Translated ${translationResult.translated.length} skills → commands (${provider})`);
@@ -4201,7 +4303,7 @@ export class UseHandler implements CommandHandler {
             projectPath: target,
             dryRun,
             verbose,
-            deployVersion: (await getVersionInfo()).version,
+            deployVersion: deploymentVersion(frameworkRoot),
             nameFilter: shouldMirrorKernelCommandSkill,
           });
           if (verbose && kernel.translated.length > 0) {
@@ -4267,7 +4369,14 @@ export class UseHandler implements CommandHandler {
         // progress through; otherwise we show a single-line spinner-
         // style message and capture the noisy stat lines.
         ui.blank();
-        ui.info('Building capability index…');
+        const { loadPrebuiltDeploymentIndex } = await import('../../artifacts/prebuilt-deployment.js');
+        const prebuilt = loadPrebuiltDeploymentIndex(aiwgRootForIndex, { strictRoot: true });
+        ui.info(prebuilt ? 'Validating packaged capability index…' : 'Building capability index…');
+        if (!prebuilt && await fs.access(path.join(aiwgRootForIndex, 'prebuilt', 'framework-relations', 'manifest.json')).then(() => true).catch(() => false)) {
+          const { selectPrebuiltRelations } = await import('../../artifacts/relations.js');
+          const reason = selectPrebuiltRelations(aiwgRootForIndex).reason ?? 'packaged search index is missing, stale, or does not match the source';
+          ui.dim(`  Packaged index unavailable: ${reason}.`);
+        }
         ui.dim('  Indexing operational assets for agent-side lookup.');
 
         const indexStart = Date.now();
@@ -4275,13 +4384,9 @@ export class UseHandler implements CommandHandler {
         const origLog = console.log;
         if (!verbose) console.log = () => {};
         try {
-          const { buildIndex } = await import('../../artifacts/index-builder.js');
-          // Build against AIWG_ROOT so stored paths resolve from any
-          // project (#1217). The output index location is XDG-shared
-          // regardless of build cwd.
-          await buildIndex(aiwgRootForIndex, { graph: 'framework', explicit: false });
-          const { syncFortemiCoreIndex } = await import('../../artifacts/fortemi-core-sync.js');
-          syncFortemiCoreIndex(aiwgRootForIndex, { graph: 'framework' });
+          // Validate uncommitted sources once and publish the receipt so
+          // verification/discovery do not immediately scan the corpus again.
+          await reconcileSelectedFrameworkSource(aiwgRootForIndex);
           console.log = origLog;
           const indexElapsedSec = ((Date.now() - indexStart) / 1000).toFixed(1);
           ui.success(`Capability index ready (${indexElapsedSec}s).`);
@@ -4402,6 +4507,7 @@ export class UseHandler implements CommandHandler {
         const r = await installAiwgHooks({
           projectPath: target,
           frameworkRoot,
+          attribution: !useDeployment?.skipAttribution && !remainingArgs.includes('--no-attribution'),
           dryRun,
           verbose,
         });
@@ -4507,11 +4613,10 @@ export class UseHandler implements CommandHandler {
     // failed deploys produce shorter indexes, never broken links.
     //
     // Operators opt out via --no-context-files / --no-aiwg-md / --no-agents-md.
-    if (!dryRun) {
-      const skipContext = remainingArgs.includes('--no-context-files');
-      const skipWorkspaceMd = skipContext || remainingArgs.includes('--no-workspace-md');
-      const skipAiwgMd = skipContext || remainingArgs.includes('--no-aiwg-md');
-      const skipAgentsMd = skipContext || remainingArgs.includes('--no-agents-md');
+    if (!dryRun && !remainingArgs.includes('--no-context-files')) {
+      const skipWorkspaceMd = remainingArgs.includes('--no-workspace-md');
+      const skipAiwgMd = remainingArgs.includes('--no-aiwg-md');
+      const skipAgentsMd = remainingArgs.includes('--no-agents-md');
       const forceContext = remainingArgs.includes('--force-context-files');
 
       try {
@@ -4523,7 +4628,7 @@ export class UseHandler implements CommandHandler {
           behaviors: paths.behaviors,
         });
 
-        const ctxResult = await generateContextFiles({
+        const ctxResult = await generateDeploymentContextFiles({
           provider: provider as Platform,
           projectPath: target,
           sections,
@@ -4541,9 +4646,6 @@ export class UseHandler implements CommandHandler {
         }
         if (verbose && ctxResult.aiwgMdPath) {
           ui.dim(`  Wrote AIWG.md`);
-        }
-        if (verbose && ctxResult.normalizedAiwgMdPath) {
-          ui.dim(`  Wrote .aiwg/AIWG.md`);
         }
         if (verbose && ctxResult.claudeMdHookPath && ctxResult.claudeMdHookAction && ctxResult.claudeMdHookAction !== 'unchanged') {
           // #1437: CLAUDE.md hook for claude provider; mirrors AGENTS.md for other providers.
@@ -4578,10 +4680,8 @@ export class UseHandler implements CommandHandler {
           }
         }
       } catch (err) {
-        // Non-fatal: context-pipeline emission must not block deployment.
-        // Operator can re-run aiwg use to retry.
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`Warning: context-pipeline emission failed: ${msg}`);
+        return { exitCode: 1, message: `Context generation failed: ${msg}` };
       }
     }
 

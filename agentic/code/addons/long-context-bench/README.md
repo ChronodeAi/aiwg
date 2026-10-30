@@ -1,5 +1,7 @@
 # Long-Context Compression Benchmark
 
+Evidence status: measured ([default fixture report](evidence/aiwg-retrieval-report.json)); no provider-generalizable claims.
+
 This addon is deliberately benchmark-only. It compares
 `compressed-skim-exact-recovery` with three required baselines:
 

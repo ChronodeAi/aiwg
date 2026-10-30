@@ -1,4 +1,78 @@
 ---
+activation: summary
+summary: "Checkpoint durable state, compact context, and continue authorized work without asking whether to keep going; stop only for real blockers or completion."
+bound_to:
+  skills:
+    - address-issues
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - artifact-orchestration
+    - checkpoint
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+    - mission-control
+    - orchestrate-project
+    - ralph
+    - ralph-external
+    - ralph-resume
+  agents:
+    - ralph-loop
+    - ralph-verifier
+    - executive-orchestrator
+    - recovery-orchestrator
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
 enforcement: high
 triggers:
   - "should I keep working"
@@ -114,6 +188,10 @@ When a session resumes from compaction (prior turns summarized, or reading a pri
 5. **Skip the "failed approaches" set** — do not retry them.
 6. **Resume from "Next action."**
 
+When the decision-engine addon is installed and decision ask is enabled,
+re-read `aiwg show rule decision-offload --body` before the next eligible bounded
+checkpoint. A classifier answer remains advisory and is not authorization.
+
 The progress file is the bridge between sessions (REF-909).
 
 **Recovery when violated**: if you just asked "should I continue?", reframe ("Continuing — checkpointing, proceeding to <next step>") and continue without waiting for confirmation.
@@ -137,7 +215,7 @@ If none apply: **continue**.
 ## References
 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/vague-discretion.md, instruction-comprehension.md, human-authorization.md, activity-log.md, context-budget.md, skill-discovery.md
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Rule 6: 3-attempts escalation
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Rule 6: 3-attempts escalation
 - REF-909 (Anthropic — *Effective Harnesses for Long-Running Agents*) — progress files. https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents
 - REF-910 (Anthropic — *Compaction*) — auto-compact, Compact Instructions. https://platform.claude.com/docs/en/build-with-claude/compaction
 - REF-122 (Verma) — compression 22.7% vs 6%; REF-128 (Zylos) — effective context 30-40% smaller; anchor roctinam/aiwg#1348

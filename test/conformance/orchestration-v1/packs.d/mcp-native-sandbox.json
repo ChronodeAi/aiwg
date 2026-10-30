@@ -1,0 +1,6 @@
+{
+  "T-OG-17": [
+    "test/unit/cli/handlers/models-mcp-native-sandbox.test.ts",
+    "test/unit/mcp/worker-contract-diagnostics.test.ts"
+  ]
+}

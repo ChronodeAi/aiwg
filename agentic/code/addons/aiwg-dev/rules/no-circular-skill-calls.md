@@ -1,5 +1,23 @@
 ---
 enforcement: high
+activation: paths
+summary: Keep skill-runner commands self-contained; audit their SKILL.md before enabling executedViaSkillRunner and remove recursive CLI callbacks.
+bound_to:
+  skills:
+    - devkit-create-command
+    - devkit-create-skill
+    - add-command
+    - add-skill
+    - validate-addon
+    - validate-component
+    - devkit-validate
+    - dev-doctor
+  agents:
+    - aiwg-developer
+paths:
+  - agentic/code/**/skills/**
+  - src/extensions/**
+  - src/cli/handlers/**
 ---
 
 # No Circular Skill Calls

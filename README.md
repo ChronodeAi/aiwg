@@ -25,10 +25,10 @@ me only for choices you cannot safely determine.
 ```
 
 The installer detects old, broken, duplicate, and development-mode installs,
-then guides you through repair or update. It deploys the preferred complete
-system with one self-verifying `aiwg use all` command. That command refreshes
-the indices, regenerates project context, verifies the resulting deployment,
-and reports whether a provider reload is actually required.
+then guides you through repair or update. Once the CLI is healthy, guided
+setup records an interview plan, lets you review it, and applies the selected
+frameworks and integrations through the existing deployment owners. The apply
+report distinguishes core readiness from optional integration failures.
 
 For long-running agents that need an isolated executor, optionally install AIWG Cockpit with a self-hosted Agentic
 Sandbox executor you control and audit:
@@ -50,15 +50,21 @@ If you prefer to install manually:
 ```bash
 npm i -g aiwg
 cd /path/to/your/project
-aiwg use all --provider <provider>
+aiwg setup --scope project --providers <provider>
+aiwg setup --review
+aiwg setup --apply
 ```
 
 Replace `<provider>` with your AI tool's name, such as `claude`, `codex`,
 `copilot`, `cursor`, `omp`, or `pi`.
 
-The final command deploys, indexes, connects, verifies, and reports one outcome.
-The standalone index, regenerate, status, and doctor commands remain available
-for advanced maintenance and troubleshooting; they are not extra install steps.
+The interview saves a plan without changing provider configuration. Review is
+read-only; apply asks for confirmation and reports the verified outcome. Optional
+Jev decision offload and direct workers require explicit opt-in. Repeating apply
+resumes unfinished actions and leaves completed actions alone. See the
+[guided setup reference](docs/getting-started/guided-setup.md) for headless flags,
+credential references, scope choices, and recovery. For a direct complete-system
+deployment, `aiwg use all --provider <provider>` remains available.
 
 For the complete beginner path and provider-name table, see
 [Install, Connect, and Verify](docs/getting-started/install-connect-verify.md).
@@ -2226,6 +2232,14 @@ cross-platform deployment for project-local and packaged capabilities:
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 project guidelines.
+
+For release validation, the [release comparison tool](tools/rules/README.md)
+keeps assertion losses as hard regressions and tolerates judge noise with an
+exact sign test (`--judge-alpha 0.05`) and a dimension mean margin
+(`--judge-score-margin 1.0` on the 0–4 scale). At n=5, a judge-only 4/1 split
+does not regress; 5/0 does. Reports retain per-scenario A/B/tie tallies and the
+rule that determined each result. Follow the
+[release checklist](docs/contributing/release-validation-procedure.md).
 
 **Quick contributions:**
 

@@ -125,8 +125,8 @@
     ],
     "normalizedFiles": [
       {
-        "path": ".aiwg/AIWG.md",
-        "description": "Project context entry point — current phase, architecture summary, installed frameworks"
+        "path": "AIWG.md",
+        "description": "Single generated framework context at project root; optional .aiwg/AIWG.md contains operator notes only"
       }
     ],
     "topology": {

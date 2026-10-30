@@ -9,7 +9,9 @@ export function loadRecordedWorkerInstallations(input: {
   parallelism?: import('../config/aiwg-config.js').ParallelismConfig;
   storePath?: string;
   storeDigest?: string;
-}): Promise<{ registry: ProviderModelCapabilityRegistry; installations: Record<string, WorkerResolutionBinding>; drivers: Record<string, WorkerInvocationDriver>; observations: Record<string, import('./model-discovery.js').ProviderModelDiscovery> }>;
+  /** Request validation after store presence, before recorded policy/adapter checks. */
+  precheckPolicy?: () => void;
+}): Promise<{ registry: ProviderModelCapabilityRegistry; installations: Record<string, WorkerResolutionBinding>; drivers: Record<string, WorkerInvocationDriver>; observations: Record<string, import('./model-discovery.js').ProviderModelDiscovery>; qualificationFailures?: Record<string, string> }>;
 
 export function hasProvider(name: string): boolean;
 
@@ -37,3 +39,8 @@ export function registerWorkerRecoveryCapabilities<T extends object>(driver: T, 
 export function getWorkerRecoveryCapabilities(driver: object | undefined | null): Readonly<WorkerRecoveryCapabilities> | null;
 
 export function prepareWorkerInstallationStore(input: { workerWritableRoots: string[]; apply?: boolean }): Promise<{ path: string; action: string }[]>;
+
+/** Historical approvals only; no driver import, probe, auth read, or launch authority. */
+export function inspectRecordedWorkerQualifications(input: {
+  cwd: string; policy: WorkerSelectionPolicy; parallelism: import('../config/aiwg-config.js').ParallelismConfig;
+}): Promise<Array<{ cli: string; provider: string }>>;

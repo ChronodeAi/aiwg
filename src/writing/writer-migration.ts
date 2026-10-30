@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, resolve, join } from 'node:path';
 import { z } from 'zod';
+import { integer, dateTime } from '../schema/zod-validation.mjs';
 import { importLegacyWriterProfile } from './writer-profile-legacy.js';
 import { parseWriterProfile, type WriterProfile } from './writer-profile.js';
 import { WriterProfileStore } from './writer-profile-store.js';
@@ -21,19 +22,19 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-const requestSchema = z.object({
+const requestSchema = z.strictObject({
   cwd: z.string().min(1),
   sourcePath: z.string().min(1),
   format: z.enum(['yaml', 'json']),
   scope: z.enum(['project', 'user']).default('project'),
   userConfigDir: z.string().min(1).optional(),
-  profile: z.object({
+  profile: z.strictObject({
     id: profileId,
     name: z.string().min(1).max(200),
     version: z.string().regex(/^\d+\.\d+\.\d+$/).default('1.0.0'),
-    provenance: z.object({ source: z.string().min(1).max(2000), license: z.string().min(1).max(200) }).strict(),
-  }).strict(),
-}).strict();
+    provenance: z.strictObject({ source: z.string().min(1).max(2000), license: z.string().min(1).max(200) }),
+  }),
+});
 export type WriterMigrationRequest = z.input<typeof requestSchema>;
 
 export interface WriterMigrationPlan {
@@ -74,25 +75,25 @@ interface MigrationBackup {
   previousProfile: { sha256: string; json: WriterProfile } | null;
 }
 
-const planSchema = z.object({
+const planSchema = z.strictObject({
   schemaVersion: z.literal('aiwg.writer-migration-plan.v1'),
   id: z.string().regex(/^wm-[a-f0-9]{24}$/),
   planSha256: digest,
-  createdAt: z.string().datetime(),
+  createdAt: dateTime(),
   dryRun: z.literal(true),
   cwd: z.string().min(1),
-  source: z.object({ path: z.string().min(1), format: z.enum(['yaml', 'json']), sha256: digest, bytes: z.number().int().nonnegative(), legacyKind: z.string().min(1).max(80) }).strict(),
-  target: z.object({
+  source: z.strictObject({ path: z.string().min(1), format: z.enum(['yaml', 'json']), sha256: digest, bytes: integer().nonnegative(), legacyKind: z.string().min(1).max(80) }),
+  target: z.strictObject({
     scope: z.enum(['project', 'user']),
     profileId,
     userConfigDir: z.string().min(1).optional(),
-    existingProfile: z.object({ revision: z.number().int().positive(), sha256: digest }).strict().nullable(),
+    existingProfile: z.strictObject({ revision: integer().positive(), sha256: digest }).nullable(),
     activatesProfile: z.literal(false),
-  }).strict(),
+  }),
   actions: z.array(z.string().min(1).max(200)).min(1),
   warnings: z.array(z.string().min(1).max(400)),
-  profileTemplate: z.unknown(),
-}).strict();
+  profileTemplate: z.unknown().optional(),
+});
 
 function planDigest(plan: Omit<WriterMigrationPlan, 'planSha256'>): string {
   return hash(JSON.stringify(canonicalize(plan)));

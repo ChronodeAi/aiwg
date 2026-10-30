@@ -5,6 +5,16 @@
 Use the session catalog when you want one privacy-aware timeline across
 multiple AI providers.
 
+> "Import my AI session history for this project so I get one timeline across providers."
+
+Your assistant previews discovery with `--dry-run`, reviews the manifest, then imports with `--confirm`.
+
+> "Discovery found sessions outside this workspace. Only import this project's history."
+
+Your assistant narrows discovery with `--workspace` and `--exclude` entries and re-checks coverage before importing.
+
+### Command reference
+
 Install the catalog's SQLite runtime once and verify that its native module
 loads:
 
@@ -128,6 +138,16 @@ Use `aiwg sessions --help` for the complete command and JSON contracts.
 
 ## Ask questions about collected history
 
+> "Where did we decide the retry policy, and which tool kept failing last week?"
+
+Your assistant uses the `session-explore` skill for scoped FTS5 queries, timelines, and coverage gaps.
+
+> "That answer looks thin. Check whether coverage is partial and what is missing."
+
+Your assistant reports complete, partial, stale, or unknown coverage and names the missing sources.
+
+### Command reference
+
 Use `aiwg discover "spelunk session data"` and `aiwg show skill session-explore`
 for questions such as “where did we decide this?”, “which tool kept failing?”,
 or “what changed between provider sessions?”. The skill covers scoped FTS5
@@ -138,3 +158,9 @@ bounded evidence. `session-harvest` previews extraction and carries reviewed
 candidate versions through memory promotion. See the
 [exploration recipes](https://git.integrolabs.net/roctinam/aiwg/src/branch/main/agentic/code/addons/aiwg-utils/skills/session-explore/references/recipes.md)
 for acquisition, comparison, investigation, maintenance and handoff examples.
+
+When rebuilding a catalog, retain its saved discovery manifest and use
+`aiwg sessions import-discovered --workspace "$PWD" --manifest <saved-manifest> --carry-forward <old-catalog> --db <new-catalog> --confirm`.
+This rereads available sources and re-redacts history stored only in the old
+catalog. Keep the old copy until receipt counts, rejected sources, and redaction
+checks are reviewed. See [the rebuild procedure](../sessions/cli.md).

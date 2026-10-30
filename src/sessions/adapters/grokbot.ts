@@ -56,6 +56,7 @@
 import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { integer, number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -85,45 +86,45 @@ export const GROKBOT_NATIVE_SCHEMA_MAJOR = 1;
 export const GROKBOT_LOCATOR_CLASS = 'manual-export' as const;
 export const GROKBOT_NATIVE_REPLICA_LOCATOR_CLASS = 'grokbot-native-transcript-replica' as const;
 
-const GrokbotEntryBaseSchema = z.object({
+const GrokbotEntryBaseSchema = z.looseObject({
   kind: z.string().min(1),
   id: z.string().min(1),
-  timestampMs: z.number().int().nonnegative(),
+  timestampMs: integer().nonnegative(),
   requestId: z.string().optional(),
-  seq: z.number().int().nonnegative(),
-}).passthrough();
+  seq: integer().nonnegative(),
+});
 
 const SendMessageEntrySchema = GrokbotEntryBaseSchema.extend({
   kind: z.literal('send-message'),
   respondedValue: z.unknown().optional(),
   secretProvided: z.boolean().optional(),
   message: z.discriminatedUnion('type', [
-    z.object({ type: z.literal('text'), content: z.string() }).passthrough(),
-    z.object({
+    z.looseObject({ type: z.literal('text'), content: z.string() }),
+    z.looseObject({
       type: z.literal('widget'),
-      widget: z.object({ prompt: z.string() }).passthrough(),
-    }).passthrough(),
-    z.object({
+      widget: z.looseObject({ prompt: z.string() }),
+    }),
+    z.looseObject({
       type: z.literal('email-draft'),
-      draft: z.object({ subject: z.string().optional(), body: z.string() }).passthrough(),
-    }).passthrough(),
-    z.object({
+      draft: z.looseObject({ subject: z.string().optional(), body: z.string() }),
+    }),
+    z.looseObject({
       type: z.literal('slack-draft'),
-      draft: z.object({ target: z.string().optional(), body: z.string() }).passthrough(),
-    }).passthrough(),
-    z.object({
+      draft: z.looseObject({ target: z.string().optional(), body: z.string() }),
+    }),
+    z.looseObject({
       type: z.literal('attachment'),
       url: z.string(),
       file_name: z.string(),
-    }).passthrough(),
-    z.object({
+    }),
+    z.looseObject({
       type: z.literal('user-form'),
-      formRequest: z.object({ title: z.string() }).passthrough(),
-    }).passthrough(),
-    z.object({
+      formRequest: z.looseObject({ title: z.string() }),
+    }),
+    z.looseObject({
       type: z.literal('secret-request'),
-      secretRequest: z.object({ label: z.string() }).passthrough(),
-    }).passthrough(),
+      secretRequest: z.looseObject({ label: z.string() }),
+    }),
   ]),
 });
 
@@ -131,17 +132,16 @@ const MessageEntrySchema = GrokbotEntryBaseSchema.extend({
   kind: z.literal('message'),
   role: z.enum(['user', 'assistant']),
   content: z.string(),
-  fromAgent: z.object({ id: z.string().optional(), name: z.string().optional() })
-    .passthrough().optional(),
+  fromAgent: z.looseObject({ id: z.string().optional(), name: z.string().optional() }).optional(),
 });
 
 const UserAttachmentEntrySchema = GrokbotEntryBaseSchema.extend({
   kind: z.literal('user-attachment'),
   file_name: z.string(),
   file_path: z.string().optional(),
-  width: z.number().optional(),
-  height: z.number().optional(),
-  byteSize: z.number().optional(),
+  width: number().optional(),
+  height: number().optional(),
+  byteSize: number().optional(),
 });
 
 const EventEntrySchema = GrokbotEntryBaseSchema.extend({
@@ -154,18 +154,18 @@ const NoticeEntrySchema = GrokbotEntryBaseSchema.extend({
   text: z.string(),
 });
 
-const GrokbotReplicaValueSchema = z.object({
+const GrokbotReplicaValueSchema = z.looseObject({
   entries: z.array(GrokbotEntryBaseSchema),
   epochHint: z.string().nullish(),
-  acceptedSequenceHint: z.number().int().nonnegative().nullish(),
-  persistedAt: z.number().int().nonnegative().nullish(),
-  precedingTimestampMs: z.number().int().nonnegative().nullish(),
-}).passthrough();
+  acceptedSequenceHint: integer().nonnegative().nullish(),
+  persistedAt: integer().nonnegative().nullish(),
+  precedingTimestampMs: integer().nonnegative().nullish(),
+});
 
-const GrokbotReplicaDocumentSchema = z.object({
-  schemaVersion: z.number().int().nonnegative(),
+const GrokbotReplicaDocumentSchema = z.looseObject({
+  schemaVersion: integer().nonnegative(),
   value: GrokbotReplicaValueSchema,
-}).passthrough();
+});
 
 type GrokbotRawEntry = z.infer<typeof GrokbotEntryBaseSchema>;
 
@@ -196,6 +196,13 @@ export class GrokbotSessionAdapter implements SessionSourceAdapter {
    * rename-swap), not appended to. See the class-level doc comment.
    */
   readonly sourceContinuity = 'snapshot' as const;
+  /**
+   * Account scope (#3232): conversations carry no workspace identity, so
+   * every workspace authorizing the same `--grokbot-root` would otherwise
+   * import the same conversations. The importer routes account-scoped
+   * sources to the host catalog once; workspace catalogs keep a reference.
+   */
+  readonly scopeClass = 'account' as const;
 
   private readonly interchange: GenericSessionInterchangeAdapter;
 

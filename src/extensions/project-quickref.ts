@@ -11,6 +11,7 @@ import { access, mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { homedir } from 'os';
 import { z } from 'zod';
+import { integer } from '../schema/zod-validation.mjs';
 import {
   getProviderDefinition,
   normalizeProviderDefinitionId,
@@ -24,54 +25,54 @@ import { enumerateBundleArtifacts } from './shadow-resolver.js';
 
 const OWNERSHIP_MARKER = '.aiwg-project-quickref.json';
 
-const ShowHintSchema = z.object({
+const ShowHintSchema = z.strictObject({
   type: z.enum(OPERATIONAL_SHOW_TYPES),
   name: z.string().min(1).max(128),
-}).strict();
+});
 
-const QuickrefEntrySchema = z.object({
+const QuickrefEntrySchema = z.strictObject({
   title: z.string().min(1).max(128),
   summary: z.string().min(1).max(512),
   discover: z.array(z.string().min(1).max(256)).max(10).default([]),
   show: z.array(ShowHintSchema).max(20).default([]),
-}).strict().refine(
+}).refine(
   entry => entry.discover.length > 0 || entry.show.length > 0,
-  { message: 'each entry must provide at least one discover or show hint' },
+  { error: 'each entry must provide at least one discover or show hint' },
 );
 
-export const ProjectQuickrefSchema = z.object({
+export const ProjectQuickrefSchema = z.strictObject({
   version: z.literal('1'),
-  project: z.object({
+  project: z.strictObject({
     id: z.string().regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/, 'must be kebab-case'),
     name: z.string().min(1).max(128),
     description: z.string().min(1).max(512),
-  }).strict(),
+  }),
   precedence: z.string().min(1).max(1024),
   entries: z.array(QuickrefEntrySchema).min(1).max(50),
-}).strict();
+});
 
 export type ProjectQuickref = z.infer<typeof ProjectQuickrefSchema>;
 
-const QuickrefOverrideSchema = z.object({
+const QuickrefOverrideSchema = z.strictObject({
   title: z.string().min(1).max(128).optional(),
   summary: z.string().min(1).max(512).optional(),
   discover: z.array(z.string().min(1).max(256)).max(10).optional(),
   show: z.array(ShowHintSchema).max(20).optional(),
   hidden: z.boolean().optional(),
-  order: z.number().int().optional(),
-}).strict();
+  order: integer().optional(),
+});
 
-export const ProjectQuickrefConfigSchema = z.object({
+export const ProjectQuickrefConfigSchema = z.strictObject({
   version: z.literal('1'),
   project: ProjectQuickrefSchema.shape.project.optional(),
   precedence: z.string().min(1).max(1024).optional(),
   entries: z.array(QuickrefEntrySchema).max(50).default([]),
-  discovery: z.object({
+  discovery: z.strictObject({
     enabled: z.boolean().default(true),
     excludeBundles: z.array(z.string().min(1)).max(200).default([]),
-    overrides: z.record(z.string(), QuickrefOverrideSchema).default({}),
-  }).strict().default({ enabled: true, excludeBundles: [], overrides: {} }),
-}).strict();
+    overrides: z.record(z.string(), QuickrefOverrideSchema).prefault({}),
+  }).prefault({ enabled: true, excludeBundles: [], overrides: {} }),
+});
 
 export type ProjectQuickrefConfig = z.infer<typeof ProjectQuickrefConfigSchema>;
 
@@ -358,7 +359,7 @@ export function renderProjectQuickref(definition: ProjectQuickref): string {
       lines.push(`- Discover: \`aiwg discover ${JSON.stringify(phrase)}\``);
     }
     for (const hint of entry.show) {
-      lines.push(`- Fetch: \`aiwg show ${hint.type} ${hint.name}\``);
+      lines.push(`- Fetch: \`aiwg show ${hint.type} ${hint.name} --body\``);
     }
     lines.push('');
   }

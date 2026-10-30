@@ -596,6 +596,8 @@ async function fetchBytes(
     return bytes;
   } catch (error) {
     if (timedOut) throw new Error(`${label} request timed out after ${RESOURCE_FETCH_TIMEOUT_MS}ms`);
+    const message = error instanceof Error ? error.message : String(error);
+    if (bearerToken && message.includes(bearerToken)) throw new Error(message.split(bearerToken).join('[REDACTED]'));
     throw error;
   } finally {
     clearTimeout(timeout!);
@@ -1316,111 +1318,117 @@ export async function resolveWebRelease(options: WebReleaseOptions = {}): Promis
     return (options.fetcher ?? (globalThis.fetch as unknown as ResourceFetcher))(input, { ...init, headers });
   };
 
-  if (selector.kind === "exact") {
-    if (options.offline) return resolveOfflineExact(cacheRoot, selector, selector.value, publicKeyPem, base);
-    const fetcher = authorize;
-    if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
-    return fetchAndCacheRelease(base, fetcher, cacheRoot, selector, selector.value, publicKeyPem);
-  }
+  try {
+    if (selector.kind === "exact") {
+      if (options.offline) return resolveOfflineExact(cacheRoot, selector, selector.value, publicKeyPem, base);
+      const fetcher = authorize;
+      if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
+      return await fetchAndCacheRelease(base, fetcher, cacheRoot, selector, selector.value, publicKeyPem);
+    }
 
-  if (selector.kind === "range" || selector.kind === "digest") {
-    if (!options.offline && selector.kind === "digest") {
-      for (const version of cachedReleaseVersions(cacheRoot)) {
-        if (!cachedDigests(cacheRoot, version).includes(selector.digest)) continue;
-        try {
-          return verifyCachedGeneration(cacheRoot, version, selector.digest, selector, publicKeyPem, base, selector.digest);
-        } catch {
-          // A corrupt immutable generation cannot bypass signed index resolution.
+    if (selector.kind === "range" || selector.kind === "digest") {
+      if (!options.offline && selector.kind === "digest") {
+        for (const version of cachedReleaseVersions(cacheRoot)) {
+          if (!cachedDigests(cacheRoot, version).includes(selector.digest)) continue;
+          try {
+            return verifyCachedGeneration(cacheRoot, version, selector.digest, selector, publicKeyPem, base, selector.digest);
+          } catch {
+            // A corrupt immutable generation cannot bypass signed index resolution.
+          }
         }
       }
-    }
-    const fetcher = authorize;
-    const index = await resolveVersionIndex(base, fetcher, cacheRoot, publicKeyPem, options.offline, options.onDiagnostic);
-    const selected = selectVersionFromIndex(index, selector);
-    if (options.offline) {
-      return resolveOfflineExact(
+      const fetcher = authorize;
+      const index = await resolveVersionIndex(base, fetcher, cacheRoot, publicKeyPem, options.offline, options.onDiagnostic);
+      const selected = selectVersionFromIndex(index, selector);
+      if (options.offline) {
+        return resolveOfflineExact(
+          cacheRoot,
+          selector,
+          selected.version,
+          publicKeyPem,
+          base,
+          selected.releaseManifestSha256,
+        );
+      }
+      if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
+      return await fetchAndCacheRelease(
+        base,
+        fetcher,
         cacheRoot,
         selector,
         selected.version,
         publicKeyPem,
-        base,
         selected.releaseManifestSha256,
       );
     }
+
+    if (options.offline) {
+      const cached = readCachedChannel(cacheRoot, selector.value, publicKeyPem);
+      if (!cached) throw new Error(`AIWG resource channel ${selector.value} is not cached; offline mode cannot fetch it`);
+      const release = resolveOfflineExact(
+        cacheRoot,
+        selector,
+        cached.manifest.version,
+        publicKeyPem,
+        base,
+        cached.manifest.releaseManifestSha256,
+        cached.manifest.sequence,
+      );
+      return cached.manifest.expiresAt ? { ...release, channelExpiresAt: cached.manifest.expiresAt } : release;
+    }
+
+    const fetcher = authorize;
     if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
-    return fetchAndCacheRelease(
+    const channelPrefix = `resources/channels/${selector.value}`;
+    let prior: ReturnType<typeof readCachedChannel> = null;
+    try { prior = readCachedChannel(cacheRoot, selector.value, publicKeyPem); } catch { prior = null; }
+    const fetched = await fetchMetadata(fetcher, resourceUrl(base, `${channelPrefix}.json`), `channel ${selector.value}`, MAX_SIGNED_METADATA_BYTES, prior?.validator);
+    if (fetched.notModified) {
+      cacheChannel(cacheRoot, prior!.manifest, prior!.bytes, prior!.signatureBytes, prior!.digest, fetched.validator);
+      options.onDiagnostic?.({ resource: "channel", outcome: "conditional-hit", validator: prior!.validator!.etag ? "etag" : "last-modified" });
+      const release = await fetchAndCacheRelease(
+        base, fetcher, cacheRoot, selector, prior!.manifest.version, publicKeyPem,
+        prior!.manifest.releaseManifestSha256, prior!.manifest.sequence,
+      );
+      return prior!.manifest.expiresAt ? { ...release, channelExpiresAt: prior!.manifest.expiresAt } : release;
+    }
+    const channelBytes = fetched.bytes!;
+    const channelSignatureBytes = await fetchBytes(fetcher, resourceUrl(base, `${channelPrefix}.sig`), `channel ${selector.value} signature`, MAX_SIGNATURE_BYTES);
+    const channelDigest = verifySignedResourceBytes(channelBytes, channelSignatureBytes, publicKeyPem, `channel ${selector.value}`);
+    const channel = validateChannelManifest(parseJson(channelBytes, `channel ${selector.value}`), selector.value);
+    if (prior && channel.sequence < prior.manifest.sequence) {
+      throw new Error(`channel ${selector.value} sequence rollback detected (${channel.sequence} < ${prior.manifest.sequence})`);
+    }
+    if (
+      prior &&
+      channel.sequence === prior.manifest.sequence &&
+      (
+        channelDigest !== prior.digest ||
+        channel.version !== prior.manifest.version ||
+        channel.releaseManifestSha256 !== prior.manifest.releaseManifestSha256
+      )
+    ) {
+      throw new Error(`channel ${selector.value} sequence ${channel.sequence} has conflicting signed metadata`);
+    }
+
+    const release = await fetchAndCacheRelease(
       base,
       fetcher,
       cacheRoot,
       selector,
-      selected.version,
+      channel.version,
       publicKeyPem,
-      selected.releaseManifestSha256,
+      channel.releaseManifestSha256,
+      channel.sequence,
     );
+    cacheChannel(cacheRoot, channel, channelBytes, channelSignatureBytes, channelDigest, fetched.validator);
+    options.onDiagnostic?.({ resource: "channel", outcome: prior?.validator ? "revalidated" : "unconditional", validator: fetched.validator?.etag ? "etag" : fetched.validator?.lastModified ? "last-modified" : "none" });
+    return channel.expiresAt ? { ...release, channelExpiresAt: channel.expiresAt } : release;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (bearerToken && message.includes(bearerToken)) throw new Error(message.split(bearerToken).join('[REDACTED]'));
+    throw error;
   }
-
-  if (options.offline) {
-    const cached = readCachedChannel(cacheRoot, selector.value, publicKeyPem);
-    if (!cached) throw new Error(`AIWG resource channel ${selector.value} is not cached; offline mode cannot fetch it`);
-    const release = resolveOfflineExact(
-      cacheRoot,
-      selector,
-      cached.manifest.version,
-      publicKeyPem,
-      base,
-      cached.manifest.releaseManifestSha256,
-      cached.manifest.sequence,
-    );
-    return cached.manifest.expiresAt ? { ...release, channelExpiresAt: cached.manifest.expiresAt } : release;
-  }
-
-  const fetcher = authorize;
-  if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
-  const channelPrefix = `resources/channels/${selector.value}`;
-  let prior: ReturnType<typeof readCachedChannel> = null;
-  try { prior = readCachedChannel(cacheRoot, selector.value, publicKeyPem); } catch { prior = null; }
-  const fetched = await fetchMetadata(fetcher, resourceUrl(base, `${channelPrefix}.json`), `channel ${selector.value}`, MAX_SIGNED_METADATA_BYTES, prior?.validator);
-  if (fetched.notModified) {
-    cacheChannel(cacheRoot, prior!.manifest, prior!.bytes, prior!.signatureBytes, prior!.digest, fetched.validator);
-    options.onDiagnostic?.({ resource: "channel", outcome: "conditional-hit", validator: prior!.validator!.etag ? "etag" : "last-modified" });
-    const release = await fetchAndCacheRelease(
-      base, fetcher, cacheRoot, selector, prior!.manifest.version, publicKeyPem,
-      prior!.manifest.releaseManifestSha256, prior!.manifest.sequence,
-    );
-    return prior!.manifest.expiresAt ? { ...release, channelExpiresAt: prior!.manifest.expiresAt } : release;
-  }
-  const channelBytes = fetched.bytes!;
-  const channelSignatureBytes = await fetchBytes(fetcher, resourceUrl(base, `${channelPrefix}.sig`), `channel ${selector.value} signature`, MAX_SIGNATURE_BYTES);
-  const channelDigest = verifySignedResourceBytes(channelBytes, channelSignatureBytes, publicKeyPem, `channel ${selector.value}`);
-  const channel = validateChannelManifest(parseJson(channelBytes, `channel ${selector.value}`), selector.value);
-  if (prior && channel.sequence < prior.manifest.sequence) {
-    throw new Error(`channel ${selector.value} sequence rollback detected (${channel.sequence} < ${prior.manifest.sequence})`);
-  }
-  if (
-    prior &&
-    channel.sequence === prior.manifest.sequence &&
-    (
-      channelDigest !== prior.digest ||
-      channel.version !== prior.manifest.version ||
-      channel.releaseManifestSha256 !== prior.manifest.releaseManifestSha256
-    )
-  ) {
-    throw new Error(`channel ${selector.value} sequence ${channel.sequence} has conflicting signed metadata`);
-  }
-
-  const release = await fetchAndCacheRelease(
-    base,
-    fetcher,
-    cacheRoot,
-    selector,
-    channel.version,
-    publicKeyPem,
-    channel.releaseManifestSha256,
-    channel.sequence,
-  );
-  cacheChannel(cacheRoot, channel, channelBytes, channelSignatureBytes, channelDigest, fetched.validator);
-  options.onDiagnostic?.({ resource: "channel", outcome: prior?.validator ? "revalidated" : "unconditional", validator: fetched.validator?.etag ? "etag" : fetched.validator?.lastModified ? "last-modified" : "none" });
-  return channel.expiresAt ? { ...release, channelExpiresAt: channel.expiresAt } : release;
 }
 
 export async function fetchVerifiedRawResource(

@@ -649,9 +649,120 @@
       ]
     },
     "workerBrief": {
+      "$defs": {
+        "regressionCheck": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "command",
+                "path"
+              ]
+            },
+            "target": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "expectedStatus": {
+              "enum": [
+                "passed",
+                "failed",
+                "present",
+                "absent"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "expectedStatus"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "command"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "expectedStatus": {
+                    "enum": [
+                      "passed",
+                      "failed"
+                    ]
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "expectedStatus": {
+                    "enum": [
+                      "present",
+                      "absent"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "oracleCommand": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "expectedExitCode": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          },
+          "required": [
+            "command",
+            "expectedExitCode"
+          ]
+        }
+      },
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "uncertaintyPolicy": {
+          "description": "Omitted or default follows the conductor policy; stop-and-report pauses uncertain work and reports the uncertainty.",
+          "enum": [
+            "default",
+            "stop-and-report"
+          ]
+        },
+        "mustNotRegress": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerBrief/$defs/regressionCheck"
+          }
+        },
+        "verificationOracle": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerBrief/$defs/oracleCommand"
+          },
+          "minItems": 1
+        },
+        "designReviewRequired": {
+          "type": "boolean"
+        },
+        "designReviewArtifact": {
+          "$ref": "#/$defs/workerArtifact"
+        },
         "version": {
           "const": 1
         },
@@ -1202,9 +1313,173 @@
       ]
     },
     "workerVerification": {
+      "$defs": {
+        "oracleResult": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "exitCode": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 255
+            },
+            "evidence": {
+              "$ref": "#/$defs/workerArtifact"
+            }
+          },
+          "required": [
+            "command",
+            "exitCode",
+            "evidence"
+          ]
+        },
+        "reviewRound": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "round": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "headSha": {
+              "type": "string",
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+            },
+            "reviewerObservationRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "artifact": {
+              "$ref": "#/$defs/workerArtifact"
+            }
+          },
+          "required": [
+            "round",
+            "headSha",
+            "reviewerObservationRef",
+            "artifact"
+          ]
+        },
+        "finding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "class": {
+              "enum": [
+                "A",
+                "B",
+                "C"
+              ]
+            },
+            "severity": {
+              "enum": [
+                "blocker",
+                "major",
+                "minor",
+                "info"
+              ]
+            },
+            "round": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "status": {
+              "enum": [
+                "open",
+                "resolved",
+                "follow-up",
+                "out-of-scope"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "followUp": {
+              "$ref": "#/$defs/workerArtifact"
+            }
+          },
+          "required": [
+            "id",
+            "class",
+            "severity",
+            "round",
+            "status",
+            "summary"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "class": {
+                    "const": "A"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "open",
+                      "resolved"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "headSha": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "reviewRounds": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerVerification/$defs/reviewRound"
+          }
+        },
+        "findingsLedger": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerVerification/$defs/finding"
+          }
+        },
+        "roundsToClean": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "oracleResults": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerVerification/$defs/oracleResult"
+          }
+        },
         "status": {
           "enum": [
             "pending",
@@ -1291,6 +1566,7 @@
                 "pattern": "^sha256:[a-f0-9]{64}$"
               },
               "evidence": {
+                "type": "array",
                 "minItems": 1
               }
             }
@@ -1725,6 +2001,34 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "uncertaintyPolicy": {
+          "description": "Omitted or default follows the conductor policy; stop-and-report pauses uncertain work and reports the uncertainty.",
+          "enum": [
+            "default",
+            "stop-and-report"
+          ]
+        },
+        "mustNotRegress": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerBrief/$defs/regressionCheck"
+          }
+        },
+        "verificationOracle": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerBrief/$defs/oracleCommand"
+          },
+          "minItems": 1
+        },
+        "designReviewRequired": {
+          "type": "boolean"
+        },
+        "designReviewArtifact": {
+          "$ref": "#/$defs/workerArtifact"
+        },
         "version": {
           "const": 1
         },
@@ -1830,6 +2134,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "invocationId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,51}(?![\\s\\S])"
+        },
+        "isolation": {
+          "enum": [
+            "systemd-unit",
+            "native-sandbox"
+          ]
+        },
         "version": {
           "const": 1
         },
@@ -1889,6 +2203,19 @@
         "artifacts": {
           "type": "array",
           "maxItems": 16,
+          "contains": {
+            "type": "object",
+            "required": [
+              "location"
+            ],
+            "properties": {
+              "location": {
+                "const": "workspace-relative"
+              }
+            }
+          },
+          "minContains": 0,
+          "maxContains": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -1902,12 +2229,61 @@
                 "maxLength": 1048576
               },
               "location": {
-                "const": "run-directory"
+                "enum": [
+                  "run-directory",
+                  "workspace-relative"
+                ]
+              },
+              "prefix": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "relativePath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
               }
             },
             "required": [
               "name",
               "content"
+            ],
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "location"
+                  ],
+                  "properties": {
+                    "location": {
+                      "const": "workspace-relative"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "prefix",
+                    "relativePath"
+                  ]
+                },
+                "else": {
+                  "not": {
+                    "anyOf": [
+                      {
+                        "required": [
+                          "prefix"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "relativePath"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
             ]
           }
         },
@@ -2057,6 +2433,39 @@
       "allOf": [
         {
           "if": {
+            "required": [
+              "artifacts"
+            ],
+            "properties": {
+              "artifacts": {
+                "type": "array",
+                "contains": {
+                  "type": "object",
+                  "required": [
+                    "location"
+                  ],
+                  "properties": {
+                    "location": {
+                      "const": "workspace-relative"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "invocationId"
+            ],
+            "properties": {
+              "transport": {
+                "const": "shell"
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "properties": {
               "transport": {
                 "const": "shell"
@@ -2134,6 +2543,36 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "headSha": {
+          "type": "string",
+          "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "reviewRounds": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerVerification/$defs/reviewRound"
+          }
+        },
+        "findingsLedger": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerVerification/$defs/finding"
+          }
+        },
+        "roundsToClean": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "oracleResults": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/workerVerification/$defs/oracleResult"
+          }
+        },
         "status": {
           "enum": [
             "pending",
@@ -2229,6 +2668,7 @@
                 "maxLength": 1024
               },
               "findings": {
+                "type": "array",
                 "minItems": 1
               }
             }

@@ -1,0 +1,6 @@
+{
+  "sourcePath": "external-memory://fixture-workspace/wiki/obligation.md",
+  "content": "External fixture content supplied by the test, never fetched.",
+  "scope": "global",
+  "sourceWorkspaceId": "fixture-workspace-other"
+}

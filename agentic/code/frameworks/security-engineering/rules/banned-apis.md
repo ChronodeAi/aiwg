@@ -2,8 +2,31 @@
 enforcement: high
 id: banned-apis
 severity: HIGH
-applies_to: [all-agents, applied-cryptographer, security-auditor, code-reviewer]
-tags: [forbidden-apis, banned-functions, language-policy, supply-chain]
+applies_to:
+  - all-agents
+  - applied-cryptographer
+  - security-auditor
+  - code-reviewer
+tags:
+  - forbidden-apis
+  - banned-functions
+  - language-policy
+  - supply-chain
+activation: paths
+summary: Apply the project language/path banlist, use approved replacements, and record justified AIWG-allow exceptions before accepting forbidden API calls.
+bound_to:
+  agents:
+    - applied-cryptographer
+    - code-reviewer
+    - security-auditor
+    - software-implementer
+  skills:
+    - banned-api-audit
+paths:
+  - "**/*"
+  - .aiwg/security/banned-apis.yaml
+triggers:
+  - audit forbidden functions against the project banlist
 ---
 
 # Banned APIs / Forbidden Functions

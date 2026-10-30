@@ -3,6 +3,7 @@ import { runRecoveryProbe } from './recovery-probe.mjs';
 /** Recovery evidence observed outside worker output by the launch owner. */
 const observations = new WeakMap();
 const failureHints = new WeakMap();
+const assessed = new WeakSet();
 
 export function recordLauncherRecoveryHint(result, reasonCode) {
   failureHints.set(result, reasonCode);
@@ -23,9 +24,10 @@ export function launcherRecoveryEvidence(result) {
  */
 export async function observeLauncherRecoveryOutcome({ invocation, result, installation, breaker,
   failureHint = '', beforeRequest, onDispatch, fetchImpl = globalThis.fetch, wallNowMs = Date.now, timeoutMs = 10_000 } = {}) {
-  if (!result || result.attemptOutcome !== 'failed' || result.cancelled) return;
+  if (!result || result.attemptOutcome !== 'failed' || result.cancelled || assessed.has(result)) return;
   const backend = invocation?.selected?.inferenceProvider;
   if (HOST_ERRORS.has(result.errorCode) || HOST_RESULTS.has(result.nativeResult)) {
+    assessed.add(result);
     const corroboratedBackends = breaker?.observeHostFailure({ invocationId: result.invocationId,
       inferenceProvider: backend, reasonCode: 'RESOURCE' }) ?? [];
     if (corroboratedBackends.length >= 2) observations.set(result, {
@@ -43,6 +45,10 @@ export async function observeLauncherRecoveryOutcome({ invocation, result, insta
     if (!await beforeRequest()) return;
     const requestTimeoutMs = remaining();
     if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) return;
+    // One diagnostic request per attempt, including unsuccessful diagnostics.
+    // Re-reading a result cannot consume allowance or create fresh evidence.
+    if (assessed.has(result)) return;
+    assessed.add(result);
     const observed = await runRecoveryProbe({ driver: { qualification: { installation } }, invocation: invocation ?? { transport: 'shell' },
       timeoutMs: Math.min(10_000, requestTimeoutMs), maxOutputBytes: 65_536, onDispatch, fetchImpl, wallNowMs });
     if (observed.reason === 'probe-rate-limited') {

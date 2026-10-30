@@ -1,3 +1,6 @@
+import { selectPrebuiltRelations } from './relations.js';
+import { resolveFrameworkIndexRoot } from './framework-index-paths.js';
+import { extractRuleBindings } from './index-builder.js';
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import type {
@@ -11,7 +14,7 @@ import type {
   AiwgFortemiRecord,
 } from "./browser-export.js";
 import { bm25Rank, type FullTextDoc } from "./fulltext.js";
-import { getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } from "./fortemi-core-sync.js";
+import { consumeFortemiCoreExport, getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } from "./fortemi-core-sync.js";
 import { loadGraphIndexFile } from "./index-reader.js";
 import {
   operationalStateQueryProjection,
@@ -295,6 +298,14 @@ export function loadFortemiCoreExport(
       };
     }
   }
+  // A content-validated shipped corpus does not need the source metadata index.
+  // This also avoids preferring a much larger locally materialized text cache.
+  if (graph === 'framework' && selectPrebuiltRelations(cwd).reader) {
+    const prebuilt = getFortemiCorePrebuiltStatus(graph, resolveFrameworkIndexRoot(cwd));
+    if (prebuilt.built && !prebuilt.stale) {
+      return { exported: JSON.parse(fs.readFileSync(prebuilt.exportPath, 'utf8')) as AiwgFortemiIndexExport };
+    }
+  }
   let status = getFortemiCoreSyncStatus(cwd, graph);
   // The packaged framework index is a bootstrap fallback for an absent shared
   // cache. Once a shared cache exists, its stale state proves that the local
@@ -338,9 +349,7 @@ export function loadFortemiCoreExport(
   }
 
   try {
-    const exported = JSON.parse(
-      fs.readFileSync(status.exportPath, "utf-8"),
-    ) as AiwgFortemiIndexExport;
+    const exported = consumeFortemiCoreExport(status.exportPath, status.exportChecksum);
     if (exported.schema_version !== "aiwg.fortemi.index.export.v2") {
       return {
         reason: `Fortemi Core static index has schema '${exported.schema_version}', expected 'aiwg.fortemi.index.export.v2'. Re-run 'aiwg index sync'.`,
@@ -366,6 +375,8 @@ function entryFromRecord(record: AiwgFortemiRecord): MetadataEntry {
   const indexedScript = indexedFrontmatter.aiwg_script;
   return {
     path: record.source.path,
+    ...(indexedFrontmatter.aiwg_memory_record && typeof indexedFrontmatter.aiwg_memory_record === 'object'
+      ? { memoryRecord: indexedFrontmatter.aiwg_memory_record as MetadataEntry['memoryRecord'] } : {}),
     type: artifactTypeFromRecord(record),
     kind:
       typeof indexedFrontmatter.aiwg_kind === "string"
@@ -414,6 +425,8 @@ function entryFromRecord(record: AiwgFortemiRecord): MetadataEntry {
         && typeof (indexedScript as Record<string, unknown>).runtime === "string"
         ? indexedScript as MetadataEntry["script"]
         : undefined,
+    ...extractRuleBindings(indexedFrontmatter),
+    ...(Array.isArray(indexedFrontmatter.aiwg_governed_paths) ? { governedPaths: indexedFrontmatter.aiwg_governed_paths.filter((value): value is string => typeof value === "string") } : {}),
     operationalState: record.operational_state,
   };
 }

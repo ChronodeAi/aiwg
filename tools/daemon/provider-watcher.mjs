@@ -141,6 +141,8 @@ export class ProviderWatcher extends EventEmitter {
     this.stateDir = options.stateDir || '.aiwg/daemon/provider-watch';
     this.providers = options.providers || PROVIDER_SOURCES.map((p) => p.id);
     this.intervalHours = options.intervalHours || 6;
+    // npm keeps its own config/registry variables; only daemon secrets are removed.
+    this.environment = options.environment;
     this.statePath = path.join(this.stateDir, 'state.json');
     this.state = this.loadState();
     this._intervalHandle = null;
@@ -310,6 +312,7 @@ export class ProviderWatcher extends EventEmitter {
     try {
       const [file, args] = cliCommand('npm', ['view', pkg, 'version', 'dist-tags', '--json']);
       const output = boundedExecFileSync(file, args, 'quick', {
+        env: this.environment ?? process.env,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       });

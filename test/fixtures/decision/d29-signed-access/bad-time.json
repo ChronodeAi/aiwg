@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "decision-d29-access/v2",
+  "runId": "synthetic-access",
+  "analysisDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "frozenBundleDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "anchoredAt": "2026-10-01T00:00:00.000Z",
+  "firstTestAccessAt": "invalid",
+  "reference": "schema-shape-only-runtime-test-signs-body",
+  "signature": {
+    "keyid": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "sig": "shape-only-not-a-valid-signature"
+  }
+}

@@ -11,6 +11,7 @@
  */
 
 import { fetchAgentCard } from '../../a2a/agent-card.js';
+import { resolveSensitiveInput, sensitiveInputOptions } from '../../auth/sensitive-input.js';
 import { loadJwkSet } from '../../a2a/jws.js';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -52,6 +53,9 @@ function parseVerifyArgs(args: string[]): VerifyArgs {
 
   const jwks = get('--jwks');
   const bearer = get('--bearer');
+  if (args.includes('--bearer') && (!bearer || bearer.startsWith('--'))) {
+    throw new AiwgError({ code: 'ERR_AGENTCARD_BEARER', message: '--bearer requires a value; prefer --bearer-stdin, --bearer-file, --bearer-store or --bearer-env.', exitCode: EXIT_CODES.USAGE });
+  }
   const skipVerify = args.includes('--skip-verify');
   const json = args.includes('--json');
 
@@ -88,22 +92,36 @@ async function loadJwksFromSource(source: string): Promise<ReturnType<typeof loa
 
 async function handleVerify(args: string[]): Promise<HandlerResult> {
   const parsed = parseVerifyArgs(args);
+  const sources = sensitiveInputOptions(args, 'bearer');
+  const hasSource = sources.interactive || sources.stdin || sources.file !== undefined || sources.store !== undefined || sources.env !== undefined;
+  if (parsed.bearer !== undefined) {
+    console.error('Warning: --bearer is deprecated and exposes the value on argv; use --bearer-interactive, --bearer-stdin, --bearer-file, --bearer-store or --bearer-env.');
+  }
+  // No source intentionally means public/unauthenticated access, even at a TTY.
+  const bearer = hasSource
+    ? await resolveSensitiveInput(sources)
+    : parsed.bearer === undefined ? undefined : await resolveSensitiveInput(
+      { prefix: 'bearer', env: 'LEGACY_BEARER' }, { readEnv: () => parsed.bearer });
+  const redact = (text: string): string => bearer ? text.split(bearer).join('[REDACTED]') : text;
+  const log = (text: string): void => console.log(redact(text));
+  const error = (text: string): void => console.error(redact(text));
+  const jsonReplacer = (_key: string, value: unknown): unknown => typeof value === 'string' ? redact(value) : value;
 
   const opts: Parameters<typeof fetchAgentCard>[2] = {
     skipVerify: parsed.skipVerify,
   };
-  if (parsed.bearer !== undefined) opts.bearer = parsed.bearer;
-  if (parsed.jwks !== undefined && !parsed.skipVerify) {
-    opts.jwks = await loadJwksFromSource(parsed.jwks);
-  }
+  if (bearer !== undefined) opts.bearer = bearer;
 
   let verified: Awaited<ReturnType<typeof fetchAgentCard>>;
   try {
+    if (parsed.jwks !== undefined && !parsed.skipVerify) {
+      opts.jwks = await loadJwksFromSource(parsed.jwks);
+    }
     verified = await fetchAgentCard(parsed.host, parsed.instance, opts);
   } catch (err) {
     const message = (err as Error).message;
     if (parsed.json) {
-      console.log(
+      log(
         JSON.stringify(
           {
             ok: false,
@@ -111,19 +129,19 @@ async function handleVerify(args: string[]): Promise<HandlerResult> {
             instance: parsed.instance,
             error: message,
           },
-          null,
+          jsonReplacer,
           2
         )
       );
     } else {
-      console.error(`AgentCard verification FAILED for ${parsed.host}/${parsed.instance}`);
-      console.error(`  ${message}`);
+      error(`AgentCard verification FAILED for ${parsed.host}/${parsed.instance}`);
+      error(`  ${message}`);
     }
     return { exitCode: EXIT_CODES.GENERAL };
   }
 
   if (parsed.json) {
-    console.log(
+    log(
       JSON.stringify(
         {
           ok: true,
@@ -142,39 +160,39 @@ async function handleVerify(args: string[]): Promise<HandlerResult> {
             skills: verified.card.skills,
           },
         },
-        null,
+        jsonReplacer,
         2
       )
     );
   } else {
     const banner = parsed.skipVerify ? '(verification SKIPPED)' : 'VERIFIED';
-    console.log(`AgentCard ${banner} for ${parsed.host}/${parsed.instance}`);
-    console.log(`  name:               ${verified.card.name}`);
-    console.log(`  protocolVersion:    ${verified.card.protocolVersion}`);
-    console.log(`  url:                ${verified.card.url}`);
-    console.log(`  version:            ${verified.card.version}`);
+    log(`AgentCard ${banner} for ${parsed.host}/${parsed.instance}`);
+    log(`  name:               ${verified.card.name}`);
+    log(`  protocolVersion:    ${verified.card.protocolVersion}`);
+    log(`  url:                ${verified.card.url}`);
+    log(`  version:            ${verified.card.version}`);
     if (verified.card.preferredTransport) {
-      console.log(`  preferredTransport: ${verified.card.preferredTransport}`);
+      log(`  preferredTransport: ${verified.card.preferredTransport}`);
     }
     if (verified.kid) {
-      console.log(`  signing kid:        ${verified.kid}`);
+      log(`  signing kid:        ${verified.kid}`);
     }
-    console.log(`  verifiedAt:         ${verified.verifiedAt}`);
+    log(`  verifiedAt:         ${verified.verifiedAt}`);
     const exts = verified.card.capabilities?.extensions ?? [];
     if (exts.length > 0) {
-      console.log(`  extensions:`);
+      log(`  extensions:`);
       for (const e of exts) {
         const tag = e.required ? '[required]' : '[optional]';
-        console.log(`    ${tag} ${e.uri}`);
+        log(`    ${tag} ${e.uri}`);
       }
     }
     const skills = verified.card.skills ?? [];
     if (skills.length > 0) {
-      console.log(`  skills (${skills.length}):`);
+      log(`  skills (${skills.length}):`);
       for (const s of skills.slice(0, 5)) {
-        console.log(`    - ${s.id}${s.name ? ' (' + s.name + ')' : ''}`);
+        log(`    - ${s.id}${s.name ? ' (' + s.name + ')' : ''}`);
       }
-      if (skills.length > 5) console.log(`    ... and ${skills.length - 5} more`);
+      if (skills.length > 5) log(`    ... and ${skills.length - 5} more`);
     }
   }
   return { exitCode: 0 };
@@ -190,7 +208,12 @@ function printUsage(): void {
   console.log('  --host <url>        Executor host (e.g. https://exec.test)');
   console.log('  --instance <id>     Instance id (UUIDv7)');
   console.log('  --jwks <path|url>   JWKS file path or URL (required unless --skip-verify)');
-  console.log('  --bearer <token>    Optional bearer token for the card endpoint');
+  console.log('  --bearer-interactive  Read optional bearer in a terminal without echo');
+  console.log('  --bearer-stdin        Read optional bearer from piped stdin');
+  console.log('  --bearer-file <path>  Read optional bearer from an owner-only private file');
+  console.log('  --bearer-store <name> Read optional bearer from a named OS store entry');
+  console.log('  --bearer-env <NAME>   Read optional bearer from a named shell variable');
+  console.log('  --bearer <token>      Deprecated: exposes the value on argv');
   console.log('  --skip-verify       Skip JWS verification (NOT recommended)');
   console.log('  --json              Emit JSON output');
 }

@@ -20,8 +20,8 @@ export function createSmokeCliFixture(calls = []) {
     if (JSON.stringify(args) === JSON.stringify(['discover', 'deploy production', '--json', '--limit', '4'])) {
       return JSON.stringify({ results: [{ id: 'smoke:flow-deploy-to-production', name: 'flow-deploy-to-production', type: 'skill', path: SKILL_PATH }] });
     }
-    if (JSON.stringify(args) === JSON.stringify(['show', 'skill', 'flow-deploy-to-production'])) return readFile(SKILL_PATH, 'utf8');
-    if (JSON.stringify(args) === JSON.stringify(['show', 'agent', '__definitely_not_a_real_artifact__'])) throw new Error('artifact not found: smoke missing-artifact fixture');
+    if (JSON.stringify(args) === JSON.stringify(['show', 'skill', 'flow-deploy-to-production', '--body'])) return readFile(SKILL_PATH, 'utf8');
+    if (JSON.stringify(args) === JSON.stringify(['show', 'agent', '__definitely_not_a_real_artifact__', '--body'])) throw new Error('artifact not found: smoke missing-artifact fixture');
     throw new Error(`Unexpected smoke CLI command: ${JSON.stringify(args)}`);
   };
 }

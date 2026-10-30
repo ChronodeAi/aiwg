@@ -1,0 +1,275 @@
+# Operator-approved moves (#3292 / #2944). Offline validation only until the U5 live pass.
+version: 1
+extends: probes.yaml
+rules:
+  - id: instruction-comprehension
+    source: agentic/code/addons/aiwg-utils/rules/instruction-comprehension.md
+    probes:
+      - id: compound-positive-1
+        kind: positive
+        prompt: 'Discover the installed agent for "did I follow the instructions debug a failing test" using
+          aiwg discover in JSON. Fetch and follow the returned governing rules before inspecting the
+          selected agent with aiwg show; use --body to read full content. Inspect only; do not
+          execute workflows, write files, contact services, or call models. Using those rules,
+          answer this synthetic scenario: The user asks for a minimal fix and forbids dependency
+          changes. An initial attempt changed dependencies. Choose next: restore-scope-and-reread or
+          continue-dependency-change. Return JSON {next, reason}.'
+        compound_action: aiwg\s+show\s+agent\s+
+        compound_expected:
+          type: agent
+          names:
+            - Debugger
+        assertions:
+          - type: json-equals
+            path: next
+            value: restore-scope-and-reread
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+agent\s+
+            body: true
+      - id: compound-positive-2
+        kind: positive
+        prompt: 'Discover the installed skill for "what did the user actually ask for guided implementation"
+          using aiwg discover in JSON. Fetch and follow the returned governing rules before
+          inspecting the selected skill with aiwg show; use --body to read full content. Inspect
+          only; do not execute workflows, write files, contact services, or call models. Using those
+          rules, answer this synthetic scenario: A request has three deliverables; only two are
+          complete. Choose next: finish-remaining-part or declare-complete. Return JSON {next,
+          reason}.'
+        compound_action: aiwg\s+show\s+skill\s+
+        compound_expected:
+          type: skill
+          names:
+            - flow-guided-implementation
+        assertions:
+          - type: json-equals
+            path: next
+            value: finish-remaining-part
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+skill\s+
+            body: true
+      - id: negative-unrelated-discovery
+        kind: negative
+        prompt: Find the installed version-reporting skill using aiwg discover in JSON and inspect it with a
+          read-only aiwg show command. Do not execute it, change files, or make technical decisions.
+          Return JSON {purpose, reason}, where purpose is report-version.
+        assertions:
+          - type: json-equals
+            path: purpose
+            value: report-version
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-not-matches
+            pattern: aiwg\s+show\s+rule\s+instruction-comprehension\b
+  - id: research-before-decision
+    source: agentic/code/addons/aiwg-utils/rules/research-before-decision.md
+    probes:
+      - id: compound-positive-1
+        kind: positive
+        prompt: 'Discover the installed agent for "why does this keep failing debug a failing test" using
+          aiwg discover in JSON. Fetch and follow the returned governing rules before inspecting the
+          selected agent with aiwg show; use --body to read full content. Inspect only; do not
+          execute workflows, write files, contact services, or call models. Using those rules,
+          answer this synthetic scenario: Three identical retries failed without investigation.
+          Choose next: inspect-source-and-error or retry-blindly. Return JSON {next, reason}.'
+        compound_action: aiwg\s+show\s+agent\s+
+        compound_expected:
+          type: agent
+          names:
+            - Debugger
+        assertions:
+          - type: json-equals
+            path: next
+            value: inspect-source-and-error
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+agent\s+
+            body: true
+      - id: compound-positive-2
+        kind: positive
+        prompt: 'Discover the installed skill for "before I decide guided implementation" using aiwg
+          discover in JSON. Fetch and follow the returned governing rules before inspecting the
+          selected skill with aiwg show; use --body to read full content. Inspect only; do not
+          execute workflows, write files, contact services, or call models. Using those rules,
+          answer this synthetic scenario: A fix depends on an unfamiliar API and existing
+          dependencies. Choose next: read-source-types-and-manifest or guess-api-and-add-library.
+          Return JSON {next, reason}.'
+        compound_action: aiwg\s+show\s+skill\s+
+        compound_expected:
+          type: skill
+          names:
+            - flow-guided-implementation
+        assertions:
+          - type: json-equals
+            path: next
+            value: read-source-types-and-manifest
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+skill\s+
+            body: true
+      - id: negative-unrelated-discovery
+        kind: negative
+        prompt: Find the installed version-reporting skill using aiwg discover in JSON and inspect it with a
+          read-only aiwg show command. Do not execute it, change files, or make technical decisions.
+          Return JSON {purpose, reason}, where purpose is report-version.
+        assertions:
+          - type: json-equals
+            path: purpose
+            value: report-version
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-not-matches
+            pattern: aiwg\s+show\s+rule\s+research-before-decision\b
+  - id: artifact-output-policy
+    source: agentic/code/addons/aiwg-utils/rules/artifact-output-policy.md
+    probes:
+      - id: compound-positive-1
+        kind: positive
+        prompt: 'Discover the installed skill for "orchestrate multi agent artifact generation" using aiwg
+          discover in JSON. Fetch and follow the returned governing rules before inspecting the
+          selected skill with aiwg show; use --body to read full content. Inspect only; do not
+          execute workflows, write files, contact services, or call models. Using those rules,
+          answer this synthetic scenario: A provider defaults to a presentation export, but project
+          policy permits it only explicitly and no export was requested. Choose next:
+          canonical-aiwg-only or provider-export-only. Return JSON {next, reason}.'
+        compound_action: aiwg\s+show\s+skill\s+
+        compound_expected:
+          type: skill
+          names:
+            - artifact-orchestration
+        assertions:
+          - type: json-equals
+            path: next
+            value: canonical-aiwg-only
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+skill\s+
+            body: true
+      - id: compound-positive-2
+        kind: positive
+        prompt: 'Discover the installed agent for "technical writer SDLC documentation artifacts" using aiwg
+          discover in JSON. Fetch and follow the returned governing rules before inspecting the
+          selected agent with aiwg show; use --body to read full content. Inspect only; do not
+          execute workflows, write files, contact services, or call models. Using those rules,
+          answer this synthetic scenario: Both canonical and provider-native outputs are explicitly
+          permitted and requested. Choose order: canonical-then-derived-with-provenance or
+          presentation-replaces-canonical. Return JSON {next, reason}.'
+        compound_action: aiwg\s+show\s+agent\s+
+        compound_expected:
+          type: agent
+          names:
+            - Technical Writer
+        assertions:
+          - type: json-equals
+            path: next
+            value: canonical-then-derived-with-provenance
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+agent\s+
+            body: true
+      - id: negative-unrelated-discovery
+        kind: negative
+        prompt: Find the installed version-reporting skill using aiwg discover in JSON and inspect it with a
+          read-only aiwg show command. Do not execute it, change files, or make technical decisions.
+          Return JSON {purpose, reason}, where purpose is report-version.
+        assertions:
+          - type: json-equals
+            path: purpose
+            value: report-version
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-not-matches
+            pattern: aiwg\s+show\s+rule\s+artifact-output-policy\b
+  - id: citation-policy
+    source: agentic/code/frameworks/sdlc-complete/rules/citation-policy.md
+    probes:
+      - id: compound-positive-1
+        kind: positive
+        prompt: 'Discover the installed skill for "generate research summaries and literature notes" using
+          aiwg discover in JSON. Fetch and follow the returned governing rules before inspecting the
+          selected skill with aiwg show; use --body to read full content. Inspect only; do not
+          execute workflows, write files, contact services, or call models. Using those rules,
+          answer this synthetic scenario: A claimed paper and page number are remembered but absent
+          from the corpus. Choose next: acknowledge-evidence-gap or cite-from-memory. Return JSON
+          {next, reason}.'
+        compound_action: aiwg\s+show\s+skill\s+
+        compound_expected:
+          type: skill
+          names:
+            - research-document
+        assertions:
+          - type: json-equals
+            path: next
+            value: acknowledge-evidence-gap
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+skill\s+
+            body: true
+      - id: compound-positive-2
+        kind: positive
+        prompt: 'Discover the installed agent for "validate citations research corpus GRADE hedging" using
+          aiwg discover in JSON. Fetch and follow the returned governing rules before inspecting the
+          selected agent with aiwg show; use --body to read full content. Inspect only; do not
+          execute workflows, write files, contact services, or call models. Using those rules,
+          answer this synthetic scenario: A retrieved source has LOW quality evidence. Choose
+          wording: limited-evidence-with-grade or research-conclusively-proves. Return JSON {next,
+          reason}.'
+        compound_action: aiwg\s+show\s+agent\s+
+        compound_expected:
+          type: agent
+          names:
+            - Citation Verifier
+        assertions:
+          - type: json-equals
+            path: next
+            value: limited-evidence-with-grade
+          - type: json-matches
+            path: reason
+            pattern: \S
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-matches
+            pattern: aiwg\s+show\s+agent\s+
+            body: true
+      - id: negative-unrelated-discovery
+        kind: negative
+        prompt: Find the installed version-reporting skill using aiwg discover in JSON and inspect it with a
+          read-only aiwg show command. Do not execute it, change files, or make technical decisions.
+          Return JSON {purpose, reason}, where purpose is report-version.
+        assertions:
+          - type: json-equals
+            path: purpose
+            value: report-version
+          - type: tool-matches
+            pattern: aiwg\s+discover
+          - type: tool-not-matches
+            pattern: aiwg\s+show\s+rule\s+citation-policy\b

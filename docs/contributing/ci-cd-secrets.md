@@ -36,6 +36,11 @@ issued by the CI system and is still used by PR-comment workflows.
 | `.gitea/workflows/storage-server-conformance.yml` | `ci/vault-fetch.storage-fortemi.spec` | `AIWG_FORTEMI_LIVE_URL` |
 | `.gitea/workflows/storage-server-conformance.yml` | `ci/vault-fetch.storage-fortemi-auth.spec` | `AIWG_FORTEMI_LIVE_TOKEN` |
 
+The Gitea npm publisher also uses
+`ci/vault-fetch.npm-publish-evidence.spec` to materialize the dedicated GitHub
+authenticated-user evidence credential as
+`AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_FILE`.
+
 The specs contain only `*_VAULT_PATH` and `*_VAULT_FIELD` placeholders. Concrete
 vault paths, metadata paths, hostnames, and fields are stored as private Gitea
 variables or in the private operations catalog.
@@ -78,6 +83,10 @@ npm run lint:vault-migration
 | `VAULT_ADDR`                                                                               | `ROUTE`         | Gitea Actions variable     |
 | `DOCSITE_DEPLOY_HOST`, `DOCSITE_DEPLOY_PORT`, `DOCSITE_DEPLOY_USER`, `DOCSITE_DEPLOY_PATH` | `CONFIG`        | Gitea Actions variables    |
 
+`AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_PATH` and
+`AIWG_GITHUB_RELEASE_EVIDENCE_TOKEN_VAULT_FIELD` are `ROUTE` values stored as
+Gitea Actions variables.
+
 The machine-readable variable manifest is
 [`../../ci/vault-migration-plan.json`](../../ci/vault-migration-plan.json).
 
@@ -103,6 +112,7 @@ route ID:
 
 ```text
 gitea-npm-token.value
+github-release-evidence-token.value
 gitea-release-token.value
 github-mirror-token.value
 aiwg-io-dispatch-token.value

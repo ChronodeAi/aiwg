@@ -71,21 +71,41 @@ describe('version launcher entrypoint', () => {
   });
 
   it.each([
-    { args: ['index', 'refresh'], credential: false, calls: 0, phase: 'notifier:skip (index refresh)' },
-    { args: ['mcp', 'profile', 'login'], credential: true, calls: 0, phase: 'notifier:skip (credential-handling command)' },
-    { args: ['version'], credential: false, calls: 1, phase: 'notifier:bootstrap-complete' },
-  ])('dispatches notifier for $args without launcher identity bindings', async ({ args, credential, calls, phase }) => {
+    { args: ['index', 'refresh'], credential: false, readOnly: false, calls: 0, phase: 'notifier:skip (index refresh)' },
+    { args: ['mcp', 'profile', 'login'], credential: true, readOnly: false, calls: 0, phase: 'notifier:skip (credential-handling command)' },
+    { args: ['version'], credential: false, readOnly: false, calls: 1, phase: 'notifier:bootstrap-complete' },
+    { args: ['rules', 'inventory'], credential: false, readOnly: true, calls: 0, phase: 'notifier:skip (read-only report)' },
+  ])('dispatches notifier for $args without launcher identity bindings', async ({ args, credential, readOnly, calls, phase }) => {
     const notifier = vi.fn();
     const trace = vi.fn();
     const begin = source.indexOf('const cliArgs = process.argv.slice(2);');
     const end = source.indexOf('if (maybeHandleFastVersion(cliArgs))', begin);
     await runInNewContext(`(async () => { ${source.slice(begin, end)} })()`, {
-      process: { argv: ['node', 'aiwg', ...args] }, trace,
+      process: { argv: ['node', 'aiwg', ...args] }, trace, readOnlyReport: readOnly,
       isCredentialHandlingCommand: () => credential,
       runUpdateNotifierBootstrap: notifier,
     }, { timeout: 1000 });
     expect(notifier).toHaveBeenCalledTimes(calls);
     expect(trace).toHaveBeenCalledExactlyOnceWith(phase);
+  });
+
+  it.each([
+    { args: ['memory', 'audit'], expected: true },
+    { args: ['memory', 'plan', '--out', 'plan.json'], expected: true },
+    { args: ['memory', 'apply', '--plan', 'plan.json', '--preview'], expected: true },
+    { args: ['memory', 'restore', '--plan', 'plan.json', '--preview'], expected: true },
+    { args: ['memory', 'apply', '--plan', 'plan.json', '--yes'], expected: false },
+    { args: ['memory', 'audit', '--json', '--write'], expected: true },
+    { args: ['memory', 'cost'], expected: true },
+    { args: ['memory', 'cost', '--demote', 'synthetic'], expected: true },
+    { args: ['memory', '--help'], expected: true },
+    { args: ['help', 'memory'], expected: true },
+    { args: ['memory', 'put', 'page.md'], expected: false },
+    { args: ['memory', 'project', 'reindex'], expected: false },
+  ])('preserves launcher no-write handling for $args', ({ args, expected }) => {
+    const start = source.indexOf('function isReadOnlyReport(');
+    const end = source.indexOf('const readOnlyReport =', start);
+    expect(runInNewContext(`${source.slice(start, end)}; isReadOnlyReport(args)`, { args }, { timeout: 1000 })).toBe(expected);
   });
 
   it('keeps stable output compact when a stale edge path is configured', () => {

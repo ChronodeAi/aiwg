@@ -1,6 +1,8 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { once } from "node:events";
+import { Agent, get, type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -145,6 +147,34 @@ describe("signed web release resolver", () => {
     expect(release.cacheDir).not.toContain(secret);
   });
 
+  it('redacts reflected bearer values in manifest and raw-resource request errors', async () => {
+    fixture.publishRelease();
+    const secret = 'synthetic-release-error-bearer';
+    const fail = async () => { throw new Error(`request failed with ${secret}`); };
+    await expect(resolveWebRelease({ ...options(), fetcher: fail, credentialProvider: async () => secret }))
+      .rejects.toThrow('request failed with [REDACTED]');
+    const release = await resolveWebRelease(options());
+    await expect(fetchVerifiedRawResource(release, TEST_RAW_PATH, { ...options(), fetcher: fail, credentialProvider: async () => secret }))
+      .rejects.toThrow('request failed with [REDACTED]');
+    const stream = createStreamingResourceResponse([Buffer.from('fixture')]).response;
+    stream.body!.getReader = () => ({ read: async () => { throw new Error(`stream failed with ${secret}`); } });
+    const streamFailure = async () => stream;
+    for (const selector of ['2026.7.23', 'stable', '^2026.7.0']) {
+      await expect(resolveWebRelease({ ...options(selector), fetcher: streamFailure, credentialProvider: async () => secret }))
+        .rejects.toThrow('stream failed with [REDACTED]');
+    }
+    await expect(fetchVerifiedRawResource(release, TEST_RAW_PATH, { ...options(), fetcher: streamFailure, credentialProvider: async () => secret }))
+      .rejects.toThrow('stream failed with [REDACTED]');
+  });
+
+  it('does not look up any credential on an offline resolution', async () => {
+    fixture.publishRelease();
+    const release = await resolveWebRelease(options());
+    const credentialProvider = vi.fn(async () => { throw new Error('must not read credentials'); });
+    expect((await resolveWebRelease({ ...options(), offline: true, credentialProvider })).manifestDigest).toBe(release.manifestDigest);
+    expect(credentialProvider).not.toHaveBeenCalled();
+  });
+
   it("resolves a signed channel and records its monotonic sequence", async () => {
     const published = fixture.publishRelease();
     fixture.publishChannel("stable", 7, published);
@@ -154,6 +184,38 @@ describe("signed web release resolver", () => {
     expect(release.selectorKind).toBe("channel");
     expect(release.channelSequence).toBe(7);
     expect(release.manifestDigest).toBe(published.manifestDigest);
+  });
+
+  it("closes fixture sockets on 200, 304, and 404 responses even when the client requests keep-alive", async () => {
+    const published = fixture.publishRelease();
+    fixture.publishChannel("stable", 7, published);
+    const agent = new Agent({ keepAlive: true });
+    let etag: string | undefined;
+
+    try {
+      for (const status of [200, 304, 404]) {
+        const pathname = status === 404 ? "/missing" : "/resources/channels/stable.json";
+        const response = await new Promise<IncomingMessage>((resolve, reject) => {
+          get(`${fixture.baseUrl}${pathname}`, {
+            agent,
+            headers: status === 304 ? { "if-none-match": etag! } : {},
+          }, resolve).once("error", reject);
+        });
+        // Subscribe before draining: close may arrive immediately after end.
+        const closed = once(response.socket, "close");
+        const ended = once(response, "end");
+        response.resume();
+        await ended;
+
+        expect(response.statusCode).toBe(status);
+        expect(fixture.requestHeaders.at(-1)?.connection).toBe("keep-alive");
+        expect(response.headers.connection).toBe("close");
+        await closed;
+        etag = response.headers.etag;
+      }
+    } finally {
+      agent.destroy();
+    }
   });
 
   it("enforces additive signed channel expiry while accepting legacy metadata without it", async () => {

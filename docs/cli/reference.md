@@ -35,19 +35,43 @@ Complete reference for all `aiwg` CLI commands.
 
 **Prerequisites:** Node.js ≥24 and `npm install -g aiwg`
 
+## Rule inventory
+
+```bash
+aiwg rules inventory --scope workspace --json
+aiwg rules list --capability aiwg-utils --bodies
+aiwg rules inventory --scope catalog --activation bound --tier critical,high
+```
+
+Workspace means the current repository and user configuration, without scanning
+other repositories. User selects user configuration and the user registry;
+installation lists configured capabilities; catalog additionally lists
+available installation sources. Filters compose. The report distinguishes
+canonical and effective activation, pins, bindings and configured providers.
+Delivery and native session loading remain unknown without direct evidence.
+`--bodies` returns complete source text and reports missing indexed files as an
+error. MCP exposes the same operation as `rule-inventory`.
+The inventory does not deploy or change configuration. Generic CLI hooks and
+opt-in command logging remain governed by their existing settings.
+
 ## Authentication
 
 ```bash
 aiwg auth login [--device] [--device-label <label>]
 aiwg auth status [--json]
 aiwg auth logout [--all]
+aiwg auth secret set <name> [--value-interactive | --value-stdin | --value-file <path> | --value-store <name> | --value-env <NAME>]
+aiwg auth secret delete <name>
 ```
 
 Authentication uses the native operating-system credential store. A mode-0600
 file fallback requires explicit `--store file --allow-file-store` opt-in. Exit
 codes are 0 success, 2 usage, 3 not authenticated, 4 denied/expired, 5
 credential-store failure, and 6 network/protocol failure. Status output never
-contains access or refresh tokens.
+contains access or refresh tokens. Named raw values use the same native store
+through `auth secret set` and `auth secret delete`. See
+[Supplying sensitive values](sensitive-values.md) for input methods, exposure
+boundaries, and the complete command inventory.
 
 **References:**
 
@@ -91,14 +115,16 @@ given" (review item 11).
 | `aiwg init` add a custom script (name + command) | `--script <name>=<command>` (repeatable; implies yes) or `--custom-scripts true\|false` to answer the question directly without supplying one | Skipped — no custom scripts added |
 | `aiwg init` / `aiwg setup project` worker-dispatch offer | `--worker-dispatch enable\|decline` | Optional — unchanged one-line hint (now also naming `--worker-dispatch`); see [Turn On Direct Worker Dispatch](../getting-started/worker-dispatch.md#answering-headlessly) |
 | `aiwg setup project` (every other prompted field: `--primary`, `--issue-provider`, `--issue-tracker`, `--ci`, `--delivery-mode`, `--default-branch`, `--require-ci-green`, `--auto-close-issues`, `--force-push-policy`, `--require-signed-commits`, `--providers`) | See `aiwg setup project --help` for the full flag list | Refuses writing without `--yes` in a non-interactive context — checked before any `git` call, not just before the final write; with `--yes`, unsupplied fields fall back to their detected/default value |
-| `aiwg mcp profile login <name>` | Exactly one of `--api-key-stdin` (most preferred), `--api-key-file <path>`, or `--api-key-env <ENV_VAR_NAME>` (least preferred) — see [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely). In every case the key reaches `codex` over stdin only — it never appears on argv, the child's own environment, logs, or error messages | Refuses, naming all three flags. More than one given is a usage error naming the flags given. If the named variable/file is unset/missing, the error names it, never a value. Requires a built CLI (`npm run build:cli`, or an installed `aiwg`) — it never falls back to loading TypeScript source directly |
-| `aiwg decision setup jev` | `--token-stdin` (preferred) or the `JEV_API_KEY`/`AIWG_DECISION_JEV_API_KEY` environment variables (least preferred) | See [Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely) — the same environment-variable caveat applies |
+| `aiwg mcp profile login <name>` | Hidden terminal entry, or `--api-key-interactive`, `--api-key-stdin`, `--api-key-file <path>`, `--api-key-store <name>`, `--api-key-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). Key delivery to Codex uses stdin only. | Refuses, naming every source option. Multiple sources use interactive → stdin → file → store → environment precedence; Windows file input refuses pending native ACL validation (use stdin/store). Requires a built CLI (`npm run build:cli`, or installed `aiwg`). |
+| `aiwg decision setup jev` | Hidden terminal entry, `--token-interactive`, `--token-stdin`, `--token-file <path>`, `--token-store <name>`, or `--token-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). `--remove` needs no token. | Refuses, naming every source option; shell variables must be explicitly selected with `--token-env`. |
+| `aiwg auth secret set <name>` | Hidden terminal entry, `--value-interactive`, `--value-stdin`, `--value-file <path>`, `--value-store <name>`, or `--value-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). | Refuses, naming every source option. |
+| Guided `aiwg init` / `aiwg setup project` / `aiwg setup --apply` | `--credential <provider>=stdin\|file:PATH\|store:NAME\|env:NAME`; plan stores references only, resolved at apply through the shared input resolver. | Missing values fail with source guidance; `stdin` can read explicit piped input or prompt with a terminal. See [Supplying sensitive values](sensitive-values.md). |
 
 No bootstrap subprocess (today: the update-notifier check `bin/aiwg.mjs` fires on
 every invocation) is ever started before `bin/aiwg.mjs` has decided whether the
 invocation is one of these two credential-handling commands, and that check never
 inherits the whole parent environment regardless of command — see
-[Supplying credentials safely](../mcp/codex-profiles.md#supplying-credentials-safely)
+[Supplying sensitive values](sensitive-values.md)
 for why, and what it protects against.
 
 `aiwg setup-run` `script`/`verify`/`detect`/`os-config` steps don't need a headless
@@ -553,6 +579,8 @@ aiwg refresh --quiet
 
 ### diagnose
 
+Sensitive diagnostic output: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Produce a shareable support bundle (logs + env + config) for bug reports.
 
 ```bash
@@ -562,7 +590,7 @@ aiwg diagnose [--stdout] [--include-secrets]
 **Options:**
 
 - `--stdout` - Emit a single-file JSON manifest to stdout instead of writing a tarball
-- `--include-secrets` - Skip log sanitization (inspect the bundle before sharing)
+- `--include-secrets` - Disable sanitization: output contains secrets and must be reviewed before sharing
 
 **Capabilities:** cli, diagnostics, troubleshooting, support, bundle
 **Platforms:** All
@@ -570,7 +598,7 @@ aiwg diagnose [--stdout] [--include-secrets]
 
 By default writes `aiwg-diagnose-YYYYMMDDHHMMSS.tar.gz` in the current directory
 containing logs, environment info, config snapshot, and recent git activity.
-Secrets in logs are sanitized unless `--include-secrets` is passed.
+Secrets in logs are sanitized unless `--include-secrets` is passed. That explicit opt-in writes a warning to stderr, including with `--stdout`; review the secret-containing output before sharing.
 
 ---
 
@@ -633,6 +661,8 @@ invocation or project policy explicitly grants them with `--allow-premium`.
 
 ### use
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Install and deploy framework or addon to your project. Skills are deployed natively for providers that support them; commands are generated from skill sources for providers that need them. Each provider receives all artifact types (agents, skills, commands, rules) regardless of native platform support.
 
 ```bash
@@ -675,6 +705,10 @@ being falsely described as pinned.
   currently manage. This is the supported way to reclaim a provider directory
   left behind by an older AIWG install.
 - `--dry-run` - Preview without making changes
+- `--no-context-files` - Leave `WORKSPACE.md`, `AIWG.md`, and `AGENTS.md`
+  byte-identical, or absent if missing. This includes provider templates,
+  managed blocks, and activation-selected startup/core-rule sections. Skills,
+  standalone rules, and rule indexes still deploy.
 - `--verbose` / `-v` - Include deployment phase details, framework-index build
   time, registry diagnostics, and the provider-specific reload rationale. The
   default report stays compact for terminals, logs, and agent transcripts.
@@ -720,23 +754,29 @@ and any addon the framework's manifest lists under `dependencies.required`
 extension, and it registers no addon CLI namespaces. Add one by name
 (`aiwg use rlm`, `aiwg use sys`), or run `aiwg use all`.
 
-`aiwg use all` deploys every framework, every non-explicit addon, and every
-extension. On providers other than `pi` and `omp` that is the kernel surface —
-kernel skills and behaviors — and no agents, commands, or rules. `pi` and `omp`
-keep the full surface: agents, prompts, skills, and rules. It leaves the
-artifacts other bundles deployed alone: running it after `aiwg use sdlc` does
-not remove the SDLC agent surface. In a project whose only recorded deployment
-is the bulk install itself, it still clears flat artifacts left by the
-pre-kernel bulk default.
+`aiwg use all` selects every framework and eligible addon. Providers other than
+`pi` and `omp` deploy the kernel surface by default: kernel skills, kernel and
+core rules, and behaviors. `pi` and `omp` retain the full agent, prompt, skill,
+and rule surface and include extensions. `--copy-all` requests the full surface
+on other providers too. Kernel mode does not run redundant extension passes.
+Existing artifacts owned by separately installed bundles are preserved.
 
-`writing` and `general` are addon-only modes with no framework behind them. They
-keep the full addon sweep that `all` performs.
+`writing` and `general` are addon-only modes with no framework behind them.
+They retain the full addon and extension sweep.
 
-Bulk deploys (`all`, `writing`, `general`) skip addons whose manifest sets
-`"devOnly": true` (`aiwg-dev`) or `"explicitInstall": true` (`decision-engine`,
-`pm-os`). These are deployed only when named, for example `aiwg use pm-os`.
-`autoInstall: false` is not an exclusion: most addons declare it and are still
-part of `aiwg use all`.
+Bulk deploys skip addons whose manifest sets `"devOnly": true` (`aiwg-dev`) or
+`"explicitInstall": true` (`decision-engine`, `pm-os`). These deploy only when
+named. `autoInstall: false` alone does not exclude an addon from `aiwg use all`.
+
+Hermes skills are home-scoped (`$HERMES_HOME/skills`, default `~/.hermes/skills`).
+Explicit `--scope project` is refused before deployment, including dry-run.
+Use `--scope user`, or run both AIWG and Hermes with the same isolated
+`HERMES_HOME` profile. Unflagged Hermes deployments retain home-based skills.
+
+Managed markers use the selected AIWG source/package version across providers,
+addon passes, and generated indexes. If that version cannot be resolved,
+deployment emits an explicit diagnostic identifying the package path and the
+`vunknown` fallback.
 
 **Capabilities:** cli, framework, deployment, addon
 **Platforms:** All
@@ -1113,6 +1153,8 @@ The bundle is immediately deployable: `aiwg use <name>`.
 
 ### install
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Install an AIWG-compatible framework, addon, or extension package from a
 remote Git repository into the local registry cache. Distinct from
 `install-plugin` (Claude Code plugin format).
@@ -1142,6 +1184,17 @@ aiwg install <ref> [--ref <tag-or-sha>] [--package <id>] [--verify]
 - `--global` - Store package state in the user AIWG directory (default)
 
 Mutable refs are resolved to immutable commits and cached by commit. Direct
+Git authentication accepts `--token-interactive`, `--token-stdin`,
+`--token-file <path>`, `--token-store <name>`, and `--token-env <NAME>`;
+see [Supplying sensitive values](sensitive-values.md). Without an explicit
+source, GitHub keeps `GITHUB_TOKEN` then its existing private credential file;
+Gitea keeps `GITEA_TOKEN` then its existing private credential files. Otherwise
+SSH-agent access is used. Tokens stay out of clone URLs, arguments, persisted
+Git configuration, and child-process debug output. A temporary private config
+file scopes the header to the HTTPS origin and is removed after the operation.
+Windows token fetches fail closed pending temporary-file ACL validation; use
+SSH-agent access there.
+
 Git installs support root bundles and validated standalone
 `.aiwg/plugins/<id>` wrappers. Without `--verify`, an unsigned but digest-valid
 package is reported as `integrity-only`.
@@ -1152,6 +1205,8 @@ package is reported as `integrity-only`.
 ---
 
 ### marketplace
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Exchange Git-native packages through direct remotes and independently signed
 catalogs. Catalog inclusion is an observation, not an AIWG endorsement.
@@ -1164,7 +1219,7 @@ aiwg marketplace install <git-url|package> [--ref <tag-or-sha>] [--verify]
 aiwg marketplace verify <package|lock-id> [--require-signature]
 aiwg marketplace export <package> --output <archive.json>
 aiwg marketplace import <archive.json> [--verify]
-aiwg marketplace publish <source> --key <pem> --publisher <id>
+aiwg marketplace publish <source> --publisher <id> [--key-file <pem> | --key-stdin]
 aiwg marketplace remove <catalog-id>
 aiwg marketplace list [--json]
 ```
@@ -1203,6 +1258,12 @@ aiwg marketplace verify team/auth-tools --project-local
 aiwg marketplace export team/auth-tools --output auth-tools.aiwg.json
 aiwg marketplace list --json
 ```
+
+Publish accepts multiline private PEM through `--key-interactive`, `--key-stdin`,
+`--key-file <path>`, `--key-store <name>`, or `--key-env <NAME>`. `--key <path>`
+is a compatibility alias for private-file input. With no source, terminal entry
+is used; headless use must select a source. See [supplying sensitive values](sensitive-values.md)
+for private-file checks and source precedence.
 
 See [Git-Native Package Exchange](../providers/git-native-marketplace.md) for
 the envelope, lock, W3C PROV, trust, catalog, mirror, recovery, and key-rotation
@@ -1296,6 +1357,8 @@ cd customer-portal
 
 ### session
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Start an agentic session with pre-flight health checks, auto-repair, optional MCP injection, and provider launch.
 
 ```bash
@@ -1374,6 +1437,8 @@ aiwg session --profile incident --persist
 
 ### serve
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Start local HTTP dashboard server for sandbox fleet management and HITL relay.
 
 ```bash
@@ -1399,7 +1464,15 @@ aiwg serve --no-open --read-only
 
 ---
 
+### agentcard
+
+Fetch and verify an executor AgentCard using `aiwg agentcard verify --host <url> --instance <id> --jwks <path|url>`. For authenticated endpoints, select `--bearer-interactive`, `--bearer-stdin`, `--bearer-file <path>`, `--bearer-store <name>`, or `--bearer-env <NAME>`; see [Supplying sensitive values](sensitive-values.md). No source keeps unauthenticated access. The compatibility `--bearer <token>` option warns that it exposes the value on argv.
+
+---
+
 ### local-executor
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md).
 
 Start a no-sandbox host-process executor that boots `DaemonSupervisor` + `ExecutorShim` and registers with `aiwg serve` for mission dispatch. Implements `executor.aiwg.io/v1` Core + HITL conformance with `isolation: none` (#1181).
 
@@ -1416,6 +1489,9 @@ aiwg local-executor serve --max-concurrency 4 --executor-id <uuid>
 - `--aiwg-serve <url>` - URL of the parent `aiwg serve` to register with (default: `http://127.0.0.1:7337`)
 - `--max-concurrency <n>` - Max concurrent missions (default: `2`)
 - `--executor-id <uuid>` - Stable executor ID for re-registration (default: generated)
+- `--token-interactive`, `--token-stdin`, `--token-file <path>`, `--token-store <name>`, `--token-env <NAME>` - Optional preexisting bearer, using the [standard source precedence and private-file requirements](sensitive-values.md).
+
+Without a token source, the executor retains `AIWG_EXECUTOR_TOKEN`, then the existing token cache scoped to its executor ID and serve URL, then registration. It prompts only with `--token-interactive`. Registration-issued tokens are persisted at the existing artifact location under `local-executor/tokens/` in a 0600 file inside a 0700 directory; insecure restart files are refused. Tokens never appear in status output. Windows cache persistence fails closed until native ACL validation is available.
 
 **Conformance:** `executor-contract` v1 — Core + HITL profiles, `isolation: none`.
 
@@ -1428,6 +1504,8 @@ aiwg local-executor serve --max-concurrency 4 --executor-id <uuid>
 ---
 
 ### init
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Initialize an AIWG project by creating `.aiwg/aiwg.config` (provider registry,
 scripts, delivery policy). Distinct from `aiwg new` (which scaffolds a
@@ -1451,6 +1529,8 @@ If a config already exists, the command exits without changes unless `--force` i
 ---
 
 ### setup
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 CLI helper for project-level repository policy, issue tracker routing, delivery
 mode, and signing metadata. This command is usually called by an AIWG
@@ -1517,6 +1597,8 @@ advanced cases, but the preferred user experience is the agent-led setup flow.
 ---
 
 ### issue
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Policy-plan and manage the project-local issue store. External issue-authoring
 skills use the same composition contract before their tracker-specific write.
@@ -1810,6 +1892,8 @@ aiwg mcp <subcommand>
 
 #### mcp serve
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Start the AIWG MCP server.
 
 ```bash
@@ -1842,9 +1926,11 @@ for general AIWG CLI execution, `AIWG_MCP_TOOLSETS=flows` with
 `AIWG_MCP_TOOLSETS=missions` with `mission-guide` / `mission-dispatch` /
 `mission-status` for Mission access.
 
-**Opt-in toolsets**: see [MCP capability audit](../integrations/mcp-capability-audit.md) and [Tool reference](../integrations/hermes-quickstart.md#tool-name-mangling) for details.
+**Opt-in toolsets**: see [MCP capability audit](../integrations/mcp-capability-audit.md) and [Tool reference](../integrations/hermes-quickstart.md) for details.
 
 #### mcp install
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
 
 Generate MCP client configuration.
 
@@ -1854,7 +1940,7 @@ aiwg mcp install <client>
 
 **Arguments:**
 
-- `<client>` - Client name: `claude`, `cursor`, `factory`
+- `<client>` - Client name: `claude-code`, `claude-desktop`, `cursor`, `factory`
 
 **Options:**
 
@@ -1871,11 +1957,31 @@ aiwg mcp install <client>
 
 ```bash
 # Install for Claude Code (CLI and Claude Desktop's Code tab)
-aiwg mcp install claude
+aiwg mcp install claude-code
 
 # Preview config
-aiwg mcp install claude --dry-run
+aiwg mcp install claude-code --dry-run
 ```
+
+The project `.mcp.json` entry is:
+
+```json
+{
+  "mcpServers": {
+    "aiwg": {
+      "command": "aiwg",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+**Retained legacy entries:** Installation migrates only the recognizable built-in
+AIWG stanza from `.claude/settings.local.json`. Custom legacy entries, including
+any plaintext credentials, are kept. Inspect the `mcpServers` map in that file
+in each older project; remove obsolete entries and move needed servers into the
+supported provider config using environment references, then remove retained
+plaintext credentials.
 
 #### mcp info
 
@@ -1899,6 +2005,8 @@ aiwg mcp info
 
 #### mcp add
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
+
 Register an MCP server in the AIWG server registry (`~/.aiwg/mcp-servers.json`).
 
 ```bash
@@ -1916,15 +2024,17 @@ aiwg mcp add <name> --type stdio --command <cmd> [--args <a,b>] [--env KEY=VAL]
 - `--type <type>` - Server type: `http` (default), `stdio`, `sse`
 - `--url <url>` - URL for http/sse servers
 - `--command <cmd>` - Executable for stdio servers
-- `--args <a,b>` - Comma-separated args for stdio command. `-flag value`,
+- `--args <a,b>` - Literal comma-separated args for stdio command. Values are
+  visible on process argv and saved in config; use env/header references for secrets. `-flag value`,
   `--flag value`, and `--flag=value` forms whose flag names a credential kind
   (`--token`, `--password`, `--api-key`, …) are scanned for literal secrets,
   including a value that itself starts with a hyphen (`--token -abc`); a
   following `--flag` with no value form is read as a bare flag, not a value.
-  Single-letter short flags (`-p secret`) and positional `KEY=value` forms are
-  never detected.
+  Single-letter short flags (`-p secret`) are not detected. Credential-named
+  `KEY=value` assignments are scanned.
 - `--env KEY=VAL` - Environment variable(s) for stdio servers
-- `--headers KEY=VAL` - HTTP headers for http/sse servers
+- `--headers KEY=VAL` or `--headers 'Name: value'` - Literal HTTP headers for http/sse servers.
+  Secret-looking `--env`/`--headers` literals print one stderr deprecation warning without values.
 
 Literal `--env`/`--headers` values are refused when injecting into a
 project-scope (shareable) provider file: only empty strings and supported
@@ -1932,9 +2042,14 @@ reference forms (`${VAR}`, `${env:VAR}`, `{env:VAR}`) may be committed.
 Store the real secret in the environment and use `--header-env`/`--env-from`
 references instead, or inject with `--scope user` for providers that document
 a private user destination.
-- `--header-env HEADER=ENV_VAR` - Resolve a remote HTTP/SSE header from an
-  environment variable at connection time. The registry stores only the
-  variable name. An `Authorization` reference is sent as a Bearer token.
+- `--header-env HEADER=SOURCE` / `--env-from KEY=SOURCE` - Repeatable per-value
+  references: `ENV_NAME`, `file:ABSOLUTE_PATH`, `store:NAME`, `stdin:STORE_NAME`, or
+  `interactive:STORE_NAME`. Stdin/explicit hidden entry save to the existing OS
+  store and persist only its reference; at most one stdin value per invocation.
+  Registration never prompts by default. File/store locators resolve through
+  AIWG's runtime client (currently Fortemi); native provider/profile config
+  writers refuse them and require `ENV_NAME`. See [source behavior and limits](sensitive-values.md#mcp-registry-values).
+  The AIWG runtime client sends an `Authorization` reference as a Bearer token.
 - `--description <text>` - Human-readable description
 
 **Example:**
@@ -1963,7 +2078,11 @@ Note: does not remove the server from already-injected provider configs. Re-run 
 
 #### mcp update
 
-Update a registered server's properties.
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
+
+Update a registered server's properties. Accepts the same literal and per-value
+reference flags as `mcp add`, including `--header-env Authorization=stdin:STORE_NAME`.
+Existing literal registry values are preserved; there is no automatic migration.
 
 ```bash
 aiwg mcp update <name> [--url <url>] [--type <type>] [--command <cmd>] [--description <text>]
@@ -1982,6 +2101,8 @@ aiwg mcp list
 Shows server name, type, URL or command, description, and which providers it has been injected into.
 
 #### mcp inject
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#mcp-registry-values).
 
 Inject registered servers into a provider's config file.
 
@@ -2050,7 +2171,7 @@ aiwg mcp profile <subcommand>
 | `import <file>`                | Import profiles from a JSON file          |
 | `export [<name>] --out <file>` | Export one or all profiles                |
 | `init-presets`                 | Install built-in preset profiles          |
-| `login <name> [--api-key-env <ENV_VAR_NAME>]` | Log in to a Codex profile's isolated runtime home (#3062, #3069) — interactive OAuth with a terminal, or headless via `--api-key-env`; see [Codex Per-Profile Runtime Homes](../mcp/codex-profiles.md#explicit-login) |
+| `login <name> [--api-key-stdin\|--api-key-file <path>\|--api-key-store <name>\|--api-key-env <NAME>]` | Log in to a Codex profile with hidden terminal API-key entry or a selected source; see [Supplying sensitive values](sensitive-values.md) and [Codex Per-Profile Runtime Homes](../mcp/codex-profiles.md#explicit-login). |
 
 **Preset Profiles** (installed via `aiwg mcp profile init-presets`):
 
@@ -2985,6 +3106,8 @@ agentic/code/frameworks/security-framework/
 
 ## Daemon Commands
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Commands for managing the AIWG daemon and its subsystems.
 
 ### behavior
@@ -3019,6 +3142,9 @@ aiwg behavior info security-sentinel
 
 Initialize daemon config from a profile template.
 
+Scaffolds references only; credentials resolve at daemon startup. See
+[Supplying sensitive values](sensitive-values.md#daemon-startup-references).
+
 ```bash
 aiwg daemon-init [profile-name] [--force]
 ```
@@ -3045,6 +3171,8 @@ aiwg daemon-init [profile-name] [--force]
 ## Remote Transport Commands
 
 ### uhp
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Inspect or smoke-test an explicitly selected experimental UHP endpoint profile.
 AIWG is a UHP client only and does not claim server conformance.
@@ -3277,6 +3405,8 @@ Custom teams can be placed in `.aiwg/teams/<slug>.json` for project-local overri
 Al is the iterative task execution loop with advanced control layers (Epic #26).
 
 ### ralph
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Start Al task execution loop.
 
@@ -3513,6 +3643,8 @@ aiwg ralph-abort
 ---
 
 ### ralph-resume
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Resume paused agent loop.
 
@@ -4180,6 +4312,8 @@ Top-level capability search across AIWG operational assets: skills, agents, comm
 
 ### discover
 
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
 Find AIWG operational assets by capability — index-driven on-demand discovery (#1212).
 
 ```bash
@@ -4273,7 +4407,9 @@ Multi-token queries require ≥50% token overlap to surface partial matches — 
 
 ### show
 
-Print the full text of a specific AIWG skill, agent, command, or rule by name (#1218). The companion to `discover`: where discover ranks candidates, show fetches the body so consumers don't navigate AIWG's storage paths themselves.
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
+
+Show a metadata card for an AIWG skill, agent, flow, command, or rule (#3306). The card includes identity, owning capability and install state, governing rules with enforcement/activation and `rule_stats`, required rule checks, an outline with byte/line sizes, companion resources, and exact drill-in commands. The local card path uses the #3305 relationship sidecar instead of loading the full framework index; only the selected artifact is read for its outline and description.
 
 ```bash
 aiwg show <type> <id-or-name-or-path> [options]
@@ -4281,11 +4417,20 @@ aiwg show metadata <id-or-name-or-path> [options]
 aiwg index show <type> <name> [options]      # equivalent
 ```
 
-**Type** is positional for body lookup. Allowed values: `skill`, `agent`, `command`, `rule`. Metadata lookup uses `metadata` as the subcommand and accepts the same identifier/name/path forms.
+**Type** is positional for card lookup. Core values: `skill`, `agent`, `flow`, `command`, `rule`. Metadata lookup uses `metadata` as the subcommand and accepts the same identifier/name/path forms.
 
 **Options:**
 
-- `--json` — For body lookup, emit `{ id, path, type, name, title, kernel, providerModels, content }`. For `show metadata`, emit `{ id, backend, type, name, title, paths, provenance, providerModels, metadata }`. `providerModels` lists the reasoning, coding, and efficiency model names plus their model-pinned worker wrapper for providers installed in `.aiwg/aiwg.config`. Default body mode streams the file unmodified.
+- `--json` — Return the same metadata card. Top-level `content` appears only with `--body` or `--section`. `providerModels` retains provider worker metadata where configured. `show metadata` remains the separate full index metadata/debug view.
+- `--body` — Return the complete authored file (the old default), plus governing-rule guidance.
+- `--section <heading>` — Fetch a section, including its child headings; repeat for several sections. Exact heading match wins, then case-insensitive match. Unknown or duplicate ambiguous headings fail with the available heading list; no approximate matching is performed. Markdown ATX and Setext headings are supported; fenced examples are ignored. YAML flows with no Markdown headings expose an empty outline and can be read with `--body`.
+- `--rules` — Show governing rule summaries and required checks (also present on the default card).
+- `--with-rule-bodies` — Include complete governing contracts in `bound_rules[].content`; combine with `--rules`. `--bound-rule-bodies` remains a compatibility alias.
+- `--resources` — List companion `templates/`, `scripts/`, `references/`, `resources/`, and `assets/` files and explicitly linked companion resources with sizes (also listed on the card).
+- `--resource <path>` — Fetch a listed companion resource; JSON returns `resource.body`. Only listed paths within the owning bundle are accepted; arbitrary traversal and symlink resources are rejected. Web cards list resources committed by the signed release manifest; resource drill-ins use the same verified cache and `--offline` policy.
+
+Fetch and follow every `required_rule_checks[].fetch_command` before governed work. A card or rule summary does not replace the rule body. Rule cards expose activation, enforcement, and bound targets using the same model.
+
 - `--first` — On ambiguity, pick the top match instead of erroring with the disambiguation list.
 - `--graph <name>` — Override the default graph (defaults to `framework` then `project`).
 - `--backend <fortemi-core|local>` — Lookup backend. Default is
@@ -4311,15 +4456,18 @@ aiwg index show <type> <name> [options]      # equivalent
 **Examples:**
 
 ```bash
-aiwg show skill aiwg:skill:6f1477d99813ca8d         # streams SKILL.md to stdout
-aiwg show skill flow-deploy-to-production --json    # id + path + content envelope
+aiwg show skill aiwg:skill:6f1477d99813ca8d         # metadata card; no body by default
+aiwg show skill flow-deploy-to-production --json    # same metadata card as JSON
 aiwg show skill architecture-evolution              # @aiwg/cli selects signed stable web resources
 aiwg show skill architecture-evolution --resource-source web --aiwg-version stable
 aiwg show metadata aiwg:skill:6f1477d99813ca8d --json # full Fortemi metadata + paths
-aiwg show agent aiwg-steward                        # agent definition
-aiwg show command discover                          # CLI command spec
-aiwg show rule no-attribution                       # rule body
-aiwg show skill research-query --json
+aiwg show agent aiwg-steward                        # agent metadata card
+aiwg show command discover                          # command metadata card
+aiwg show rule no-attribution                       # rule metadata card
+aiwg show skill research-query --section "Steps" --json
+aiwg show skill research-query --rules --with-rule-bodies
+aiwg show skill research-query --resources
+aiwg show skill research-query --body
 aiwg show agent aiwg-model-coding-worker --json | jq '.providerModels'
 ```
 
@@ -4411,7 +4559,7 @@ Then surface the top match (or top-3 candidates) — this makes your reasoning a
 
 **Don't skip discovery before declining or improvising.** The `skill-discovery` HIGH framing rule mandates `aiwg discover` before saying "AIWG can't do that" or writing a custom workflow from scratch. Most AIWG skills (~460 of 480 today) are NOT in your loaded context — the kernel set is just the orientation layer + self-maintenance ops.
 
-**Read skill bodies via `aiwg show`, not via filesystem paths.** When discovery returns a candidate and you need its full body, call `aiwg show skill <id>` (or the stable name if that is all you have). Don't construct paths or `cat` files directly — the CLI is the access point and works the same regardless of where AIWG is installed. Exact path parameters remain supported for compatibility, but identifier lookup is the primary path.
+**Read skill bodies via `aiwg show`, not via filesystem paths.** When discovery returns a candidate and you need its full body, inspect `aiwg show skill <id>`, then call `aiwg show skill <id> --section "Heading"` or `aiwg show skill <id> --body` (or the stable name if that is all you have). Don't construct paths or `cat` files directly — the CLI is the access point and works the same regardless of where AIWG is installed. Exact path parameters remain supported for compatibility, but identifier lookup is the primary path.
 
 **Skip discovery only when:**
 
@@ -4438,8 +4586,16 @@ The index uses a **multi-graph architecture** with three built-in graph types pl
 | ---------------- | ------------------------------------------------------- | ---------------------------------- | ---------------------------- |
 | `project`        | configured AIWG artifact root (virtualized as `.aiwg/`) | `<artifact-root>/.index/project/`  | Yes                          |
 | `codebase`       | JS/TS: `src/`, `test/`, `tools/`; Python: detected package, `tests/`, `scripts/` roots | `<artifact-root>/.index/codebase/` | Yes (skipped if dirs absent) |
-| `framework`      | `agentic/code/`, `docs/`                                | `.aiwg/.index/framework/`          | No (use `--graph framework`) |
+| `framework`      | `agentic/code/`, `docs/`                                | `$XDG_DATA_HOME/aiwg/index/roots/<root-key>/framework/` | No (use `--graph framework`) |
 | _(user-defined)_ | configured in the artifact root's `aiwg.config` (#1491) | `<artifact-root>/.index/<name>/`   | Configurable                 |
+
+The framework root key is the SHA-256 of the canonical AIWG package path.
+Its fingerprint receipt and graph sidecars stay beside the index; its Fortemi
+cache lives in `roots/<root-key>/fortemi-core/framework/`. Projects using the
+same package share these files, while separate installations and worktrees
+keep separate files. Source updates reconcile within the existing key. Legacy
+unkeyed indexes are left in place, with one rebuild into the keyed directory.
+`XDG_DATA_HOME` defaults to `~/.local/share`.
 
 The artifact root defaults to `<project>/.aiwg`, but `AIWG_ARTIFACTS_PATH` or
 `.aiwg-location` may point it elsewhere or rename it. Index entries for project
@@ -4463,7 +4619,7 @@ aiwg index <subcommand> [options]
 - `build` - Build/rebuild the artifact index
 - `query` - Search artifacts by keyword, type, phase, tags
 - `discover` - Capability search across AIWG skills/agents/commands/rules (canonical form is the top-level [`aiwg discover`](#discover); this subcommand is preserved for backward compatibility)
-- `show` - Print the full text of a specific skill/agent/command/rule (canonical form is the top-level [`aiwg show`](#show))
+- `show` - Show an artifact metadata card with `--section` / `--body` drill-ins (canonical form is the top-level [`aiwg show`](#show))
 - `sync` - Materialize the Fortemi Core static index cache for a graph
 - `migrate-legacy` - Move compatible legacy root indexes into graph sidecar indexes without modifying packaged/prebuilt indexes
 - `deps` - Show artifact dependency graph
@@ -4476,6 +4632,47 @@ aiwg index <subcommand> [options]
 **Global option (all subcommands):**
 
 - `--graph <name>` - Target a specific graph: built-in (`project`, `codebase`, `framework`) or user-defined
+
+Index status accepts `--only <name|all>` (for example `project`, `framework`,
+`relationships`, `sessions`, or `caches:project`). Refresh accepts the same
+names plus the existing owner groups (`graphs`, `caches`, `runtime`, `models`,
+`issues`). `all` uses the registered owners in the selected workspace; only an
+explicit `--root` requests workspace discovery. New graph registrations take
+effect on the next invocation.
+
+The status JSON preserves `graphs`, `summary`, and drift fields and adds
+`indices`. Each entry declares its roots, identity, backend, owner operation,
+exclusions, outputs, and freshness. Freshness reports the last verified digest
+and time, first observed dirty time/age, pending work, last error, and measured
+convergence (`wallMs`, `residualJobs`, `converged`). States are `fresh`, `stale`,
+`degraded`, `unavailable`, and `unsupported`. Remote dataset/model owners without
+a deterministic local probe are explicitly unsupported. Optional scopes without
+a published snapshot are unavailable. Framework relationships share the framework
+snapshot and lock. A failed graph rebuild preserves the published files and last
+successful verification; changes during a build leave reconciliation pending.
+
+Configure age targets independently in `.aiwg/aiwg.config`:
+
+```json
+{
+  "index": {
+    "freshness": {
+      "project": { "targetStaleAfterMs": 60000 },
+      "codebase": { "targetStaleAfterMs": 3600000 },
+      "sessions": { "targetStaleAfterMs": 900000 }
+    }
+  }
+}
+```
+
+A named policy overrides its owner-group policy. Defaults are one hour for
+graphs, fifteen minutes for sessions, five minutes for local issues, six hours
+for runtime discovery, and one day for caches. `measureConvergence` defaults to
+`true`; `maxRetriesPerDay` defaults to `3` as policy metadata for the scheduler.
+Targets measure individual verification age and observed reconciliation time;
+they do not establish a global freshness guarantee. The daemon's `index.verify`
+job forwards `args.index` to this same status owner and includes these results
+in its detail.
 
 ### artifacts
 
@@ -4549,6 +4746,7 @@ aiwg index build [options]
 **Options:**
 
 - `--force` - Full rebuild (ignore checksums, re-index everything)
+- `--index-workers <n>` - Maximum preparation processes (0 or 1 = serial); overrides `AIWG_INDEX_WORKERS`. Defaults to automatic CPU, available-memory and workload limits, capped at four processes.
 - `--verbose` - Show detailed progress during indexing
 - `--all` - Build all known graphs (built-in + user-defined)
 - `--scope <dir>` - Limit scan to a specific subdirectory (relative to project root)
@@ -4571,7 +4769,24 @@ non-zero if any graph failed. With `--json`, the multi-graph report contains `ma
 `failures` with each failed graph's error. Exports serialize and hash bounded chunks, preserving the JSON format and
 checksums without constructing a single export-sized string.
 
+`index sync` warns when a graph is empty or at least 80% of its exported items contain fewer than 200
+characters of indexed text after trimming whitespace. The warning includes the short-text count, filename-title
+count, scan directories, and node strategy. This advisory also appears for unchanged caches and with `--all`;
+it does not change the sync exit status. With `--json`, each manifest instead includes `text_quality` with
+`short_text_threshold_chars`, `short_text_count`, `filename_title_count`, and `degenerate`. These metrics describe
+the exported text, including metadata fallbacks; they do not verify whether source text extraction succeeded.
+
 **Incremental mode** (default): Only re-indexes files whose checksum has changed. Use `--force` for a full rebuild.
+
+The same `--index-workers <n>` / `AIWG_INDEX_WORKERS` control applies to `aiwg index refresh`.
+Preparation processes use a 256 MiB old-generation heap with a 512 MiB admission budget per
+process plus 512 MiB reserved for the parent. Files over 1 MiB are prepared serially after
+all preparation processes exit. A process heap failure or early exit stops and reaps the pool,
+then retries unfinished artifacts serially once; recovery diagnostics appear on the refresh
+job's `diagnostics` array in `--json` output. An ordinary extraction error marks that graph
+job as failed, preserves its previous index, and allows later workspace jobs to run and the
+report to be emitted. Refresh exits nonzero if any graph still fails after recovery.
+
 
 **Post-clone bootstrap.** The index output (`.aiwg/.index/`) is a regenerable build artifact and is **gitignored by default** (added to `.gitignore` by `aiwg use`, `aiwg regenerate`, and project scaffolding). It is not committed, so a fresh clone has no index. Rebuild it with:
 
@@ -5069,6 +5284,46 @@ version, the command reports `needs-rebuild` instead of silently falling back.
 
 ---
 
+## Decision Ledger Retention
+
+The existing `aiwg decision` family owns completed-call retention and offline
+inspection. `rotate` uses the activity-log `--keep-last <Nd|N>` convention;
+it keeps the last **90 days** by default.
+
+```bash
+aiwg decision rotate [--keep-last <Nd|N> | --all] [--to <path>] [--json]
+aiwg decision history [--include-archives] [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--json]
+aiwg decision stats [--include-archives] [--group-by provider|session|kind|caller|passes|escalation] [--json]
+```
+
+`stats` accepts the same filters as `history`. Both stay offline, reading only
+the live ledger unless `--include-archives` is selected. Archive inclusion
+recursively reads `.jsonl` files under `archive/decision/` in the resolved
+artifact root (`aiwg artifacts path`).
+
+| Rotation option | Behavior |
+|---|---|
+| `--keep-last <N>d` | Keep valid records from the last N days, including the cutoff; default `90d` |
+| `--keep-last <N>` | Keep the N most recent valid records by timestamp |
+| `--all` | Explicitly archive every line; cannot combine with `--keep-last` |
+| `--to <path>` | New `.jsonl` file beneath `archive/decision/`; artifact-relative or absolute |
+| `--json` | Print archived/retained/malformed line counts and the archive path (null when nothing moved) |
+
+Zero or invalid windows require correction or explicit `--all` (usage exit 2).
+Default archive names contain a UTC timestamp and unique ID. Destinations
+outside the artifact root or archive subtree, symlinked directories and
+existing files are refused (exit 1). New directories/files use `0700`/`0600`;
+existing decision archive directories must be private and owned by the current user.
+Malformed lines stay live unless `--all` moves them, with bytes preserved.
+Readers count invalid records as `skipped`.
+
+Appenders, rotation and readers share a cross-process lock. The archive is
+synced before live-file replacement; concurrent appends are preserved. An
+interrupted rotation may leave duplicate copies before replacement; retain
+both files and reconcile before using totals. See the
+[decision ledger guide](../decision/jev-quickstart.md#retaining-recent-calls)
+for locking, failure handling and examples.
+
 ## Effect Ledger Commands
 
 The effect ledger is a signed proof and deduplication index for side effects:
@@ -5079,6 +5334,8 @@ It never authorizes or replays an effect. The
 format, the verifier rules and the exit codes.
 
 ### effect
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 ```bash
 aiwg effect id         <identity>
@@ -5200,6 +5457,8 @@ prebuilt framework fallback.
 **See [`docs/storage/`](../storage/README.md) for the full guide** — overview, security model, migration walkthrough, and per-backend pages.
 
 ### storage
+
+Sensitive inputs and migration status: [Supplying sensitive values](sensitive-values.md#sensitive-input-inventory-3079-slice-1).
 
 Inspect and operate on the storage adapter system.
 
@@ -5465,11 +5724,24 @@ Storage operations on the AIWG memory subsystem. Routes through `resolveStorage(
 aiwg memory <subcommand>
 ```
 
-**Subcommands:** `path` / `list` / `get` / `put` / `delete` / `append-log`.
+**Subcommands:** `audit` / `cost` / `recommend` / `plan` / `apply` / `verify` / `restore` / `path` / `list` / `get` / `put` / `delete` / `append-log` / `project`.
 
 **Examples:**
 
 ```bash
+aiwg memory plan --help                                  # reviewed placement/lifecycle preview
+aiwg memory apply --plan reviewed.json --preview --json  # read-only exact-plan preview
+aiwg memory apply --plan reviewed.json --yes --json      # explicit headless confirmation
+aiwg memory verify --plan reviewed.json --json           # read-only receipt/end-state check
+aiwg memory restore --plan restore.json --yes --json     # reviewed restoration
+aiwg memory audit --provider codex --json                 # read-only static workspace inventory
+aiwg memory audit --scope global --provider claude        # explicit user scope
+aiwg memory audit --provider claude --cost                # resident-cost view of the same inventory
+aiwg memory recommend --provider claude --json            # advisory cleanup and tier candidates
+aiwg memory recommend --candidate <id> --emit-review-input > review.json
+aiwg memory plan --recommendation review.json --reviewer operator --out plan.json
+aiwg memory cost --provider claude --json                 # versioned cost report (aiwg.memory-cost.v1)
+aiwg memory cost --demote <id> --startup-measurement report.json  # demotion preview vs measured startup
 aiwg memory path                                         # resolved root (fs only)
 aiwg memory list --prefix research-complete/
 aiwg memory get research-complete/index.md
@@ -5478,7 +5750,30 @@ echo '{"op":"ingest","summary":"foo"}' \
   | aiwg memory append-log research-complete/.log.jsonl
 ```
 
+**`recommend` semantics (#3283):** read-only evidence-ranked candidates for consolidation, taxonomy correction, conflicts/supersession, demotion, promotion and retirement. JSON: `aiwg.memory-recommendations.v1`. `--evidence <file>` supplies scoped owner pins, criticality, provenance, creation/review age, history, lineage and configurable local thresholds; `--usage <file>` reuses cost utility evidence. Unknown history and protected obligations block retirement. New knowledge defaults to indexed placement, bounded task packs precede residency, and incomplete resident proposals are rejected. Candidate savings retain estimator confidence; unknown stays unknown. `--candidate <id> --emit-review-input` prints one advisory review input to stdout; recommend writes nothing. `plan --recommendation <file> --reviewer <name>` separately binds unchanged source content and current owner revisions. See [input format, defaults and handoff limits](../user-level-project-memory.md#read-only-cleanup-and-tier-recommendations).
+
+**Maintenance discovery:** `aiwg discover "harness memory cleanup"` → `aiwg show skill harness-memory-maintenance --section cleanup`. The same skill handles audit, recategorize, promote, demote and retire; fetch the corresponding operation section. Deployment keeps only a small discovery anchor, with no new always-loaded maintenance instructions. The CLI works independently of the skill.
+
+**`plan` / `apply` / `restore` semantics:** select the operation with `plan --op promote|demote|recategorize|merge|split|supersede|retire|restore`. Use `--owner line-memory|compound-memory|semantic-memory`, `--target <owner-handle>`, `--reviewer <name>` and `--rationale <text>`; add `--placement`, `--category`, reviewed `--replacements`, `--related`, or `--link` as required by the operation. `--out <new-file>` saves an exact owner-bound plan; `--preview` is read-only. `plan --input <file>` validates an existing exact plan. JSON previews include the plan/digest and review details. Before mutation, human output and a JSON stderr review event identify the root/project scope, operation diff, owner review requirements and native/next-session limitations. Apply/restore require the exact digest (`--confirm <digest>`) or explicit `--yes` outside an interactive digest prompt. JSON success output preserves the existing receipt schema; the review object is in the stderr event. A changed source/snapshot fails closed; retry the exact plan to resume interrupted owner work.
+
+Executable writers support project-owned sources only; global inventory does not authorize a global write. Semantic resident removal requires published same-digest indexed retrieval. Default line-memory and compound-memory owners refuse resident removal because they lack an owner-native indexed projection. Retirement retains bodies, tombstones and history, and never purges. Provider files remain with their regeneration owners; these commands report next-session effects and do not establish live reload.
+
+**`verify` semantics:** `aiwg memory verify --plan <file> [--json]` checks every operation's expected end state against existing owner receipts, retained tombstone/history and required published indexed retrievability. It is read-only and creates no store or receipt. Verify after apply/restore, using the latest reviewed plan for a target; a later intentional transition can make an older plan's end state differ. Missing receipts or state/history/retrieval drift are findings, while a failed owner check is an execution error. Verification does not repair a partial transaction or prove a native session reloaded.
+
+**Maintenance exit codes:** shared by `audit`, `cost`, `recommend`, `plan`, `apply`, `verify` and `restore`, for both human and JSON output:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success/no findings, or help. |
+| `1` | Findings: audit/cost inventory findings, recommendation candidates, or verification drift. |
+| `2` | Usage error, malformed input, or invalid option combinations. |
+| `3` | Stale plan/source, failed execution, or partial apply. |
+
+JSON reports remain readable on exit `1`; save stdout before handling status. Review stderr for pre-mutation review events; JSON failures include any partial receipt on stdout. See the [worked global/project audit, demotion, taxonomy, retirement and recovery examples](../user-level-project-memory.md#worked-maintenance-examples) for the complete CLI fallback.
+
 **`append-log` semantics:** reads a single JSON object from stdin, appends as one JSONL line. Atomic via `adapter.append` (#976) on backends that support it.
+
+**`audit --cost` / `cost` semantics (#3281):** read-only resident context cost and memory utility over the static audit inventory. Tokens and bytes are attributed per item to resident instructions, roles, rules, skills, tool schemas, native memory, and imported or duplicated content, each with an estimator name and confidence. Estimates reuse the existing UTF-8 bytes estimators — per-file `ceil(bytes / 4)` from `tools/rules/measure-startup-context.mjs` (#2936) and the `bytes / 4` guard report from `src/rules/inline-budget.mjs` (#2938) — and add no new tokenizer. The report separates startup residency, per-task injection, repeated tool/context overhead, actual usage/billing, and provider cache discounts; anything not measurable from local evidence stays `unknown`, never a guessed number. Retrieval, exposure, successful use, rejection, and unknown outcome are recorded independently; by default no new persistent telemetry is written (caller-supplied `--usage` evidence is held in memory only — to persist utility observations, reuse the existing memory log via `aiwg memory append-log`). `--demote <id|path>` previews before/after cost with the retrieval anchors required to keep demoted content reachable; an imported or linked loaded body never counts as zero cost. JSON schema: `schemas/memory/memory-cost.v1.schema.json`. Both views write nothing.
 
 ---
 

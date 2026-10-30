@@ -1,5 +1,10 @@
 ---
 enforcement: high
+activation: bound
+summary: "Summarize the need before using a model above the declared default tier; obtain explicit human confirmation for Tier 3."
+bound_to:
+  agents: [fleet-quiet-bot, fleet-business-bot, concierge, aiwg-model-efficiency-worker, aiwg-model-coding-worker, aiwg-model-reasoning-worker, aiwg-steward]
+  skills: [steward]
 triggers:
   - "should I use a stronger model"
   - "is this worth escalating"

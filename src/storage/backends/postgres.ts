@@ -1,3 +1,5 @@
+import { resolveSensitiveInput, type SensitiveInputDependencies } from '../../auth/sensitive-input.js';
+import { credentialReferenceInput } from '../../mcp/credentials.mjs';
 import { createHash } from 'node:crypto';
 import { loadFeaturePackage } from '../../features/runtime.js';
 import {
@@ -138,7 +140,7 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
   private readonly lockTimeoutMs: number;
   private readonly idleTransactionTimeoutMs: number;
 
-  constructor(private readonly options: PostgresBackendOptions) {
+  constructor(private readonly options: PostgresBackendOptions, private readonly sensitiveInput: SensitiveInputDependencies = {}) {
     validateIdentity(options.tenant, 'tenant');
     validateIdentity(options.subsystem, 'subsystem');
     this.pool = options.pool;
@@ -162,7 +164,7 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
   }
 
   async init(): Promise<void> {
-    if (!this.pool) this.pool = await createPool(this.options);
+    if (!this.pool) this.pool = await createPool(this.options, this.sensitiveInput);
     if (this.options.schemaMode !== 'migrate') {
       const schema = await this.runQuery<{ schema_version: number }>(
         'SELECT schema_version FROM aiwg_storage_schema WHERE singleton = true',
@@ -310,7 +312,7 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
 
   /** Hold an exported PostgreSQL snapshot open while parallel consumers page it. */
   async openSnapshotLease(): Promise<PostgresSnapshotLease<T>> {
-    const exporter = await this.requiredPool().connect();
+    const exporter = await this.connect();
     let closed = false;
     try {
       await exporter.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -330,12 +332,14 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
         close: async () => {
           if (closed) return;
           closed = true;
-          try { await exporter.query('COMMIT'); } finally { exporter.release(false); }
+          try { await exporter.query('COMMIT'); }
+          catch (error) { throw classifyPostgresError(error); }
+          finally { releaseClient(exporter, false); }
         },
       };
     } catch (error) {
       try { await exporter.query('ROLLBACK'); } catch { /* preserve original error */ }
-      exporter.release(true);
+      releaseClient(exporter, true);
       throw classifyPostgresError(error);
     }
   }
@@ -345,7 +349,7 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
       throw new PostgresBackendError('AIWG_POSTGRES_SNAPSHOT_INVALID', 'exported snapshot identifier is malformed');
     }
     const boundedLimit = bounded(limit, 1000, 1, 10_000, 'limit');
-    const client = await this.requiredPool().connect();
+    const client = await this.connect();
     let failed = false;
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -367,7 +371,7 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
       try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
       throw classifyPostgresError(error);
     } finally {
-      client.release(failed);
+      releaseClient(client, failed);
     }
   }
 
@@ -461,12 +465,13 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
   }
 
   async close(): Promise<void> {
-    if (this.ownsPool && this.pool) await this.pool.end();
+    try { if (this.ownsPool && this.pool) await this.pool.end(); }
+    catch (error) { throw classifyPostgresError(error); }
     this.pool = undefined;
   }
 
   private async withTransaction<R>(operation: (client: PostgresClientLike) => Promise<R>, isolation = 'SERIALIZABLE'): Promise<R> {
-    const client = await this.requiredPool().connect();
+    const client = await this.connect();
     let failed = false;
     try {
       await client.query(`BEGIN ISOLATION LEVEL ${isolation}`);
@@ -481,7 +486,7 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
       try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
       throw classifyPostgresError(error);
     } finally {
-      client.release(failed);
+      releaseClient(client, failed);
     }
   }
 
@@ -490,6 +495,11 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
     if (identity.tenant !== this.options.tenant || identity.subsystem !== this.options.subsystem) {
       throw new PostgresBackendError('AIWG_POSTGRES_IDENTITY_MISMATCH', 'mutation identity is outside this backend tenant/subsystem');
     }
+  }
+
+  private async connect(): Promise<PostgresClientLike> {
+    try { return await this.requiredPool().connect(); }
+    catch (error) { throw classifyPostgresError(error); }
   }
 
   private requiredPool(): PostgresPoolLike {
@@ -503,11 +513,17 @@ export class PostgresStorageBackend<T = unknown> implements MigrationEndpoint<T>
   }
 }
 
-async function createPool(options: PostgresBackendOptions): Promise<PostgresPoolLike> {
+async function createPool(options: PostgresBackendOptions, sensitiveInput: SensitiveInputDependencies): Promise<PostgresPoolLike> {
   const envName = options.connectionStringEnv ?? 'AIWG_POSTGRES_URL';
-  const connectionString = process.env[envName];
+  const input = credentialReferenceInput(envName, 'PostgreSQL connectionStringEnv');
+  let connectionString: string | undefined;
+  try {
+    connectionString = input.env ? (sensitiveInput.environment ?? process.env)[input.env] : await resolveSensitiveInput(input, sensitiveInput);
+  } catch (error) {
+    throw new PostgresBackendError('AIWG_POSTGRES_CREDENTIAL_UNAVAILABLE', (error as Error).message);
+  }
   if (!connectionString) {
-    throw new PostgresBackendError('AIWG_POSTGRES_CREDENTIAL_UNAVAILABLE', `PostgreSQL connection locator ${envName} is not set`);
+    throw new PostgresBackendError('AIWG_POSTGRES_CREDENTIAL_UNAVAILABLE', 'PostgreSQL connectionStringEnv is not set; use ENV_NAME (default AIWG_POSTGRES_URL), file:ABSOLUTE_PATH or store:NAME.');
   }
   if (options.ssl === undefined) {
     throw new PostgresBackendError('AIWG_POSTGRES_TLS_REQUIRED', 'PostgreSQL remote connections require explicit ssl=require or ssl=verify-full');
@@ -515,23 +531,25 @@ async function createPool(options: PostgresBackendOptions): Promise<PostgresPool
   if (options.ssl === 'disable' && !isLoopbackPostgresUrl(connectionString)) {
     throw new PostgresBackendError('AIWG_POSTGRES_TLS_REQUIRED', 'ssl=disable is limited to explicit loopback development endpoints');
   }
-  const pg = await loadFeaturePackage('pg');
-  const defaultExport = pg.default as Record<string, unknown> | undefined;
-  const Pool = (pg.Pool ?? defaultExport?.Pool) as new (config: Record<string, unknown>) => PostgresPoolLike;
-  if (!Pool) throw new PostgresBackendError('AIWG_POSTGRES_DRIVER_INVALID', 'optional pg package does not export Pool');
-  const pool = new Pool({
-    connectionString,
-    max: bounded(options.maxConnections, DEFAULT_POOL_MAX, 1, 100, 'maxConnections'),
-    connectionTimeoutMillis: bounded(options.connectionTimeoutMs, DEFAULT_TIMEOUT_MS, 1, 600_000, 'connectionTimeoutMs'),
-    statement_timeout: bounded(options.statementTimeoutMs, DEFAULT_TIMEOUT_MS, 1, 600_000, 'statementTimeoutMs'),
-    application_name: options.applicationName ?? 'aiwg',
-    ssl: options.ssl === 'disable' ? false : { rejectUnauthorized: options.ssl === 'verify-full' },
-  });
-  // pg emits idle-client failures at pool scope. Registering a listener keeps
-  // server restarts from becoming uncaught process exceptions; failed clients
-  // are evicted by pg and the next backend operation reconnects normally.
-  pool.on?.('error', () => undefined);
-  return pool;
+  try {
+    const pg = await loadFeaturePackage('pg');
+    const defaultExport = pg.default as Record<string, unknown> | undefined;
+    const Pool = (pg.Pool ?? defaultExport?.Pool) as new (config: Record<string, unknown>) => PostgresPoolLike;
+    if (!Pool) throw new PostgresBackendError('AIWG_POSTGRES_DRIVER_INVALID', 'optional pg package does not export Pool');
+    const pool = new Pool({
+      connectionString,
+      max: bounded(options.maxConnections, DEFAULT_POOL_MAX, 1, 100, 'maxConnections'),
+      connectionTimeoutMillis: bounded(options.connectionTimeoutMs, DEFAULT_TIMEOUT_MS, 1, 600_000, 'connectionTimeoutMs'),
+      statement_timeout: bounded(options.statementTimeoutMs, DEFAULT_TIMEOUT_MS, 1, 600_000, 'statementTimeoutMs'),
+      application_name: options.applicationName ?? 'aiwg',
+      ssl: options.ssl === 'disable' ? false : { rejectUnauthorized: options.ssl === 'verify-full' },
+    });
+    // pg emits idle-client failures at pool scope. Registering a listener keeps
+    // server restarts from becoming uncaught process exceptions; failed clients
+    // are evicted by pg and the next backend operation reconnects normally.
+    pool.on?.('error', () => undefined);
+    return pool;
+  } catch (error) { throw classifyPostgresError(error); }
 }
 
 function isLoopbackPostgresUrl(connectionString: string): boolean {
@@ -605,5 +623,11 @@ function classifyPostgresError(error: unknown): Error {
   if (['40001', '40P01', '55P03', '57014', '57P01', '57P02', '57P03', '08000', '08003', '08006', '08001'].includes(code)) {
     return new PostgresBackendError('AIWG_POSTGRES_RETRYABLE', `retryable PostgreSQL failure (${code})`, true);
   }
-  return error instanceof Error ? error : new Error(String(error));
+  // Drivers may echo the entire connection string, passwords or server detail.
+  return new PostgresBackendError('AIWG_POSTGRES_OPERATION_FAILED', 'PostgreSQL operation failed; check connectivity, credentials and server configuration.');
+}
+
+function releaseClient(client: PostgresClientLike, failed: boolean): void {
+  try { client.release(failed); }
+  catch (error) { throw classifyPostgresError(error); }
 }

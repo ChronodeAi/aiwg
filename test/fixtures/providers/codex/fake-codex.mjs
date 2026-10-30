@@ -27,6 +27,7 @@
  * (including quote characters), which fails the effort/approval enum check
  * with a non-zero exit, just like the real CLI refuses the invalid value.
  */
+import { ignoreTermUntilKilled } from '../ignore-term.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const THREAD = 'codex-fixture-thread';
@@ -205,6 +206,24 @@ const writeFinal = (text) => {
 };
 
 switch (scenario) {
+  case 'structured-final-with-prose':
+  case 'prose-only': {
+    const prose = 'Completed the requested work. See the deliverable for details.\n';
+    const resultPath = config.structuredFinalPath ?? JSON.parse(brief).output.resultPath;
+    if (scenario === 'structured-final-with-prose') {
+      writeFileSync(resultPath, JSON.stringify({ version: 1, status: 'completed', summary: 'Synthetic completed work',
+        claims: [], artifacts: [], checks: [], limitations: [] }));
+    } else if (config.writeProseFinal) writeFileSync(resultPath, prose);
+    // Codex captures the last message AFTER the worker writes its structured final.
+    writeFinal(prose);
+    if (jsonStream) {
+      handshake();
+      line({ type: 'item.completed', thread_id: THREAD, item: { id: 'final-prose', type: 'agent_message', text: prose } });
+      line({ type: 'turn.completed', thread_id: THREAD, turn_id: TURN });
+    }
+    process.exit(0);
+    break;
+  }
   case 'success': {
     if (jsonStream) {
       handshake();
@@ -304,8 +323,7 @@ switch (scenario) {
     break;
   }
   case 'ignore-term':
-    process.on('SIGTERM', () => {});
-    setInterval(() => {}, 1000);
+    ignoreTermUntilKilled();
     break;
   case 'hang':
   case 'stdin-wait':

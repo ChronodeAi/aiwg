@@ -1,3 +1,4 @@
+import { workerDispatchBlocked, isWorkerMaintenance, workerRecoveryDiagnostic } from '../config/worker-write.js';
 /**
  * Model Configuration Loader
  * Loads and merges model configurations from multiple sources with proper precedence
@@ -12,8 +13,9 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { findPackageRoot } from '../cli/find-package-root.js';
-import { workerConfigDigest, validateWorkerGroupReferences, type ParallelismConfig, type WorkerActivation } from '../config/aiwg-config.js';
-import { DEFAULT_WORKER_SELECTION, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
+import { getConfigPath, validateParallelismConfig, workerConfigDigest, validateWorkerGroupReferences, type ParallelismConfig, type WorkerActivation } from '../config/aiwg-config.js';
+import { DEFAULT_WORKER_SELECTION, WorkerRoleEffortError, mergeWorkerSelection, WorkerSelectionPolicySchema, validateUserProjectModelConfig } from './provider-policy.js';
+import { expandWorkerGroupTemplates, mergeGroupWorkerPolicy } from '../config/worker-group-templates.js';
 import type {
   ModelConfig,
   ModelConfigV1,
@@ -41,6 +43,8 @@ export interface ConfigLoaderOptions {
    * than ever writing `process.env.AIWG_HOME` themselves.
    */
   aiwgHome?: string;
+  /** Internal candidate validation; never a dispatch input. */
+  workerCandidate?: { projectModels: UserProjectConfig | null };
 }
 
 /**
@@ -52,7 +56,7 @@ export class ConfigLoader {
   private inputDigests: Pick<WorkerActivation, 'projectModelsDigest' | 'userModelsDigest' | 'builtinModelsDigest'> | null = null;
   private readonly locations: ConfigLocations;
 
-  constructor(projectPath?: string, options?: ConfigLoaderOptions) {
+  constructor(projectPath?: string, private readonly options?: ConfigLoaderOptions) {
     const aiwgHome = options?.aiwgHome || process.env.AIWG_HOME
       || findPackageRoot(dirname(fileURLToPath(import.meta.url)));
     if (!aiwgHome) throw new Error('Failed to load AIWG default config: could not locate the running AIWG package root');
@@ -70,10 +74,16 @@ export class ConfigLoader {
    * Precedence: project > user > AIWG default
    */
   async load(parallelism?: ParallelismConfig): Promise<MergedModelConfig> {
+    if (!isWorkerMaintenance() && workerDispatchBlocked(dirname(this.locations.projectConfig))) {
+      throw new Error(workerRecoveryDiagnostic(dirname(this.locations.projectConfig)));
+    }
+    const expansion = expandWorkerGroupTemplates(parallelism, getConfigPath(dirname(this.locations.projectConfig)));
+    const errors = validateParallelismConfig(parallelism);
+    if (errors.length) throw new Error(errors.join('; '));
     // Load all configs
     const aiwgDefault = await this.loadAiwgDefault();
     const userConfig = await this.loadUserConfig();
-    const projectConfig = await this.loadProjectConfig();
+    const projectConfig = this.options?.workerCandidate ? this.options.workerCandidate.projectModels : await this.loadProjectConfig();
 
     const digest = workerConfigDigest([aiwgDefault, userConfig, projectConfig, parallelism]);
     if (this.cache && this.cacheDigest === digest) return this.cache;
@@ -98,7 +108,7 @@ export class ConfigLoader {
       ]);
       if (result.diagnostics.length) throw new Error(result.diagnostics.map(d => `${d.code}: ${d.pointer}: ${d.message}; origins=${JSON.stringify(d.origins ?? [])}`).join('; '));
       merged.defaults.workerSelection = result.policy;
-      merged.workerPolicyOrigins = result.origins;
+      merged.workerPolicyOrigins = { ...result.origins, ...expansion.origins };
     }
     if (parallelism?.worker_dispatch) {
       // Exact wrapper pins remain explainable alongside worker restrictions.
@@ -115,6 +125,10 @@ export class ConfigLoader {
             pointer, contribution: override['model-override'],
           });
         }
+      }
+      for (const group of Object.values(expansion.parallelism?.groups ?? {})) {
+        const narrowed = mergeGroupWorkerPolicy(merged.defaults.workerSelection!, group);
+        if (narrowed.diagnostics.length) throw new Error(narrowed.diagnostics.map(d => `${d.code}: ${d.message}`).join('; '));
       }
       const errors = validateWorkerGroupReferences(parallelism, merged.defaults.workerSelection!);
       if (errors.length) throw new Error(errors.join('; '));
@@ -160,10 +174,14 @@ export class ConfigLoader {
       const parsed: unknown = JSON.parse(content);
       const validation = validateUserProjectModelConfig(parsed);
       if (!validation.valid) {
+        const missingEffort = validation.diagnostics.find(item =>
+          /^\/defaults\/workerSelection\/roleGuidance\/[a-z][a-z0-9-]*\/initialEffort$/.test(item.pointer ?? ''));
+        if (missingEffort) throw new WorkerRoleEffortError(missingEffort.pointer!.split('/')[4]);
         throw new Error(validation.diagnostics.map(item => `${item.code}: ${item.message}`).join('; '));
       }
       return parsed as UserProjectConfig;
     } catch (error) {
+      if (error instanceof WorkerRoleEffortError) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw new Error(`Invalid user model config ${this.locations.userConfig}: ${error}`);
     }
@@ -178,10 +196,14 @@ export class ConfigLoader {
       const parsed: unknown = JSON.parse(content);
       const validation = validateUserProjectModelConfig(parsed);
       if (!validation.valid) {
+        const missingEffort = validation.diagnostics.find(item =>
+          /^\/defaults\/workerSelection\/roleGuidance\/[a-z][a-z0-9-]*\/initialEffort$/.test(item.pointer ?? ''));
+        if (missingEffort) throw new WorkerRoleEffortError(missingEffort.pointer!.split('/')[4]);
         throw new Error(validation.diagnostics.map(item => `${item.code}: ${item.message}`).join('; '));
       }
       return parsed as UserProjectConfig;
     } catch (error) {
+      if (error instanceof WorkerRoleEffortError) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw new Error(`Invalid project model config ${this.locations.projectConfig}: ${error}`);
     }

@@ -1,4 +1,8 @@
 ---
+activation: bound
+summary: "Evaluate quality and security gates for matching commit, pull request, and phase events."
+bound_to:
+  agents: [quality-assessor, security-gatekeeper]
 name: quality-gate-watcher
 version: 1.0.0
 description: Enforce SDLC quality gate criteria on commits and pull requests.

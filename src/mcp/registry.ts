@@ -7,7 +7,7 @@ import { manageGrokBuildMcp } from './grok-build-config.mjs';
 import { replaceServer } from './toml-editor.mjs';
 import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { applyJsonToolFilterPlan, claudeSettingsPath, prepareClaudePermissions, planToolFilters, type ToolFilterPlan, type ToolFilters } from './tool-filters.mjs';
-import { assertCredentialPolicy, resolveCredentialPolicy, validateEnvReferenceName, type McpCredentialPolicy } from './credentials.mjs';
+import { assertCredentialPolicy, resolveCredentialPolicy, validateEnvReferenceName, credentialReferenceInput, validateCredentialReferences, assertEnvironmentCredentialReferences, type McpCredentialPolicy } from './credentials.mjs';
 /**
  * MCP Server Registry
  *
@@ -24,6 +24,7 @@ import { qualifyWorkerInvocationProfile, requiredWorkerControls, type WorkerAdap
 import { dirname, isAbsolute, resolve } from 'path';
 import { homedir } from 'os';
 import { resolveConfigDir } from '../config/user-config.js';
+import { resolveSensitiveInput, type SensitiveInputDependencies } from '../auth/sensitive-input.js';
 
 // ============================================
 // Types
@@ -55,14 +56,14 @@ export interface McpServerDefinition {
 
   /**
    * Header-to-environment-variable references for authenticated transports.
-   * Only variable names are persisted; secret values are resolved by the
+   * Only variable names or file:/store: locators are persisted; values are resolved by the
    * consuming client at connection time.
    */
   headerEnv?: Record<string, string>;
   /**
    * Server-environment-to-environment-variable references for stdio servers.
    * Maps the variable the server sees to the variable the client reads; only
-   * names are persisted.
+   * names or file:/store: locators are persisted.
    */
   envFrom?: Record<string, string>;
   /** OMP native transport and authentication options (placeholders remain unresolved). */
@@ -159,21 +160,27 @@ const DEFAULT_REGISTRY: McpRegistryData = {
   servers: {},
 };
 
-const ENV_REFERENCE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function validateCredentialReferences(def: Pick<McpServerDefinition, 'headerEnv' | 'envFrom'>): void {
-  for (const [header, envName] of Object.entries(def.headerEnv ?? {})) {
-    if (!header.trim()) throw new Error('MCP header-env header name must not be empty');
-    if (!ENV_REFERENCE_NAME.test(envName)) {
-      throw new Error(`Invalid MCP header environment variable reference "${envName}"`);
+/** Resolve references only for AIWG's in-memory transport, never for a config writer. */
+export async function resolveMcpCredentialMaps(
+  server: Pick<McpServerDefinition, 'env' | 'headers' | 'envFrom' | 'headerEnv'>,
+  dependencies: SensitiveInputDependencies = {},
+): Promise<{ env?: Record<string, string>; headers?: Record<string, string> }> {
+  const result = { env: server.env ? { ...server.env } : undefined, headers: server.headers ? { ...server.headers } : undefined };
+  for (const [field, target, flag] of [['envFrom', 'env', '--env-from'], ['headerEnv', 'headers', '--header-env']] as const) {
+    for (const [key, reference] of Object.entries(server[field] ?? {})) {
+      const input = credentialReferenceInput(reference, flag);
+      // Explicit locators prevent terminal prompts and implicit stdin consumption.
+      try {
+        const value = await resolveSensitiveInput({ ...input, prefix: 'value' }, dependencies);
+        result[target] = { ...result[target], [key]: value };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'MCP credential input failed';
+        throw new Error(message.replace(/--value-(file|store|env)/g, (_, source: string) =>
+          `${flag} KEY=${source === 'env' ? 'ENV_NAME' : source === 'file' ? 'file:ABSOLUTE_PATH' : 'store:NAME'}`));
+      }
     }
   }
-  for (const [key, envName] of Object.entries(def.envFrom ?? {})) {
-    if (!ENV_REFERENCE_NAME.test(key)) throw new Error(`Invalid MCP env-from variable name "${key}"`);
-    if (!ENV_REFERENCE_NAME.test(envName)) {
-      throw new Error(`Invalid MCP env-from environment variable reference "${envName}"`);
-    }
-  }
+  return result;
 }
 
 export function workerServerDigest(server: McpServerDefinition): string {
@@ -249,33 +256,9 @@ export class McpServerRegistry {
   async load(): Promise<McpRegistryData> {
     if (this.cache) return this.cache;
 
-    if (this.layers) {
-      const layered = await loadLayered(this.layers, REGISTRY_FILENAME, 'servers', DEFAULT_REGISTRY);
-      this.cache = layered.data;
-      this.layering = layered.layering;
-      return this.cache!;
-    }
-
-    const filePath = this.getPath();
-    try {
-      const content = await readFile(filePath, 'utf-8');
-      const parsed = JSON.parse(content) as McpRegistryData;
-      this.cache = {
-        ...DEFAULT_REGISTRY,
-        ...parsed,
-        servers: parsed.servers || {},
-      };
-    } catch {
-      this.cache = { ...DEFAULT_REGISTRY, servers: {} };
-    }
-
-    try {
-      resolveCredentialPolicy({ registryPolicy: this.cache.credentialPolicy, env: {} });
-    } catch (error) {
-      this.cache = null;
-      throw new Error(`Invalid MCP credential policy in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
+    const loaded = await loadLayered(this.layers ?? [this.configDir], REGISTRY_FILENAME, 'servers', DEFAULT_REGISTRY);
+    this.cache = loaded.data;
+    this.layering = this.layers ? loaded.layering : null;
     return this.cache;
   }
 
@@ -482,6 +465,7 @@ function tomlInlineTable(values: Record<string, string>): string {
 }
 
 export function buildServerToml(server: McpServerDefinition): string {
+  assertEnvironmentCredentialReferences(server, 'codex');
   const lines: string[] = [];
   lines.push(`[mcp_servers.${tomlKey(server.name)}]`);
 
@@ -746,6 +730,9 @@ async function injectToml(
   projectRoot?: string,
   toolPlan: ToolFilterPlan | null = null,
 ): Promise<InjectResult> {
+  // A deliberately aliased Codex home is trusted; descendants below it are not.
+  const destinationRoot = projectRoot ?? (process.env.CODEX_HOME || resolve(process.env.HOME || process.env.USERPROFILE || homedir(), '.codex'));
+  await assertConfigDestination(configPath, destinationRoot);
   let existing = '';
   try {
     existing = await readFile(configPath, 'utf-8');
@@ -762,7 +749,7 @@ async function injectToml(
   }
 
   if (!dryRun) {
-    await writeConfigAtomic(configPath, existing, { userScope, projectRoot });
+    await writeConfigAtomic(configPath, existing, { userScope, projectRoot: destinationRoot });
 
     for (const server of servers) {
       await registry.recordInjection(server.name, provider);

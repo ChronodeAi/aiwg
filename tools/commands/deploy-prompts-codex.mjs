@@ -27,16 +27,14 @@ const _require = createRequire(import.meta.url);
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import os from 'os';
 import { getFrameworksForMode, normalizeDeploymentMode, getAddonSkillDirs, listSkillDirs, collectFrameworkArtifacts } from '../agents/providers/base.mjs';
 
-const CODEX_PROMPTS_DIR = path.join(os.homedir(), '.codex', 'prompts');
-
-function parseArgs() {
-  const args = process.argv.slice(2);
+function parseArgs(args, homeDir) {
   const cfg = {
     source: null,
-    target: CODEX_PROMPTS_DIR,
+    target: path.join(homeDir, '.codex', 'prompts'),
     mode: 'all',
     dryRun: false,
     force: false,
@@ -265,8 +263,8 @@ function getCommandDirectories(srcRoot, mode) {
   return dirs;
 }
 
-(async function main() {
-  const cfg = parseArgs();
+export async function main(args = process.argv.slice(2), internal = {}) {
+  const cfg = parseArgs(args, internal.homeDir || os.homedir());
   const { source, target, mode, dryRun, force, prefix } = cfg;
 
   // Resolve source directory
@@ -333,4 +331,9 @@ function getCommandDirectories(srcRoot, mode) {
     console.log(`\nRestart Codex to load new prompts.`);
     console.log(`Use prompts with: /prompts:${prefix}-<command-name>`);
   }
-})();
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await main(); }
+  catch (error) { console.error(error.message); process.exitCode = 1; }
+}

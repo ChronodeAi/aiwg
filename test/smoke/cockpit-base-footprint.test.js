@@ -6,6 +6,8 @@ import { describe, it, expect, inject } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function parseNpmPackJson(stdout) {
   try {
@@ -51,7 +53,7 @@ describe('cockpit base-npm footprint guard (#1593)', () => {
   });
 
   it('the cockpit tarball dry-run names @aiwg/cockpit and excludes node_modules', () => {
-    const npmCache = '/tmp/aiwg-npm-cache';
+    const npmCache = process.env.AIWG_PACKAGE_TEST_NPM_CACHE ?? join(tmpdir(), 'aiwg-npm-cache');
     mkdirSync(npmCache, { recursive: true });
     const out = execFileSync('npm', ['pack', '--dry-run', '--json'], { timeout: 60_000,
       encoding: 'utf8',

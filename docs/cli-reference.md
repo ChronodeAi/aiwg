@@ -12,3 +12,48 @@ The authoritative agent and automation CLI reference is now
 This compatibility pointer remains in installed packages for older agent
 artifacts. General users should follow
 [Install, Connect, and Verify](getting-started/install-connect-verify.md).
+
+## `aiwg rules` — operator rule pins
+
+Inspect configured rules without changing deployment:
+
+```bash
+aiwg rules inventory --scope workspace --json
+aiwg rules list --capability aiwg-utils --bodies
+aiwg rules inventory --scope catalog --activation bound --tier critical,high
+```
+
+`workspace` means the current repository/workspace and its user configuration;
+it does not scan other repositories. `user` selects user configuration and the
+user installation registry; `installation` lists configured capabilities and
+`catalog` also includes available, unconfigured installation sources. Capability,
+activation, tier, and provider filters compose. Provider filtering uses recorded
+deployment configuration, not proof that the provider loaded a rule. Each row
+separates canonical and effective activation, pin reasons, binding metadata,
+and delivery/session-load evidence. Unknown delivery or loading stays unknown.
+`--bodies` includes complete source content and fails if indexed installed bodies
+are missing. The MCP `rule-inventory` tool exposes the same operation.
+The inventory does not deploy or change configuration; generic CLI hooks and
+opt-in command logging retain their existing settings.
+
+Pin full rule bodies to every request without editing canonical activation:
+
+```bash
+aiwg rules pin <rule>... [--tier critical,high] [--capability id,... | --group name]
+aiwg rules pin --capability aiwg-utils [--all-tiers]
+aiwg rules pin --all
+aiwg rules unpin <rule>...                 # also accepts the same selector flags
+aiwg rules pinned [--capability id] [--json]
+aiwg rules group set <name> <capability>...
+aiwg rules group list [--json]
+```
+
+Mutation flags: `--project` (default), `--user`, `--dry-run`, `--no-deploy`,
+`--json`, `--allow-over-budget`. No prompts are required. Comma-separated tier
+and capability lists are supported. Tiers are `critical`, `high`, `medium`,
+`low`; omitted tiers include every tier. Selectors match conjunctively within an
+entry and disjunctively across entries. Overlapping matches deploy once.
+`unpin` removes exactly a selector, independent of list order. Dry runs show
+rules and per-provider startup bytes; budget failures preserve prior config and
+deployment. See [operator rule pins](configuration/aiwg-config.md#operator-rule-pins)
+for config shape, scope precedence, and budget behavior.

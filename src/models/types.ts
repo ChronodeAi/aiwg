@@ -1,3 +1,4 @@
+import type { FlagshipAuthority } from './tiers.js';
 /**
  * TypeScript types for Enhanced Model Selection System (Phase 1)
  *
@@ -8,17 +9,19 @@
 /**
  * Quality tier for model selection
  */
-export type ModelTier = 'economy' | 'standard' | 'premium' | 'max-quality';
+export type ModelTier = 'economy' | 'standard' | 'premium' | 'flagship' | 'max-quality';
 
 /**
  * Provider-neutral runtime routing tier for escalation policy.
  *
  * 0 = no model call, 1 = default/cheap, 2 = capable work model,
- * 3 = premium/supervised.
+ * 3 = premium/supervised, 4 = user-elected flagship.
  */
-export type RuntimeModelTier = 0 | 1 | 2 | 3;
+export type RuntimeModelTier = 0 | 1 | 2 | 3 | 4;
 
-export interface ModelRouteRequest {
+export interface ModelRouteRequest extends FlagshipAuthority {
+  /** Explicit requested tier; max-quality is a compatibility alias for flagship. */
+  requestedTier?: ModelTier;
   /** Agent or workflow name, used for diagnostics only. */
   agentName?: string;
   /** Current/default runtime tier for the session. Defaults to 1. */
@@ -235,12 +238,16 @@ export interface WorkerModelObservation {
 }
 
 export interface WorkerDataPolicy {
+  /** Literal project-relative files/subtrees denied to conductors at provider deploy. */
+  localOnlyPaths?: string[];
   allowedProcessing?: Array<'local' | 'remote'>;
   allowProductImprovement?: boolean;
   allowUnknown?: boolean;
   maxRetentionDays?: number;
 }
 export interface WorkerRoleGuidance {
+  /** Project alias constrained by this existing role. */
+  baseRole?: ModelRole;
   groups: string[];
   tier: ModelTier;
   initialEffort: string | null;
@@ -276,9 +283,11 @@ export interface WorkerPolicyOrigin {
 export interface WorkerPolicyDiagnostic {
   /** When present, this diagnostic concerns only these roles. */
   roles?: string[];
-  code: 'OG_POLICY_RELAXATION' | 'OG_CONFIG_REFERENCE' | 'OG_EFFORT_DENIED' | 'OG_MODEL_UNAPPROVED' | 'OG_DATA_POLICY' | 'OG_PIN_MISMATCH' | 'OG_ADAPTER_UNQUALIFIED' | 'OG_BUDGET_UNMEASURABLE';
+  code: 'OG_POLICY_RELAXATION' | 'OG_CONFIG_REFERENCE' | 'OG_EFFORT_DENIED' | 'OG_MODEL_UNAPPROVED' | 'OG_DATA_POLICY' | 'OG_PIN_MISMATCH' | 'OG_ADAPTER_UNQUALIFIED' | 'OG_BUDGET_UNMEASURABLE' | 'OG_NATIVE_SANDBOX_UNAVAILABLE' | 'OG_SANDBOX_EXTERNAL';
   pointer: string;
   message: string;
+  /** Fixed, non-sensitive invocation check identifier. */
+  reason?: 'invocation_build_failed' | 'native_argv_invalid' | 'invocation_prepare_failed' | 'qualified_workspace_mismatch' | 'installation_recheck_unavailable';
   /** Diagnostics block by default; optional evidence conflicts are advisory. */
   blocking?: boolean;
   origins?: WorkerPolicyOrigin[];
@@ -346,7 +355,7 @@ export interface ResolvedModel {
 /**
  * Model resolver options
  */
-export interface ModelResolverOptions {
+export interface ModelResolverOptions extends FlagshipAuthority {
   provider?: Provider;
   tier?: ModelTier;
   respectMinimums?: boolean;

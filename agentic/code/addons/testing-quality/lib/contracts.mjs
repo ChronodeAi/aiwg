@@ -8,6 +8,17 @@ export const API_VERSION = 'testing.aiwg.io/v1';
 export const TOOL_VERSION = '2.0.0';
 const validators = new Map();
 
+/**
+ * Optional evidence on TestConformanceReview.spec.evaluation, preserved by artifact/readDocument/writeNew.
+ * @typedef {object} ReviewEvaluation
+ * @property {string} [evaluatorModel] Observed model snapshot, not the requested alias.
+ * @property {string} [evaluatorVendor] Observed inference vendor.
+ * @property {string} [evaluatorFamily] Observed family; unknown stays unknown.
+ * @property {string} [acceptanceCriteriaRef] Reference to the criteria applied.
+ * @property {Array<{claimRef: string, generatorPosition: string, evaluatorPosition: string, resolutionRef?: string}>} [disagreements]
+ * @property {string} [reReviewOf] Previous review reference after material fixes.
+ */
+
 export function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));

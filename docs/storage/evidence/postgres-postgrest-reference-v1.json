@@ -1,20 +1,29 @@
 {
   "schemaVersion": "aiwg.storage-server-benchmark/v1",
   "evidenceId": "postgres-postgrest-reference-v1",
-  "observedAt": "2026-08-28T15:40:56.704Z",
-  "validUntil": "2026-11-26T15:40:56.704Z",
+  "observedAt": "2026-10-26T14:19:41.456Z",
+  "validUntil": "2027-01-24T14:19:41.456Z",
   "subject": {
-    "branch": "main",
-    "commit": "1c114ffea97f56c629bcabd9d025b9c0c8c04e6f",
+    "branch": "HEAD",
+    "commit": "13084ef2febb9b9805a980a40a98da8b9ce97b76",
     "sourceFiles": [
       "src/storage/backends/postgrest.ts",
       "src/storage/qualification.ts",
-      "test/integration/storage-postgrest-live.test.ts"
+      "test/integration/storage-postgrest-live.test.ts",
+      "src/storage/backends/postgres.ts"
     ],
-    "sourceDigest": "0fc3d645f8d941e928d044df01b4b49a01f98273c6d7c4bea9e5c29410883c3b"
+    "sourceDigest": "a52eee4a8ddaae1f9c8ea37256e2f7717b3bf514c33d7e32a49de10c6b109bd3",
+    "checkout": {
+      "kind": "detached-worktree",
+      "baseCommit": "13084ef2febb9b9805a980a40a98da8b9ce97b76",
+      "modifiedSourceFiles": [
+        "src/storage/backends/postgres.ts",
+        "src/storage/backends/postgrest.ts"
+      ]
+    }
   },
   "runtime": {
-    "node": "v24.12.0",
+    "node": "v24.22.1",
     "platform": "linux",
     "arch": "x64"
   },
@@ -28,13 +37,13 @@
   },
   "qualification": {
     "schemaVersion": "aiwg.storage-qualification/v1",
-    "runId": "9ab93361389052f61ae6920d9a2f4758bb76f1c0c91d5a8432f51f73e71edca2",
-    "startedAt": "2026-08-28T15:40:56.585Z",
-    "completedAt": "2026-08-28T15:40:56.704Z",
+    "runId": "40cc4e960423fb2241a4df3fea9a8ec1ddce60d1e9d8bfb12138139a66dab272",
+    "startedAt": "2026-10-26T14:19:41.283Z",
+    "completedAt": "2026-10-26T14:19:41.456Z",
     "scope": {
       "backend": "postgres-postgrest",
-      "branch": "main",
-      "commit": "1c114ffea97f56c629bcabd9d025b9c0c8c04e6f",
+      "branch": "HEAD",
+      "commit": "13084ef2febb9b9805a980a40a98da8b9ce97b76",
       "datasetId": "postgrest-envelope-v1",
       "declaredRecords": 64,
       "readers": 4,
@@ -48,23 +57,23 @@
       "missing": [],
       "unexpected": [],
       "corrupt": [],
-      "expectedDigest": "d8aebe9883d18dcc12a37720776089a4081806635dc0be2a2e4867a39bd576c9",
-      "observedDigest": "d8aebe9883d18dcc12a37720776089a4081806635dc0be2a2e4867a39bd576c9"
+      "expectedDigest": "5264bafaaa4fe6ae62199b727b4a137b56c9f247658102a84e69d2aad9f41743",
+      "observedDigest": "5264bafaaa4fe6ae62199b727b4a137b56c9f247658102a84e69d2aad9f41743"
     },
     "latencyMs": {
-      "p50": 6.167814000000021,
-      "p95": 9.060223999999948,
-      "p99": 13.902704999999969
+      "p50": 8.95021799999995,
+      "p95": 18.921503999999914,
+      "p99": 22.746853999999075
     },
-    "throughputPerSecond": 576.6905724414655,
+    "throughputPerSecond": 394.63139503875055,
     "errors": 0,
     "retries": 0,
     "errorRate": 0,
     "retryRate": 0,
     "resources": {
-      "cpuUserMicros": 87699,
-      "cpuSystemMicros": 13414,
-      "rssBytes": 256917504,
+      "cpuUserMicros": 108510,
+      "cpuSystemMicros": 13957,
+      "rssBytes": 289624064,
       "databaseBytes": null,
       "writeAmplification": null,
       "walBytes": null,
@@ -72,7 +81,7 @@
       "poolSaturation": null,
       "migrationMs": null,
       "recoveryMs": null,
-      "transportOverheadMs": 6.1102811428571515
+      "transportOverheadMs": 9.369963414285667
     },
     "sideEffectSummary": [
       {
@@ -86,13 +95,13 @@
     "failed": 0,
     "skipped": 1,
     "coverage": [
-      "duplicate delivery, reads, snapshots, changes, reconnect, and database rollback",
-      "ambiguous transport replay with one logical commit",
-      "correctness-qualified HTTP operating envelope",
-      "native JSON and CSV bootstrap"
+      "proves duplicate delivery, reads, snapshots, changes, reconnect, and database rollback",
+      "retries an ambiguous transport outcome with an identical request and one logical commit",
+      "emits a correctness-qualified HTTP operating-envelope record",
+      "accepts native JSON and CSV bootstrap rows through the fixed conflict target"
     ],
     "skippedCoverage": [
-      "requester-role tenant isolation through authenticated RLS"
+      "enforces requester-role tenant isolation through RLS"
     ]
   },
   "interpretation": "Disposable unauthenticated loopback reference-host observation only; not a universal capacity limit or production certification."

@@ -162,6 +162,8 @@ Define explicit confidence signals for escalation. Avoid using vague "I'm not su
 
 When multiple models contribute to the same SDLC artifact, outputs must be consistent. Different models have different defaults for formatting, terminology, and structure.
 
+Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.
+
 ### Template-Enforced Consistency
 
 Provide an explicit output template to every model regardless of tier. Do not rely on the model to infer structure:

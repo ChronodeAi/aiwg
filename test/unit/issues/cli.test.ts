@@ -19,6 +19,7 @@ describe('issues/cli', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });
   });
 
@@ -121,5 +122,44 @@ describe('issues/cli', () => {
     await expect(
       main(['list', '--search', 'Fortemi', '--backend', 'fortemi-core'], root),
     ).rejects.toThrow(/--backend is not supported/);
+  });
+
+  it('resolves private token sources for live import and export without printing reflected credentials', async () => {
+    const token = 'fixture-live-cli-bearer';
+    const file = join(root, 'private-token');
+    await writeFile(file, token, { mode: 0o600 });
+    const fetchFn = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      expect(String(input)).not.toContain(token);
+      expect(init?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
+      return new Response(JSON.stringify(String(input).endsWith('/comments') ? [] : {
+        number: 42, html_url: 'https://example.test/acme/project/issues/42', title: `Remote ${token}`,
+        body: `Reflected ${token}`, updated_at: '2026-01-01T00:00:00Z',
+      }), { headers: { 'content-type': 'application/json' } });
+    });
+    await main(['init', '--prefix', 'LIVE'], root);
+    await main(['import', '--from', 'github', '--live', '--repo', 'acme/project', '--external-id', '42', '--token-file', file, '--json'], root);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(output.join('\n')).toContain('[REDACTED]');
+    expect(output.join('\n')).not.toContain(token);
+    expect(await readFile(join(root, '.aiwg', 'issues', 'items', 'LIVE-0001.md'), 'utf8')).not.toContain(token);
+
+    fetchFn.mockImplementation(async (_input, init) => {
+      expect(init?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
+      return new Response(`Rejected ${token}`, { status: 403 });
+    });
+    const error = await main(['export', 'LIVE-0001', '--to', 'github', '--live', '--repo', 'acme/project', '--force', '--token-file', file], root).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain('[REDACTED]');
+    expect(String(error)).not.toContain(token);
+    expect(output.join('\n')).not.toContain(token);
+  });
+
+  it('refuses headless interactive token entry and names the live token sources', async () => {
+    vi.stubEnv('AIWG_GITHUB_TOKEN', undefined);
+    vi.stubEnv('GITHUB_TOKEN', undefined);
+    // With no source and no provider variable, live requests stay unauthenticated
+    // (public repositories), so only an explicit interactive request can fail here.
+    await expect(main(['import', '--from', 'github', '--live', '--repo', 'acme/project', '--external-id', '42', '--token-interactive'], root))
+      .rejects.toThrow(/--token-stdin.*--token-file.*--token-store.*--token-env/);
   });
 });

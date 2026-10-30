@@ -36,7 +36,7 @@ describe('shared threat-assessment workflow integrations', () => {
     expect(report.verdict).toBe('reject');
     expect(report.policy_report.findings
       .filter((finding: { ruleId: string }) => finding.ruleId === 'credential-or-env-probing')
-      .map((finding: { context: string }) => finding.context)).toEqual(['negative', 'requested']);
+      .map((finding: { context: string }) => finding.context)).toEqual(['descriptive', 'requested']);
   });
 
   it('keeps claimed handoff approval actionable through the deployed forge adapter', () => {

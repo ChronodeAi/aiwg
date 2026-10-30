@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import { z } from 'zod';
+import { integer, url } from '../schema/zod-validation.mjs';
 import { JOB_API_VERSION, JOB_KIND, type ExternalJobFlow } from './types.js';
 
 const relativeFile = z.string().min(1).refine(value => {
@@ -12,52 +13,52 @@ const relativeFile = z.string().min(1).refine(value => {
 const absolutePath = z.string().min(1)
   .refine(path.isAbsolute, 'must be an absolute path')
   .refine(value => path.resolve(value) !== path.parse(path.resolve(value)).root, 'must not be a filesystem root');
-const httpsOrigin = z.string().url().refine(value => new URL(value).protocol === 'https:', 'must use https');
+const httpsOrigin = url().refine(value => new URL(value).protocol === 'https:', 'must use https');
 const accountName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$/u);
 
-export const externalJobFlowSchema = z.object({
+export const externalJobFlowSchema = z.strictObject({
   apiVersion: z.literal(JOB_API_VERSION),
   kind: z.literal(JOB_KIND),
-  metadata: z.object({
+  metadata: z.strictObject({
     name: z.string().regex(/^[a-z][a-z0-9-]{0,62}$/u),
     revision: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u),
-  }).strict(),
-  spec: z.object({
-    trigger: z.object({ type: z.literal('external') }).strict(),
-    executor: z.object({
+  }),
+  spec: z.strictObject({
+    trigger: z.strictObject({ type: z.literal('external') }),
+    executor: z.strictObject({
       provider: z.literal('codex'),
       mode: z.literal('exec'),
       workspace: absolutePath,
       prompt: relativeFile,
       resultSchema: relativeFile,
       binary: absolutePath,
-    }).strict(),
-    workItem: z.object({
+    }),
+    workItem: z.strictObject({
       provider: z.literal('gitea'),
-      baseUrl: z.string().url().refine(value => new URL(value).protocol === 'https:', 'must use https'),
+      baseUrl: url().refine(value => new URL(value).protocol === 'https:', 'must use https'),
       repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u),
       tokenFile: absolutePath,
       eligibleLabels: z.array(z.string().min(1)).min(1),
-      claimTtlSeconds: z.number().int().min(30).max(86400).optional(),
-      claimSettleMs: z.number().int().min(100).max(30000).optional(),
-    }).strict(),
-    approval: z.object({
+      claimTtlSeconds: integer().min(30).max(86400).optional(),
+      claimSettleMs: integer().min(100).max(30000).optional(),
+    }),
+    approval: z.strictObject({
       required: z.boolean().optional(),
       label: z.string().min(1).optional(),
-    }).strict().optional(),
-    security: z.object({
+    }).optional(),
+    security: z.strictObject({
       allowedOrigins: z.array(httpsOrigin).min(1),
       allowedAccounts: z.array(accountName).min(1),
       approvedAttachmentRoots: z.array(absolutePath),
       sensitiveValueFiles: z.array(absolutePath).optional(),
-    }).strict(),
-    completion: z.object({
+    }),
+    completion: z.strictObject({
       require: z.array(z.enum([
         'external-result-url', 'issue-comment', 'idempotency-key', 'verification',
       ])).min(1),
-    }).strict(),
-  }).strict(),
-}).strict().superRefine((flow, ctx) => {
+    }),
+  }),
+}).superRefine((flow, ctx) => {
   const workspace = path.resolve(flow.spec.executor.workspace);
   const within = (candidate: string) => {
     const relative = path.relative(workspace, path.resolve(candidate));

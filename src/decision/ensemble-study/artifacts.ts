@@ -1,3 +1,6 @@
+import { assertDecisionCeiling, ceilingDecision } from '../../gates/lattice.js';
+import type { GateOutcome } from '../../gates/types.js';
+import type { QualificationIntegrityMetadata } from '../qualification/release.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +50,11 @@ const reportLimits = { ...limits, serializedBytes: 33_554_432, properties: 50000
 export function validateD17Artifact<K extends keyof Artifacts>(name: K, value: unknown): asserts value is Artifacts[K] {
   admitEntry(value, name === 'report' || name === 'reportV2' ? reportLimits : limits);
   if (!validators[name]?.(value)) throw new Error(`D17 invalid ${name} artifact`);
+  if (name === 'report' || name === 'reportV2') {
+    const report = value as { decision: GateOutcome; integrity: QualificationIntegrityMetadata };
+    assertDecisionCeiling(report.decision, ceilingDecision('HOLD', report.integrity.release_gate.decision,
+      report.integrity.compromise_labels.length ? 'ROLLBACK' : 'PROMOTE'));
+  }
   if (name === 'splits') {
     const manifest = value as Artifacts['splits'];
     const ids = new Set<string>(), inputs = new Set<string>(), families = new Map<string, string>();

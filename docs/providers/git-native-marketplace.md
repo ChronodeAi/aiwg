@@ -96,16 +96,25 @@ Catalog inclusion is never presented as an AIWG endorsement.
 
 ```bash
 openssl genpkey -algorithm ED25519 -out publisher-private.pem
+chmod 600 publisher-private.pem
 openssl pkey -in publisher-private.pem -pubout -out publisher-public.pem
 
 aiwg marketplace publish . \
   --package agent-pack \
   --ref v1.2.3 \
   --publisher team.example \
-  --key /secure/publisher-private.pem \
+  --key-file /secure/publisher-private.pem \
   --public-key publisher-public.pem \
   --sequence 1
 ```
+
+Supply multiline private PEM through `--key-stdin`, `--key-file <path>`,
+`--key-store <name>`, `--key-env <NAME>`, or masked terminal entry
+(`--key-interactive`; finish the paste with an empty line). With no source, a terminal prompts; headless use must
+select a source. Files must be regular, owned by the current user, have no
+group/other access, and have no symlink or extra hard link. `--key <path>`
+remains an alias for private-file input. See [supplying sensitive values](../cli/sensitive-values.md)
+for source precedence and handling guidance. Private PEM is never printed.
 
 Publication writes an envelope, immutable lock, publish receipt, and
 `provenance.full-v1.shard`. Do not commit a private key, credential, private
@@ -216,7 +225,7 @@ aiwg marketplace install <git-url|identity[@version]>
 aiwg marketplace verify <identity[@version]|lock-id>
 aiwg marketplace export <identity[@version]|lock-id> --output <archive.json>
 aiwg marketplace import <archive.json>
-aiwg marketplace publish <source> --key <pem> --publisher <id>
+aiwg marketplace publish <source> --publisher <id> [--key-file <pem> | --key-stdin]
 aiwg marketplace remove <catalog-id>
 aiwg marketplace list
 ```

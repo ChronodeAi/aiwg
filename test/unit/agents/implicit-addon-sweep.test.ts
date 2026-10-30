@@ -45,7 +45,6 @@ async function fixtureRoot(): Promise<string> {
   await write('agentic/code/addons/helper/manifest.json', JSON.stringify({ id: 'helper' }));
   await write('agentic/code/addons/helper/agents/helper-agent.md', agent('helper-agent'));
   await write('agentic/code/addons/helper/commands/helper-command.md', '---\ndescription: addon command\n---\nRun.\n');
-  await write('agentic/code/addons/helper/rules/helper-rule.md', '---\nenforcement: high\n---\n# Helper rule\n');
   await write(
     'agentic/code/addons/helper/skills/helper-skill/SKILL.md',
     '---\nname: helper-skill\ndescription: addon skill\n---\nSkill.\n',
@@ -73,7 +72,6 @@ describe('implicit addon sweep', () => {
     const files = getAddonFiles(root);
     expect(names(files.agents)).toEqual(['helper-agent.md']);
     expect(names(files.commands)).toEqual(['helper-command.md']);
-    expect(names(files.rules)).toEqual(['helper-rule.md']);
     expect(names(files.skills)).toEqual(['helper-skill']);
   });
 
@@ -87,7 +85,6 @@ describe('implicit addon sweep', () => {
       new Set(['framework-agent', 'helper-agent', 'other-agent']),
     );
     expect(computeAllArtifactBasenames(root, 'commands')).toContain('helper-command');
-    expect(computeAllArtifactBasenames(root, 'rules')).toContain('helper-rule');
   });
 });
 
@@ -99,35 +96,35 @@ describe('deploy-agents addon sweep flags', () => {
     execFileSync('node', [
       path.join(repoRoot, 'tools/agents/deploy-agents.mjs'),
       '--source', root, '--target', target, '--mode', 'sdlc', '--provider', 'omp',
-      '--deploy-commands', '--deploy-skills', '--deploy-rules', '--quiet', ...flags,
+      '--deploy-commands', '--deploy-skills', '--deploy-rules', '--copy-all', '--quiet', ...flags,
     ], { env: { ...env, HOME: target }, stdio: 'pipe', timeout: 60_000 });
     return target;
   }
 
-  // A provider dir the run never wrote (no commands or rules to deploy) reads as empty.
+  // A provider dir the run never wrote reads as empty.
   const deployed = async (target: string, dir: string) =>
-    (await readdir(path.join(target, '.omp', dir)).catch(() => [] as string[]))
-      .filter(name => name.endsWith('.md'))
+    (await readdir(path.join(target, dir === 'skills' ? '.agents' : '.omp', dir)).catch(() => [] as string[]))
+      .filter(name => dir === 'skills' || name.endsWith('.md'))
       .sort();
 
   it('writes the framework and every addon by default in sdlc mode', async () => {
     const target = await deployOmp(await fixtureRoot(), []);
     expect(await deployed(target, 'agents')).toEqual(['framework-agent.md', 'helper-agent.md', 'other-agent.md']);
     expect(await deployed(target, 'prompts')).toContain('helper-command.md');
-    expect(await deployed(target, 'rules')).toContain('helper-rule.md');
+    expect(await deployed(target, 'skills')).toContain('helper-skill');
   });
 
   it('writes the framework alone with --no-addon-sweep', async () => {
     const target = await deployOmp(await fixtureRoot(), ['--no-addon-sweep']);
     expect(await deployed(target, 'agents')).toEqual(['framework-agent.md']);
     expect(await deployed(target, 'prompts')).not.toContain('helper-command.md');
-    expect(await deployed(target, 'rules')).not.toContain('helper-rule.md');
+    expect(await deployed(target, 'skills')).not.toContain('helper-skill');
   });
 
   it('writes the framework plus only the named addons with --sweep-addons', async () => {
     const target = await deployOmp(await fixtureRoot(), ['--sweep-addons', 'helper']);
     expect(await deployed(target, 'agents')).toEqual(['framework-agent.md', 'helper-agent.md']);
     expect(await deployed(target, 'prompts')).toContain('helper-command.md');
-    expect(await deployed(target, 'rules')).toContain('helper-rule.md');
+    expect(await deployed(target, 'skills')).toContain('helper-skill');
   });
 });

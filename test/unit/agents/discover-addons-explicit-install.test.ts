@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeAllArtifactBasenames, discoverAddons, getAddonRuleFiles, getAddonSkillDirs } from '../../../tools/agents/providers/base.mjs';
 
+import { sourceRules } from '../providers/rule-source-expectations.js';
+
 const root = path.resolve(import.meta.dirname, '../../..');
 const temps: string[] = [];
 afterEach(async () => { await Promise.all(temps.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
@@ -37,13 +39,27 @@ describe('discoverAddons explicitInstall', () => {
     expect(getAddonSkillDirs(root).some((dir: string) => path.basename(dir) === 'decision-evaluate')).toBe(false);
   });
 
-  it('keeps explicitInstall rules in the prune desired set without adding them to bulk deploys (#2862)', () => {
+  it('keeps activation-selected explicitInstall rules in the prune desired set without adding them to bulk deploys (#2862)', async () => {
     const bulkRules = getAddonRuleFiles(root).map((file: string) => path.basename(file));
     expect(bulkRules).not.toContain('decision-offload.md');
-    expect(getAddonRuleFiles(root, [], { includeExplicit: true }).map((file: string) => path.basename(file)))
-      .toContain('decision-offload.md');
+    const rule = sourceRules(root, 'addons', true).find(rule => rule.name === 'decision-offload')!;
+    expect(rule.activation).toBe('bound');
+    expect(getAddonRuleFiles(root, [], { includeExplicit: true }).includes(rule.file)).toBe(rule.fileDelivered);
     expect(discoverAddons(root, { includeExplicit: true }).map((addon: { name: string }) => addon.name)).toContain('decision-engine');
-    expect(computeAllArtifactBasenames(root, 'rules').has('decision-offload')).toBe(true);
+    expect(computeAllArtifactBasenames(root, 'rules').has(rule.name)).toBe(rule.fileDelivered);
+    // Retain #2862's prune protection with an explicit kernel rule. The real
+    // decision-offload contract is bound now and must not reappear at startup.
+    const source = await mkdtemp(path.join(os.tmpdir(), 'aiwg-explicit-rules-'));
+    temps.push(source);
+    const addon = path.join(source, 'agentic/code/addons/opt-in');
+    await mkdir(path.join(addon, 'rules'), { recursive: true });
+    await mkdir(path.join(source, 'agentic/code/frameworks'), { recursive: true });
+    await writeFile(path.join(addon, 'manifest.json'), JSON.stringify({ explicitInstall: true }));
+    const kernel = path.join(addon, 'rules/explicit-kernel.md');
+    await writeFile(kernel, '---\nname: explicit-kernel\nactivation: kernel\nenforcement: high\n---\nPreserve the explicit guard.\n');
+    expect(getAddonRuleFiles(source)).not.toContain(kernel);
+    expect(getAddonRuleFiles(source, [], { includeExplicit: true })).toContain(kernel);
+    expect(computeAllArtifactBasenames(source, 'rules').has('explicit-kernel')).toBe(true);
   });
 });
 

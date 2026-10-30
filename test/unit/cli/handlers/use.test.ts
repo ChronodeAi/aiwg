@@ -28,6 +28,7 @@ import {
   parseOpenHumanHarnessAgentSelector,
   resolveOpenHumanHarnessAgentSelectors,
   resolveCompanionBundles,
+  mainDeploymentIncludesAddons,
 } from '../../../../src/cli/handlers/use.js';
 
 const runnerState = vi.hoisted(() => ({
@@ -113,6 +114,35 @@ describe('nextStepsFor()', () => {
   it('uses Codex skill syntax for framework fallbacks and its openai alias', () => {
     expect(nextStepsFor('marketing', 'codex').join('\n')).toContain('$aiwg-regenerate');
     expect(nextStepsFor('sdlc', 'openai').join('\n')).toContain('$aiwg-regenerate');
+  });
+});
+
+describe('mainDeploymentIncludesAddons()', () => {
+  it('recognizes native Pi/OMP root modes whose provider collector includes every addon', () => {
+    for (const provider of ['pi', 'omp']) {
+      for (const mode of ['general', 'sdlc', 'both', 'all']) {
+        expect(mainDeploymentIncludesAddons(provider, mode, ['--mode', mode, '--provider', provider])).toBe(true);
+      }
+    }
+  });
+
+  it('keeps explicit addon sources and non-collector modes on the addon deployment path', () => {
+    for (const provider of ['pi', 'omp']) {
+      expect(mainDeploymentIncludesAddons(provider, 'sdlc', [
+        '--mode', 'sdlc', '--provider', provider, '--source', '/tmp/addon',
+      ])).toBe(false);
+      expect(mainDeploymentIncludesAddons(provider, 'research', ['--mode', 'research', '--provider', provider])).toBe(false);
+      expect(mainDeploymentIncludesAddons(provider, 'sdlc', [
+        '--mode', 'sdlc', '--mode', 'all', '--provider', provider,
+      ])).toBe(false);
+    }
+  });
+
+  it('preserves the existing Claude and Codex collector boundaries', () => {
+    expect(mainDeploymentIncludesAddons('claude', 'sdlc', ['--mode', 'sdlc'])).toBe(true);
+    expect(mainDeploymentIncludesAddons('codex', 'all', ['--mode', 'all'])).toBe(true);
+    expect(mainDeploymentIncludesAddons('codex', 'sdlc', ['--mode', 'sdlc'])).toBe(false);
+    expect(mainDeploymentIncludesAddons('hermes', 'all', ['--mode', 'all'])).toBe(false);
   });
 });
 
@@ -714,15 +744,16 @@ describe('aiwg use addon scope', () => {
     expect(bundles).toEqual([]);
   });
 
-  it('still sweeps every non-explicit addon and every extension for all', async () => {
+  it('uses the Codex root collector once for the all-mode kernel surface', async () => {
     const { sweep, bundles } = await previewUse('all');
     expect(sweep).toBe('all');
-    expect(bundles).toEqual([
-      ...(await getAllAddons(repoRoot)).map(name => `addons/${name}`),
-      ...(await getAllExtensions(repoRoot)).map(name => `extensions/${name}`),
-    ]);
-    expect(bundles).not.toContain('addons/decision-engine');
-    expect(bundles).not.toContain('addons/aiwg-dev');
+    expect(bundles).toEqual([]);
+  });
+
+  it('retains extension passes when the Codex full surface is explicitly requested', async () => {
+    const { sweep, bundles } = await previewUse('all', ['--copy-all']);
+    expect(sweep).toBe('all');
+    expect(bundles).toEqual((await getAllExtensions(repoRoot)).map(name => `extensions/${name}`));
   });
 
   it.each(['writing', 'general'])('leaves the framework-less %s mode on its addon sweep', async (mode) => {

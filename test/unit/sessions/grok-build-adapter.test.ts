@@ -1,11 +1,13 @@
 import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GROK_BUILD_ADAPTER_VERSION,
   GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS,
   GROK_BUILD_CLI_EXPORT_SCHEMA_VERSION,
+  GROK_BUILD_NATIVE_LOCATOR_CLASS,
+  GROK_BUILD_NATIVE_SCHEMA_VERSION,
   GrokBuildSessionAdapter,
   discoverWorkspaceHistories,
   IncrementalSessionImporter,
@@ -18,6 +20,7 @@ import {
 import { describeWithSqlite } from '../../helpers/sqlite.js';
 
 const fixturesRoot = resolve('test/fixtures/sessions/grok-build');
+const nativeLayoutRoot = resolve(fixturesRoot, 'native-layout');
 const roots: string[] = [];
 
 function selected(name: string, locatorClass = GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS): SelectedSource {
@@ -30,7 +33,9 @@ function selected(name: string, locatorClass = GROK_BUILD_CLI_EXPORT_LOCATOR_CLA
   };
 }
 
+beforeEach(() => vi.stubEnv('AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL', undefined));
 afterEach(async () => {
+  vi.unstubAllEnvs();
   const { rm } = await import('node:fs/promises');
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -38,7 +43,7 @@ afterEach(async () => {
 describe('Grok Build session adapter', () => {
   const adapter = new GrokBuildSessionAdapter();
 
-  it('registers separately from Grok Bot and requires documented CLI export', async () => {
+  it('registers separately from Grok Bot with CLI export ingest by default', async () => {
     const registry = new SessionSourceAdapterRegistry();
     registry.register(adapter);
     expect(registry.report('grok-build', {
@@ -57,14 +62,14 @@ describe('Grok Build session adapter', () => {
       acquisitionModes: ['manual-export'],
     });
     await expect(collect(adapter.discover({
-      workspaceId: 'workspace-fixture', allowedRoots: [resolve('/tmp/.grok/sessions')],
+      workspaceId: 'workspace-fixture', allowedRoots: [],
     }))).rejects.toMatchObject({
       code: 'UNSUPPORTED_OPERATION',
-      message: expect.stringContaining('grok sessions list'),
+      message: expect.stringContaining('AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL=1'),
     });
   });
 
-  it('routes workspace discovery to the GROK_HOME-aware public CLI without reading native stores', async () => {
+  it('reports export-required while native ingestion is disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-grok-build-discovery-'));
     roots.push(root);
     const manifest = await discoverWorkspaceHistories({ workspace: root, providerHome: root });
@@ -72,8 +77,8 @@ describe('Grok Build session adapter', () => {
       status: 'export-required',
       disposition: 'manual-export',
       sourceCount: 0,
-      reasonCode: 'CLI_EXPORT_REQUIRED',
-      remediation: expect.stringContaining('$GROK_HOME'),
+      reasonCode: 'GROK_BUILD_NATIVE_EXPERIMENTAL_DISABLED',
+      remediation: expect.stringContaining('AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL=1'),
     });
     expect(manifest.sources.some((source) => source.provider === 'grok-build')).toBe(false);
   });
@@ -221,6 +226,52 @@ describeWithSqlite('Grok Build adapter repository conformance', () => {
       expect(sessions.items[0]?.extensions).toMatchObject({
         'native.grok-build': { lifecycleEvidence: { state: 'unknown' } },
       });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('imports a native chat_history source with stable identity and idempotent replay', async () => {
+    vi.stubEnv('AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL', '1');
+    const adapter = new GrokBuildSessionAdapter();
+    const locator = resolve(
+      nativeLayoutRoot, '%2Fsynthetic%2Fgrok-workspace',
+      '0199b111-1111-7111-8111-111111111111', 'chat_history.jsonl',
+    );
+    const selectedSource: SelectedSource = {
+      provider: 'grok-build',
+      locator,
+      locatorClass: GROK_BUILD_NATIVE_LOCATOR_CLASS,
+      sourceId: 'grok-build-native-import',
+      authorizedScope: { workspaceId: 'workspace-fixture', allowedRoots: [nativeLayoutRoot] },
+    };
+    const source: SessionSource = {
+      contractVersion: SESSION_CONTRACT_VERSION,
+      sourceId: selectedSource.sourceId,
+      provider: 'grok-build',
+      providerProfile: 'grok-build-native-chat-history-v1',
+      locatorClass: selectedSource.locatorClass,
+      redactedLocator: '<session-source>/chat_history.jsonl',
+      adapterVersion: GROK_BUILD_ADAPTER_VERSION,
+      sourceSchemaVersion: GROK_BUILD_NATIVE_SCHEMA_VERSION,
+      disposition: 'implemented', operationalState: 'available', consistency: 'complete',
+      authorizedAt: '2026-10-18T00:00:00.000Z',
+      extensions: { 'native.grok-build': { acquisition: GROK_BUILD_NATIVE_LOCATOR_CLASS } },
+    };
+    const repository = new SessionRepository();
+    try {
+      const importer = new IncrementalSessionImporter(repository);
+      const request = {
+        source, selectedSource, adapter, workspaceId: 'workspace-fixture', policyVersion: '1.0.0',
+      };
+      const receipts = await importer.import(request);
+      expect(receipts.reduce((sum, receipt) => sum + receipt.eventsInserted, 0)).toBe(4);
+      expect(await importer.import(request)).toEqual([]);
+      const sessions = repository.listSessions({ workspaceId: 'workspace-fixture', limit: 10 });
+      expect(sessions.total).toBe(1);
+      expect(sessions.items[0]).toMatchObject({ nativeSessionId: '0199b111-1111-7111-8111-111111111111' });
+      const search = repository.search({ workspaceId: 'workspace-fixture', query: 'deterministic', limit: 20 });
+      expect(search.items.length).toBeGreaterThan(0);
     } finally {
       repository.close();
     }

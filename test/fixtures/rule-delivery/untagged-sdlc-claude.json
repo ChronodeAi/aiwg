@@ -1,0 +1,193 @@
+{
+  "note": "Pre-budget tier fallback: existing untagged bodies and structural indexes. The ADR explicitly restores the six historical budget demotions.",
+  "files": {
+    "RULES-INDEX.md": {
+      "bytes": 30186,
+      "sha256": "64d03a6abac4c3d08239fcec1a467350e13a58041d6008e666844e9d7851acf3"
+    },
+    "RULES-ONDEMAND.md": {
+      "bytes": 2968,
+      "sha256": "cb391b73798fa9333d04e79ebefd1035707651d699f3f5eacc23e5d763d26a7e"
+    },
+    "actionable-feedback.md": {
+      "bytes": 5717,
+      "sha256": "b25c514c27ded24e2c70fd33301c004598f6003443bb922f4aad56e05bdc945f"
+    },
+    "agent-deployment.md": {
+      "bytes": 4899,
+      "sha256": "6e1f81e16dfc5a602dbc8d7b421a86eb7f69bd8d5637a3ea85fba2524f23adda"
+    },
+    "agent-fallback.md": {
+      "bytes": 4014,
+      "sha256": "15b337601c47a7d492e6cc830240c730b4553cd9fa8c1987783cf6cb286d8f6e"
+    },
+    "agent-friendly-code.md": {
+      "bytes": 3763,
+      "sha256": "881c11374a177ccf9926b887106bf55bd09b8b6f7c6429cf92dc201c0e863b29"
+    },
+    "agent-generation-guardrails.md": {
+      "bytes": 3095,
+      "sha256": "5d82c9d745d32ff8fe1e2eaf70caca1268d897ef6e67dfe4f478b36328f162f9"
+    },
+    "anti-laziness.md": {
+      "bytes": 10350,
+      "sha256": "419c319417d3cdaad3f2cc1256b10e5d912b0ef1b2bd4b52fca9b2c36aa05fe2"
+    },
+    "artifact-discovery.md": {
+      "bytes": 4666,
+      "sha256": "5db4100b94f1f5b63b66ddc7a91f8edb6313e9650e89a0a3468cc572fdf83231"
+    },
+    "artifact-output-policy.md": {
+      "bytes": 1442,
+      "sha256": "748878c0c07575d5eb003a8e64fbb25d04628f0a9725a1a0e4f053a90e4d1289"
+    },
+    "auto-compact-continue.md": {
+      "bytes": 8822,
+      "sha256": "3a637761261ef2678c648240c56ce32ee3d27fc7c35d083acb9c886355cffc57"
+    },
+    "browser-control-safety.md": {
+      "bytes": 7084,
+      "sha256": "a7d3786930b4ce44697807fb75e5b687ab9ad966b43665616c9577ec52434634"
+    },
+    "citation-policy.md": {
+      "bytes": 7600,
+      "sha256": "9c019f16356a7fe72de2f1865a5e115229f2aa99c664c4229a75978c28c67d9d"
+    },
+    "cli-secondary.md": {
+      "bytes": 9261,
+      "sha256": "2927afa2464ca6d13e470e1b2fe9324c0b261e77e7b7440822781e7106fbe3ba"
+    },
+    "daemon-interaction.md": {
+      "bytes": 4704,
+      "sha256": "5d7e01f150049775f83df27383dad50e832d09ff25738906c43acbd094409224"
+    },
+    "debug-source-not-output.md": {
+      "bytes": 9602,
+      "sha256": "518c089076c6a29edad3c9a0154c1d19ad6e4d89fb6ea561bf527a016bc19e65"
+    },
+    "delivery-policy.md": {
+      "bytes": 14325,
+      "sha256": "b7fcf7e83140abcd069494772b87d2d9cfce7a23260d01d03209849f3551a5ef"
+    },
+    "escalation-discipline.md": {
+      "bytes": 8156,
+      "sha256": "31b9f9fabfd7abcf28ab27a826599dd6b9ea58bb11f88ea82c2ba720c2b1d461"
+    },
+    "executable-feedback.md": {
+      "bytes": 3039,
+      "sha256": "46aee6dc509d0536198a8d4caf7702caec51bb8d3572cd7d1010486746d96e99"
+    },
+    "failure-mitigation.md": {
+      "bytes": 4630,
+      "sha256": "03e9af6487d8280ae0e814a072185f3f8f21aa9e252bc0c828c40bd674ee9edd"
+    },
+    "god-session.md": {
+      "bytes": 4671,
+      "sha256": "a7bfa75297de9e035d4900e55b85bd640853a0a00ea69623b7f2c773f490b581"
+    },
+    "hitl-gates.md": {
+      "bytes": 3760,
+      "sha256": "8b8dd938916ea77a5dd619db2cdd3b0951123d5cf4a13dbd0d8915533bb5c06b"
+    },
+    "human-authorization.md": {
+      "bytes": 8634,
+      "sha256": "a8fd5cdaa1fc73d4d59d1438d5c2236c965373079c7e95f8c2e425c7dd124e11"
+    },
+    "instruction-comprehension.md": {
+      "bytes": 8138,
+      "sha256": "8d1b0da36565700dcfed916bc679cdae34c76e1bb432acd2512a3d37ea5ce91e"
+    },
+    "lfd-control-tiers.md": {
+      "bytes": 5449,
+      "sha256": "c696076850bfd31a0d5fdae4857f3bed34210dfc75cac6c8c4b1bc00df78d8c0"
+    },
+    "native-ux-tools.md": {
+      "bytes": 6621,
+      "sha256": "920c3604d17e6c93b91cd7edee68b03cf0385248b641967cfb2b3ac87e914a50"
+    },
+    "network-analysis-safety.md": {
+      "bytes": 1656,
+      "sha256": "33e3ab501ab62fe89e2d2faa8534b0cd649850b39b97029a36634cc7a1e27f94"
+    },
+    "no-attribution.md": {
+      "bytes": 6980,
+      "sha256": "0487ed3b82405a97009c9157107092a342d932a533b1647f68bfa77ed8ea32ac"
+    },
+    "prose-resolution.md": {
+      "bytes": 3063,
+      "sha256": "81b437688800967a02aedb74cd288676b42679eb3f753c1dfd08d2548e5d841b"
+    },
+    "provenance-tracking.md": {
+      "bytes": 5785,
+      "sha256": "4154febdf34f640fad0c38356c930b8d744e2604b90f7ab4330a8e8037034947"
+    },
+    "quiet-mode.md": {
+      "bytes": 4029,
+      "sha256": "ae017132a50073e224bc3a32d7c11f7e3b62fef2221047cb7954f93a2823d107"
+    },
+    "reproducibility-validation.md": {
+      "bytes": 5900,
+      "sha256": "fb25791e2732fed2c6c2639ddf945fc5683eb2b89188e772d36b9fb49106d73b"
+    },
+    "research-before-decision.md": {
+      "bytes": 8280,
+      "sha256": "dd695aa3a55ab4f47c69192bcd18e3ca36727df4b4b02e6bf884d58b7d3758c1"
+    },
+    "research-metadata.md": {
+      "bytes": 4219,
+      "sha256": "8507e047682860b943b92072d178b993d7c1ce05a240dbd7234e47e55892ebd7"
+    },
+    "respect-repo-access-manifest.md": {
+      "bytes": 4178,
+      "sha256": "813a444dc23cce1431a2774bd55153841707bdf1dd97b1fc17868a5b65cffaa3"
+    },
+    "rlm-context-management.md": {
+      "bytes": 7950,
+      "sha256": "4e90ad31e56df1be48413a8c77934d5c2574db58a17de24d2299339f6c28defc"
+    },
+    "schema-first.md": {
+      "bytes": 807,
+      "sha256": "d2427587736e739e3611c39efb6544d78bbe18577a79d77cba5002479968a0d4"
+    },
+    "sdlc-right-sizing.md": {
+      "bytes": 8723,
+      "sha256": "951e2accf894db0708878af145b9f34b20c5fdef30c181a837e2a78370b1d4e0"
+    },
+    "skill-discovery.md": {
+      "bytes": 8587,
+      "sha256": "7cdc2f740706cfa694ed7f6a7b280b456190004a6bac087315dd6e6eaa4bc05a"
+    },
+    "subagent-scoping.md": {
+      "bytes": 27471,
+      "sha256": "c0fe669d3dcf4d5ffe5bc485b8d1ec19604e545c15ff7e180326e9a9fdd71461"
+    },
+    "tao-loop.md": {
+      "bytes": 4955,
+      "sha256": "0e2567c2665ae57aa3c11e91f4c7326c36f5fa65db8a561c1c5d2bd3752e5a97"
+    },
+    "test-conformance-evidence.md": {
+      "bytes": 2249,
+      "sha256": "e9326b229f6c2c2384bad6b49d6a97dacc567f8cf2e17ddc61f5113c1e39c92f"
+    },
+    "token-security.md": {
+      "bytes": 8136,
+      "sha256": "188115117d1705c1c7f28649b2096cc952b491c502cd0c7d676e6a2faffd835b"
+    },
+    "tool-quota.md": {
+      "bytes": 7539,
+      "sha256": "b81ed32f0d3e479a4d563aee0caf1db973b34924e5758465f6df48f944467c61"
+    },
+    "twelve-factor-evidence.md": {
+      "bytes": 1168,
+      "sha256": "706b747ffc385e80cd13bfb366c8fd4847b45d1d43ec51ce1b8aa21a70282835"
+    },
+    "vague-discretion.md": {
+      "bytes": 4728,
+      "sha256": "0cac3eaad27ec401fb476fb5b97a02172f8ac497822706b08d7eb334516cf77c"
+    },
+    "versioning.md": {
+      "bytes": 2917,
+      "sha256": "2179f0f1f28d9355a33508258499e17b310f7a0f0959f6ea7a5a14e628b138bb"
+    }
+  }
+}

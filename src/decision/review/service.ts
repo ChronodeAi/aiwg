@@ -1,9 +1,9 @@
 import type {
   CreateReviewInput, DecisionReview, ReviewActor, ReviewAuthorization, ReviewEffectReceipt,
   DecisionReviewServiceOptions, ReviewEventType, ReviewListOptions, ReviewScope, ReviewStore,
-  ReviewSensitiveView, ReviewSensitiveViewRequest, ReviewSensitiveViewSource,
+  ReviewSensitiveView, ReviewSensitiveViewRequest, ReviewSensitiveViewSource, ReviewEvaluation,
 } from './types.js';
-import { assertReviewProjection, currentProposal, ReviewAccessError, ReviewConflictError, reviewDigest, reviewOperatorEventId } from './validate.js';
+import { assertReviewProjection, currentProposal, ReviewAccessError, ReviewConflictError, reviewDigest, reviewOperatorEventId, validateReviewEvaluation } from './validate.js';
 import { validateDecisionLifecyclePolicy, type DecisionLifecycleReference, type DecisionLifecycleRule } from '../lifecycle.js';
 
 /** Only an executor that can attest zero external effect may report definitive failure. */
@@ -220,16 +220,18 @@ export class DecisionReviewService {
     return this.append(review, 'claimed', scope.actor, rationale, 'claimed');
   }, true); }
 
-  async decide(scope: ReviewScope, id: string, decision: 'approve' | 'reject', rationale: string): Promise<DecisionReview> {
+  async decide(scope: ReviewScope, id: string, decision: 'approve' | 'reject', rationale: string, evaluation?: ReviewEvaluation): Promise<DecisionReview> {
+    const recordedEvaluation = evaluation === undefined ? {} : { evaluation: structuredClone(evaluation) };
     return this.mutate(scope, id, 'decide', async review => {
       this.requireActive(review); const proposal = currentProposal(review);
       if (!await this.authorization.eligible(scope, review, proposal)) throw new ReviewAccessError('Reviewer is not eligible');
       if (review.requesterId === scope.actor.id) throw new ReviewAccessError('Self-approval is denied');
       if (review.decisions.some(item => item.reviewer.id === scope.actor.id && item.proposalVersion === proposal.version)) throw new ReviewConflictError('Reviewer already decided this proposal');
-      const decisions = [...review.decisions, { reviewer: scope.actor, proposalVersion: proposal.version, decision, rationale, atEpochMs: this.now() }];
+      validateReviewEvaluation(recordedEvaluation.evaluation);
+      const decisions = [...review.decisions, { reviewer: scope.actor, proposalVersion: proposal.version, decision, rationale, atEpochMs: this.now(), ...recordedEvaluation }];
       const approvals = decisions.filter(item => item.proposalVersion === proposal.version && item.decision === 'approve').length;
       const status = decision === 'reject' ? 'rejected' : approvals >= review.quorum ? 'approved' : 'claimed';
-      return this.append({ ...review, decisions }, decision === 'approve' ? 'approved' : 'rejected', scope.actor, rationale, status, { quorumSatisfied: approvals >= review.quorum });
+      return this.append({ ...review, decisions }, decision === 'approve' ? 'approved' : 'rejected', scope.actor, rationale, status, { quorumSatisfied: approvals >= review.quorum, ...recordedEvaluation });
     });
   }
 

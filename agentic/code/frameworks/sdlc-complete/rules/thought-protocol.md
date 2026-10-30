@@ -1,5 +1,35 @@
 ---
 enforcement: medium
+activation: summary
+summary: Use goal, research, progress, extraction, reasoning, exception, and synthesis classifications to summarize intent, evidence, decisions, and outcomes during tool work.
+bound_to:
+  skills:
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - mission-control
+    - ralph
+    - ralph-external
+    - ralph-resume
+  agents:
+    - requirements-analyst
+    - requirements-documenter
+    - architecture-designer
+    - architecture-documenter
+    - software-implementer
+    - test-engineer
+    - test-documenter
+    - technical-writer
+    - agentsmith
+    - commandsmith
+    - skillsmith
+    - technical-researcher
+    - security-auditor
+    - debugger
+    - code-reviewer
+  flows: []
+triggers:
+  - which thought types guide tool using agents
 ---
 
 # Thought Protocol Rules

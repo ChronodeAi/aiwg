@@ -89,6 +89,140 @@ field is only useful as an identifier if it is actually unique, so a
 collision is treated as a data-integrity signal worth surfacing rather
 than silently accepting the later record.
 
+## Claude admin intake walkthrough
+
+This is the operator path from a Claude.ai account/web export download to a
+verified Fortemi shard. It needs no Anthropic Admin API client and no daemon:
+exports are downloaded by hand, then imported with the session catalog CLI.
+
+### 1. Download the export
+
+Request and download the account/web export from Claude.ai. It arrives as a
+`conversations.json` file (one JSON array holding many conversations, as
+described above). Save each export under its own filename in one intake
+directory, for example:
+
+```bash
+mkdir -p ./claude-intake
+# conversations-2026-10-01.json, conversations-2026-10-15.json, ...
+```
+
+Only `.json` (web/account export) and `.jsonl` (transcript/hook) files are
+recognised for the `claude` provider. Anything else in the directory -- an
+operator `notes.txt`, for example -- is skipped with a reason and never
+imported.
+
+### 2. Import one export
+
+```bash
+aiwg sessions import ./claude-intake/conversations-2026-10-01.json \
+  --provider claude --source-id claude-admin-2026-10-01 --workspace default --json
+```
+
+Expected receipt: `"status": "ok"` with `data.totals` reporting the inserted
+sessions and events. Repeating the same command is idempotent: the second run
+inserts nothing because every record carries a stable identity.
+
+### 3. Batch-import the whole intake directory
+
+```bash
+aiwg sessions import --from-dir ./claude-intake \
+  --provider claude --source-id claude-admin --workspace default --json
+```
+
+`--from-dir` extends `sessions import`: it adds no new top-level command.
+`--source-id` becomes an optional per-file prefix, so each file gets a stable
+source ID such as `claude-admin/conversations-2026-10-01.json`. Every
+recognised file is imported through the same single-file path (same adapter,
+same redaction, same idempotency). Files already imported are skipped by
+content digest before any adapter work.
+
+Expected receipt: `"status": "ok"` with one entry per file plus a summary:
+
+```json
+{
+  "contractVersion": "1.0.0",
+  "command": "sessions.import",
+  "status": "ok",
+  "data": {
+    "fromDir": "./claude-intake",
+    "provider": "claude",
+    "workspaceId": "default",
+    "sourceIdPrefix": "claude-admin",
+    "schemaVersion": "1.0.0",
+    "files": [
+      {
+        "file": "conversations-2026-10-01.json",
+        "sourceId": "claude-admin/conversations-2026-10-01.json",
+        "digest": "sha256:<hex>",
+        "status": "imported",
+        "reason": null,
+        "sessionsInserted": 3,
+        "eventsInserted": 12
+      },
+      {
+        "file": "notes.txt",
+        "sourceId": null,
+        "digest": null,
+        "status": "skipped",
+        "reason": "unrecognised extension for provider claude: expected .json (web/account export) or .jsonl (transcript/hook), got \"notes.txt\"",
+        "sessionsInserted": 0,
+        "eventsInserted": 0
+      }
+    ],
+    "summary": {
+      "total": 2,
+      "imported": 1,
+      "alreadyImported": 0,
+      "skipped": 1,
+      "rejected": 0,
+      "sessionsInserted": 3,
+      "eventsInserted": 12
+    },
+    "interruptedRuns": []
+  },
+  "error": null
+}
+```
+
+Add `--dry-run` to preview the file plan (`recognised`, planned `sourceId`)
+without writing anything. Repeating the batch after a successful run imports
+nothing: recognised files come back as `"status": "already-imported"` with
+`"reason": "content digest already imported"`, and the summary reports
+`imported: 0` with zero inserts. A file that fails to import is reported as
+`"status": "rejected"` with its error code; the remaining files still import.
+
+### 4. Read back the catalog
+
+```bash
+aiwg sessions list --provider claude --workspace default --json
+```
+
+Each conversation in the export appears as its own session. The importing
+project can also read another workspace's catalog with `--db`, as documented
+in `docs/sessions/cli.md`.
+
+### 5. Export a Fortemi shard
+
+```bash
+aiwg sessions export plan --workspace default \
+  --out /tmp/claude-selection.json \
+  <session-id-1> <session-id-2>
+aiwg sessions export build --plan /tmp/claude-selection.json --out ./claude-export
+aiwg sessions export verify --input ./claude-export/evidence.shard
+```
+
+The plan binds the exact selection to source/event digests; the build writes
+the `.shard` archive plus a receipt; `verify` cross-checks the shard against
+its receipt. The full four-step workflow, including `unpack`, is documented
+under "Native session-to-Fortemi shard export" in `docs/sessions/cli.md`.
+
+The export carries attachment metadata and extracted text, never original
+attachment bytes: the web/account export format does not include them (see
+"Supported layout" under "Claude web/account export (manual-export)" above).
+Edited or branched conversations remain unhandled
+rather than silently flattened (see "Known limitations" below).
+
 ## Consistency and replay
 
 Transcript files are treated as provisional because Claude Code may still be

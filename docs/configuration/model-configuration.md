@@ -15,7 +15,7 @@ The current provider-aware contract separates three concerns:
 
 Provider compilation reports one of `native`, `compiled`, `inherited`,
 `global-only`, `informational`, or `unsupported`. An unsupported field is
-omitted rather than copied into an artifact that ignores it.
+omitted rather than copied into an artifact that ignores it. See [wrapper enforcement](wrapper-tier-enforcement.md) for the per-provider artifact contract.
 
 Generated bootstrap context also presents a bounded delegation rubric. For
 independent work, orchestrators prefer `aiwg-model-efficiency-worker` for
@@ -27,9 +27,28 @@ work should leave the primary context at all. Trivial, tightly coupled, serial,
 or shared-state-sensitive work stays with the primary agent, which always owns
 integration and final validation.
 
-The versioned schemas are under `schemas/models/`. Project/user compatibility
-input still accepts `max-quality` for one migration window, but canonical
-policy uses `premium`.
+The versioned schemas are under `schemas/models/`. The compatibility input
+`max-quality` normalizes to canonical `flagship`.
+
+### Flagship election and the current ladder
+
+`flagship > premium > standard > economy`; `max-quality` is a compatibility
+alias for `flagship`. Verified IDs (2026-10-27):
+
+| Tier | Claude | Codex |
+|---|---|---|
+| flagship | `claude-fable-5-1` | `gpt-6-astra` |
+| premium | `claude-opus-5-5` | `gpt-6.1-sol` |
+| standard | `claude-sonnet-5-5` | `gpt-6.1-terra` |
+| economy | `claude-haiku-5-5` | `gpt-6-luna` |
+
+Flagship catalog entries carry `selection: user-elected` and steward labels them
+**user-elected only**. Routing `requestedTier: flagship` (runtime Tier 4) requires
+`election: user` or an exact `agentName` hit in `flagshipAllowlist`, supplied by the
+caller from delegation config. Premium authorization, complexity, high impact and
+unattended operation grant no flagship election. Unelected requests cap at premium;
+compilation rejects unelected flagship bindings/overrides. Explicit worker bindings
+in project `models.json` and `aiwg.config` still win: this project's coding role stays on Sol.
 
 ## Configuration File Location
 
@@ -121,22 +140,15 @@ provider-neutral; already-pinned ids, `inherit`, and explicit `sonnet[1m]` /
 `opus[1m]` opt-ins are deployed unchanged, and `--coding-model` /
 `--reasoning-model` / `--efficiency-model` overrides still win.
 
-## Provider compilation examples
+## How AIWG applies model choices per harness
 
-Codex agents compile to standalone `.codex/agents/*.toml` files. Every file has
-the required `name`, `description`, and `developer_instructions` fields; native
-model controls use `model` and `model_reasoning_effort`. Codex skills have no
-documented per-skill model field, so AIWG reports that policy as `unsupported`
-and does not emit a pretend pin.
+You set model choices once, in AIWG: the role ladder and `models.json` above, the `delegation` settings, and per-task overrides. AIWG then does the per-harness work:
 
-Warp and Hermes can apply run-wide or global delegation policy but cannot
-enforce heterogeneous per-agent files. Their per-agent result is
-`global-only`. Windsurf currently has no supported portable child selector, so
-its per-agent result is `unsupported`.
+- **Deploying wrappers.** `aiwg use` compiles each worker wrapper (efficiency, coding, reasoning, verifier, explorer) into the harness's own agent format, and pins the model and effort wherever that harness can enforce a per-agent choice.
+- **Resolving a worker.** `aiwg models resolve` picks the model for a role and task from the catalog and your policy, and renders the exact launch command for the harness, so you never assemble harness flags yourself.
+- **Reporting enforcement.** `aiwg doctor` states, per harness and wrapper, whether the model and effort are `pinned`, `inherited`, `global-only` (one model for every worker in a run) or `unsupported`, and warns when a wrapper would land on a flagship or premium model you did not elect.
 
-`aiwg doctor --provider <name>` reports canonical agent counts and the target
-surface separately. It does not describe skills as pinned when the provider
-cannot enforce skill-local model selection.
+Harnesses differ in what they can enforce, so when `aiwg doctor` reports `global-only` or `inherited`, follow the remediation it prints for that harness rather than editing harness settings by hand. AIWG never rewrites a harness's global settings for you.
 
 ## Model management CLI
 
@@ -474,6 +486,10 @@ ajv validate -s models.schema.json -d models.json
 # Using jq (basic check)
 jq empty models.json && echo "Valid JSON" || echo "Invalid JSON"
 ```
+
+## Supported harnesses
+
+AIWG deploys to every harness in the [provider inventory](../providers/provider-inventory.md), which lists each one's status and deployment scope and links its quickstart. What each harness can enforce for models and effort is reported live by `aiwg doctor`; the per-harness matrix is in [Wrapper tier enforcement](wrapper-tier-enforcement.md).
 
 ## See Also
 

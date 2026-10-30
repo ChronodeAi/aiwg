@@ -1,3 +1,4 @@
+import { assertStartupRuleDelivery } from '../helpers/rule-delivery-context.js';
 /**
  * Factory AI Integration Tests
  *
@@ -512,8 +513,7 @@ describe('Factory AI Integration', () => {
         'utf-8'
       );
 
-      expect(agentsMd).toContain('AIWG SDLC Framework');
-      expect(agentsMd).toContain('.factory/droids/');
+      expect(assertStartupRuleDelivery(TEST_PROJECT_DIR, 'factory', agentsMd)).toContain('.factory/droids/');
     });
   });
 

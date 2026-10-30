@@ -124,7 +124,7 @@ Most AIWG skills are not loaded into context; they are reached on demand:
 
 ```bash
 aiwg discover "create a security review"   # rank matching skills/agents
-aiwg show skill flow-security-review        # fetch the body
+aiwg show skill flow-security-review --body        # fetch the body
 ```
 
 Run `aiwg discover` before concluding AIWG lacks a capability — it indexes the

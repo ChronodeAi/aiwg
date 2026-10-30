@@ -7,14 +7,16 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import {
   buildParallelismSection,
   replaceOrAppendParallelismBlock,
   MAX_SHOWN_GROUPS,
   PARALLELISM_BLOCK_START,
+  WORKER_HEALTH_DOC_POINTER,
   PARALLELISM_BLOCK_END,
   PARALLELISM_HEALTH_UNRESOLVED_NOTE,
 } from '../../../src/smiths/context-pipeline/parallelism-section.js';
@@ -22,6 +24,20 @@ import { emptyConfig, writeAiwgConfig, getConfigPath, type AiwgConfig } from '..
 import { parseWorkerCommandArgs } from '../../../src/serve/worker-invocation.js';
 import { createWorkerHealthObserver } from '../../../tools/ralph-external/lib/worker-health.mjs';
 import { parseWorkerStatusArgs } from '../../../tools/ralph-external/index.mjs';
+import { ConfigLoader } from '../../../src/models/config-loader.js';
+import { resolveWorkerPlan } from '../../../src/models/resolver.js';
+import { PROVIDER_IDS } from '../../../src/providers/provider-definitions.js';
+import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
+
+/** The worker-dispatch doc, whitespace-collapsed so assertions ignore line wrapping. */
+function workerDispatchDoc(): string {
+  return readFileSync(fileURLToPath(new URL('../../../docs/getting-started/worker-dispatch.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
+}
+
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => process.env.HOME! };
+});
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `aiwg-parallelism-section-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
@@ -79,6 +95,7 @@ describe('buildParallelismSection (#1362)', () => {
     // test/unit/models/resolver.test.ts); never the user's home install.
     vi.stubEnv('AIWG_HOME', process.cwd());
     vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'aiwg-user-config'));
+    vi.stubEnv('HOME', tmpDir);
   });
 
   afterEach(() => {
@@ -107,6 +124,8 @@ describe('buildParallelismSection (#1362)', () => {
     await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('## Parallelism Cap');
+    expect(section).toContain('follow the emitted provider-specific regeneration commands');
+    expect(section).toContain('aiwg workspace-context doctor');
     expect(section).toContain('max_parallel_subagents');
     expect(section).toContain('4 (provider default for claude)');
     expect(section).toContain('2 (provider default for claude)'); // ralph loops
@@ -156,35 +175,15 @@ describe('buildParallelismSection (#1362)', () => {
     );
   });
 
-  it('includes the MIN-of-caps composition guidance', async () => {
-    await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
-    const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('take the MIN of');
-    expect(section).toContain('AIWG_CONTEXT_WINDOW');
-    expect(section).toContain('framework-specific caps');
-    expect(section).toContain('natural task decomposition');
-    expect(section).toContain('aiwg config set --project');
-  });
-
-  it('emits the wrapper selection rubric and primary-agent responsibilities', async () => {
+  it('keeps project caps and provider facts while referring delegation policy to its rule', async () => {
     await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
     const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('assess whether it contains independent, bounded subtasks');
-    expect(section).toContain('aiwg-model-efficiency-worker');
-    expect(section).toContain('aiwg-model-coding-worker');
-    expect(section).toContain('aiwg-model-reasoning-worker');
-    expect(section).toContain('The primary agent retains orchestration');
+    expect(section).toContain('max_parallel_subagents');
+    expect(section).toContain('aiwg show rule subagent-scoping');
     expect(section).toContain('native custom subagents');
-  });
-
-  it('documents no-delegation edge cases', async () => {
-    await writeAiwgConfig(tmpDir, emptyConfig(['claude']));
-    const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('trivial work');
-    expect(section).toContain('tightly coupled changes');
-    expect(section).toContain('serial dependencies');
-    expect(section).toContain('collide in shared state');
-    expect(section).toContain('coordination costs');
+    expect(section).not.toContain('take the MIN of');
+    expect(section).not.toContain('The primary agent retains orchestration');
+    expect(section).not.toContain('coordination costs');
   });
 
   it.each([
@@ -242,6 +241,7 @@ describe('orchestration groups block (#2893 / #2914)', () => {
     // test/unit/models/resolver.test.ts); never the user's home install.
     vi.stubEnv('AIWG_HOME', process.cwd());
     vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'aiwg-user-config'));
+    vi.stubEnv('HOME', tmpDir);
   });
 
   afterEach(() => {
@@ -270,10 +270,9 @@ describe('orchestration groups block (#2893 / #2914)', () => {
     return cfg;
   }
 
-  // Byte-for-byte rendering of buildParallelismSection() at HEAD (before the
-  // orchestration-guidance block existed) for emptyConfig(['codex']): no
-  // worker_dispatch, no groups. Regenerate only from HEAD sources.
-  const PRE_DISPATCH_GOLDEN = `<!-- AIWG-PARALLELISM-CAP:START -->
+  // Compact caps and authority pointer for emptyConfig(['codex']) after
+  // Wave 4 deduplication, with dispatch disabled and no groups.
+  const COMPACT_CAP_GOLDEN = `<!-- AIWG-PARALLELISM-CAP:START -->
 ## Parallelism Cap
 
 This project caps parallel agent fan-out (#1359):
@@ -284,36 +283,27 @@ This project caps parallel agent fan-out (#1359):
 
 *Rationale*: Provider default for codex — adjust via 'aiwg config set --project parallelism.max_parallel_subagents N'
 
-### Model-selected delegation rubric
+Delegation policy and model-worker selection: \`aiwg show rule subagent-scoping\`.
+After changing project parallelism with \`aiwg config set/reset --project\`, follow the emitted provider-specific regeneration commands and run \`aiwg workspace-context doctor\`.
 
-For each non-trivial task, assess whether it contains independent, bounded subtasks that can run concurrently. When delegation is supported, prefer the deployed model-pinned wrappers by task characteristics and consequence:
-
-- \`aiwg-model-efficiency-worker\`: discovery, inventory, focused edits, and other bounded low-cost work.
-- \`aiwg-model-coding-worker\`: implementation, tests, debugging, and routine technical delivery.
-- \`aiwg-model-reasoning-worker\`: architecture, synthesis, difficult analysis, and high-consequence review.
-
-Do not delegate trivial work, tightly coupled changes, serial dependencies, or tasks likely to collide in shared state; also keep work local when coordination costs exceed the expected benefit. Parallelize only independent work, and take the MIN of provider limits, \`max_parallel_subagents\`, \`AIWG_CONTEXT_WINDOW\` budget, framework-specific caps (including the RLM 7-agent hard cap for RLM dispatches), and natural task decomposition. Bump the project cap via \`aiwg config set --project parallelism.max_parallel_subagents N\`.
-
-The primary agent retains orchestration, final integration, conflict resolution, validation, and user-facing accountability.
-
-**Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.
+**Provider behavior (codex)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it. Tier enforcement (generated wrapper defaults): pinned; effort: pinned via model_reasoning_effort (high/medium/low by wrapper). Native custom subagents carry explicit catalog model selectors. Explicit operator pins are preserved where supported. This is not a live resolved-model audit; provider/account policy may substitute models.
 
 **Direct worker dispatch**: off (\`parallelism.worker_dispatch\`). Do not assume other worker CLIs are unavailable — detect them yourself and offer \`aiwg config set --project parallelism.worker_dispatch true\` to the user if it would help.
 
 <!-- AIWG-PARALLELISM-CAP:END -->
 `;
 
-  it('dispatch disabled renders byte-identical output to the pre-dispatch rendering', async () => {
+  it('dispatch disabled renders compact caps and the rule pointer', async () => {
     await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
-    expect(await buildParallelismSection(tmpDir)).toBe(PRE_DISPATCH_GOLDEN);
+    expect(await buildParallelismSection(tmpDir)).toBe(COMPACT_CAP_GOLDEN);
   });
 
-  it('dispatch explicitly false renders byte-identical output even with groups configured', async () => {
+  it('dispatch explicitly false renders the same compact section even with groups configured', async () => {
     const cfg = groupConfig();
     cfg.parallelism.worker_dispatch = false;
     await writeAiwgConfig(tmpDir, cfg);
     const section = await buildParallelismSection(tmpDir);
-    expect(section).toBe(PRE_DISPATCH_GOLDEN);
+    expect(section).toBe(COMPACT_CAP_GOLDEN);
     expect(section).not.toContain('Orchestration groups');
   });
 
@@ -376,7 +366,7 @@ The primary agent retains orchestration, final integration, conflict resolution,
     await writeAiwgConfig(tmpDir, cfg);
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('Configured groups: none');
-    expect(section).toContain('the native delegation rubric above applies unchanged');
+    expect(section).toContain('the subagent-scoping rule applies');
     expect(section).not.toContain('Available groups');
     expect(section).not.toContain('keep work local or add a group');
   });
@@ -389,9 +379,9 @@ The primary agent retains orchestration, final integration, conflict resolution,
     await writeAiwgConfig(tmpDir, cfg);
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('check every 7s (project config)');
-    expect(section).toContain('confirm startup within 30s (project config)');
-    expect(section).toContain('quiet limit 45s (project config)');
-    expect(section).toContain('stall limit 120s (project config)');
+    expect(section).toContain('startup 30s (project config)');
+    expect(section).toContain('quiet 45s (project config)');
+    expect(section).toContain('stall 120s (project config)');
     expect(section).toContain('hard stop 600s (project config)');
     expect(section).not.toContain('every 15s');
     expect(section).not.toContain('(default)');
@@ -401,11 +391,11 @@ The primary agent retains orchestration, final integration, conflict resolution,
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('check every 15s (default)');
-    expect(section).toContain('confirm startup within 60s (default)');
-    expect(section).toContain('quiet limit 90s (default)');
-    expect(section).toContain('stall limit 300s (default)');
+    expect(section).toContain('startup 60s (default)');
+    expect(section).toContain('quiet 90s (default)');
+    expect(section).toContain('stall 300s (default)');
     expect(section).toContain('hard stop 1800s (default)');
-    expect(section).toContain('Resolved values win over these configured values');
+    expect(section).toContain('Resolved values win');
     expect(section).toContain('--format json');
     expect(section).toContain('invocation.health');
   });
@@ -421,10 +411,9 @@ The primary agent retains orchestration, final integration, conflict resolution,
     // Everything that does not depend on the worker-model defaults still renders.
     expect(section).toContain('max_parallel_subagents');
     expect(section).toContain('*Rationale*:');
-    expect(section).toContain('### Model-selected delegation rubric');
-    expect(section).toContain('aiwg-model-efficiency-worker');
-    expect(section).toContain('aiwg-model-coding-worker');
-    expect(section).toContain('aiwg-model-reasoning-worker');
+    expect(section).toContain('aiwg show rule subagent-scoping');
+    expect(section).not.toContain('### Model-selected delegation rubric');
+    expect(section).toContain('aiwg show rule subagent-scoping');
     expect(section).toContain('native custom subagents');
     // Only the orchestration/health details that need the defaults are omitted.
     expect(section).not.toContain('### Orchestration groups');
@@ -496,44 +485,52 @@ The primary agent retains orchestration, final integration, conflict resolution,
     expect(observer.shouldStop()).toBe(false);
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
-    expect(section).not.toContain('suspect transition');
-    expect(section).toContain('is not a stop');
-    expect(section).toContain('only `hung`');
-    expect(section).toContain('a no-progress stop');
-    expect(section).toContain('only a worker this conductor owns');
-    expect(section).toContain('Confirm the stop');
-    expect(section).toContain('preserve partial work');
-    expect(section).toContain('OBSERVER_GAP');
-    expect(section).toContain('unknown, never worker failure');
-    expect(section).toContain('Heartbeats and log bytes are not progress');
+    // #3451: AIWG.md keeps a one-line summary; the long supervision guidance
+    // lives in the worker-dispatch doc, which the section points to by plain path.
+    expect(section).toContain('only `hung` authorizes a no-progress stop');
+    expect(section).toContain(WORKER_HEALTH_DOC_POINTER);
+    expect(section).not.toContain('Supervise by observer state, never by suspicion');
+    const doc = workerDispatchDoc();
+    expect(doc).not.toContain('suspect transition');
+    expect(doc).toContain('is not a stop');
+    expect(doc).toContain('only `hung`');
+    expect(doc).toContain('a no-progress stop');
+    expect(doc).toContain('only a worker this conductor owns');
+    expect(doc).toContain('Confirm the stop');
+    expect(doc).toContain('preserve partial work');
+    expect(doc).toContain('OBSERVER_GAP');
+    expect(doc).toContain('unknown, never worker failure');
+    expect(doc).toContain('Heartbeats and log bytes are not progress');
     // "only `hung`" is scoped to no-progress diagnosis; the launcher's other
     // independent stop conditions (session-launcher.mjs ~596) are named too.
-    expect(section).toContain('stops independently of progress state');
-    expect(section).toContain('failed-to-start');
-    expect(section).toContain('HARD_DEADLINE');
-    expect(section).toContain('STEP_LIMIT');
-    expect(section).toContain('fatal observer-record failure');
+    expect(doc).toContain('stops independently of progress state');
+    expect(doc).toContain('failed-to-start');
+    expect(doc).toContain('HARD_DEADLINE');
+    expect(doc).toContain('STEP_LIMIT');
+    expect(doc).toContain('fatal observer-record failure');
   });
 
   it('preserves caps and rubric alongside the dispatch block', async () => {
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
     expect(section).toContain('max_parallel_subagents');
-    expect(section).toContain('aiwg-model-efficiency-worker');
-    expect(section).toContain('aiwg-model-coding-worker');
-    expect(section).toContain('aiwg-model-reasoning-worker');
+    expect(section).toContain('aiwg show rule subagent-scoping');
   });
 
-  it('describes health-window scaling as the largest applicable factor, never a product, and limits only the hard deadline/grace periods by wall-transport ceilings', async () => {
+  it('documents health-window scaling (largest factor, never a product; only the hard deadline is capped) in the worker-dispatch doc, not AIWG.md', async () => {
     await writeAiwgConfig(tmpDir, groupConfig());
     const section = await buildParallelismSection(tmpDir);
-    expect(section).toContain('the single largest applicable role/effort/model factor, never their product');
-    expect(section).toContain('180s/600s from the 90s/300s defaults');
-    expect(section).toContain('112.5s/375s');
-    expect(section).toContain('Only the hard deadline and its diagnostic/termination grace periods are capped by the remaining wall-clock and transport ceilings');
-    expect(section).toContain('startup, quiet, and stall keep their configured or scaled values');
-    expect(section).toContain('truncatedWindows');
-    expect(section).not.toContain('cap every window');
+    expect(section).not.toContain('truncatedWindows');
+    expect(section).not.toContain('112.5s/375s');
+    expect(section).toContain(WORKER_HEALTH_DOC_POINTER);
+    const doc = workerDispatchDoc();
+    expect(doc).toContain('the single largest applicable role/effort/model factor, never their product');
+    expect(doc).toContain('180s/600s from the 90s/300s defaults');
+    expect(doc).toContain('112.5s/375s');
+    expect(doc).toContain('Only the hard deadline and its diagnostic/termination grace periods are capped by the remaining wall-clock and transport ceilings');
+    expect(doc).toContain('startup, quiet, and stall keep their configured or scaled values');
+    expect(doc).toContain('truncatedWindows');
+    expect(doc).not.toContain('cap every window');
   });
 
   it('never writes process.env.AIWG_HOME while resolving the config (no set/delete observed)', async () => {
@@ -572,6 +569,178 @@ The primary agent retains orchestration, final integration, conflict resolution,
       rmSync(dirA, { recursive: true, force: true });
       rmSync(dirB, { recursive: true, force: true });
     }
+  });
+});
+
+describe('T-OG-07/12/15/19 remaining parallelism policy facts (#2893)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    vi.stubEnv('HOME', tmpDir);
+    vi.stubEnv('AIWG_HOME', process.cwd());
+    vi.stubEnv('AIWG_CONFIG', join(tmpDir, 'user-config'));
+    vi.stubEnv('AIWG_HIDE_PARALLELISM_IN_CONTEXT', '');
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
+
+  function writeFixture(f = workerResolutionFixture()) {
+    writeConfigFileDirect(tmpDir, f.snapshot.config);
+    writeFileSync(join(tmpDir, 'models.json'), JSON.stringify({ version: '2.0', defaults: { workerSelection: f.projectPolicy } }));
+    mkdirSync(join(tmpDir, '.cache/aiwg'), { recursive: true });
+    writeFileSync(join(tmpDir, '.cache/aiwg/model-catalog.v1.json'), JSON.stringify(f.snapshot.catalog));
+    return f;
+  }
+
+  it('G01 renders real cached timestamps and ages without converting a cache read into eligibility', async () => {
+    const f = writeFixture();
+    const now = new Date(Date.parse(f.request.now) + 3600_000);
+    const before = structuredClone(f);
+    const section = await buildParallelismSection(tmpDir, { now: () => now });
+    const selected = resolveWorkerPlan(f.snapshot, { ...f.request, now: now.toISOString() }).selected!;
+    expect(section).toContain(`Cached model observations read at ${now.toISOString()}`);
+    expect(section).toContain(`catalog fetchedAt: ${new Date(f.snapshot.catalog.discovery!.fetchedAt).toISOString()} (3600s old)`);
+    expect(section).toContain(`observedAt: ${new Date(selected.observedAt).toISOString()} (3600s old)`);
+    expect(section).toContain(`verifiedAt: ${new Date(selected.verifiedAt).toISOString()} (3600s old)`);
+    expect(section).toContain('workers cached observations: 2/2 members');
+    expect(section).toContain('no eligibility read is performed by context generation');
+    expect(section).toContain('Ages are measured at this read and grow afterward');
+    expect(f).toEqual(before);
+  });
+
+  it('G02 preserves mixed observation ages and reports missing or ambiguous member evidence as unknown', async () => {
+    const f = workerResolutionFixture();
+    const rows = f.snapshot.catalog.discovery!.instances!.codex.models;
+    rows[1].worker!.observedAt = '2026-10-08T00:00:00Z';
+    writeFixture(f);
+    const deps = { now: () => new Date('2026-10-09T00:00:00Z') };
+    expect(await buildParallelismSection(tmpDir, deps)).toContain('observedAt: 2026-10-07T00:00:00.000Z (172800s old) to 2026-10-08T00:00:00.000Z (86400s old)');
+    rows.push(structuredClone(rows[0]));
+    delete rows[1].worker;
+    writeFixture(f);
+    expect(await buildParallelismSection(tmpDir, deps)).toContain('workers cached observations: 0/2 members; observedAt: unknown; verifiedAt: unknown');
+  });
+
+  it.each(['missing', 'corrupt', 'invalid'] as const)('G03 reports unknown ages for a %s catalog', async kind => {
+    writeFixture();
+    const cache = join(tmpDir, '.cache/aiwg/model-catalog.v1.json');
+    if (kind === 'missing') rmSync(cache);
+    if (kind === 'corrupt') writeFileSync(cache, '{');
+    if (kind === 'invalid') writeFileSync(cache, JSON.stringify({ version: '1', providers: {}, discovery: { fetchedAt: 'invented' } }));
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('catalog fetchedAt: unknown');
+    expect(section).toContain('workers cached observations: 0/2 members; observedAt: unknown; verifiedAt: unknown');
+    expect(section).not.toContain('invented');
+  });
+
+  it('G04 labels future evidence without inventing a nonnegative age and the resolver blocks it', async () => {
+    const f = writeFixture();
+    const now = new Date(Date.parse(f.request.now) - 1000);
+    const section = await buildParallelismSection(tmpDir, { now: () => now });
+    expect(section).toContain('future timestamp; age unavailable');
+    expect(section).toContain('Future-dated evidence is blocked');
+    expect(resolveWorkerPlan(f.snapshot, { ...f.request, now: now.toISOString() }).selected).toBeNull();
+  });
+
+  it('G05 renders merged freshness limits and matches resolver warning/block boundaries', async () => {
+    const f = workerResolutionFixture();
+    f.projectPolicy.freshness = { warnHours: 1, blockHours: 2, policyDays: 3 };
+    writeFixture(f);
+    const models = await new ConfigLoader(tmpDir).load(f.snapshot.config.parallelism);
+    f.snapshot.models = models;
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('observation warning after 1 hours; observation blocked after 2 hours; verification blocked after 3 days');
+    const resolveAt = (hours: number) => resolveWorkerPlan(f.snapshot, {
+      ...f.request, now: new Date(Date.parse(f.request.now) + hours * 3600_000).toISOString(),
+    });
+    expect(resolveAt(1).selected?.diagnostics).toEqual([]);
+    expect(resolveAt(1.5).selected?.diagnostics).toContainEqual(expect.objectContaining({ blocking: false }));
+    expect(resolveAt(2).selected).not.toBeNull();
+    expect(resolveAt(2.01).selected).toBeNull();
+    for (const row of f.snapshot.catalog.discovery!.instances!.codex.models) row.worker!.verifiedAt = '2026-10-03T00:00:00Z';
+    expect(resolveAt(0).selected).toBeNull();
+  });
+
+  it('G06 explains required cross-family review and matches missing, same, unknown and conflicting lineage guards', async () => {
+    const f = writeFixture();
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain('reviewer must use a different observed model family from the writer');
+    expect(section).toContain('Different CLI names do not prove different families');
+    expect(section).toContain('direct CLI does not accept review-lineage flags');
+    expect(section).toContain('Family diversity does not establish independent errors');
+    expect(section).toContain('same-vendor or cross-vendor agreement is not proof');
+    expect(section).toContain('Consequential claims require an executable check or human acceptance');
+    f.request.requireDifferentFamily = true;
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    f.request.reviewOf = { ...structuredClone(f.observation), cliId: 'muse' };
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    f.snapshot.catalog.discovery!.instances!.codex.models[1].worker!.family = 'independent-family';
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected?.member).toBe('alternate');
+    f.request.reviewOf.family = 'unknown';
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    f.request.reviewOf = { ...structuredClone(f.observation), conflicts: [{ field: '/family', evidence: ['a', 'b'].map(value => ({
+      value, source: 'fixture:family', pointer: '/family', observedAt: f.request.now, digest: f.observation.provenance[0].digest,
+    })) }] };
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    const argv = ['--role', 'coding', '--task', 'implementation', '--group', 'workers', '--brief', '/tmp/brief', '--workdir', '/tmp/tree', '--final-output', '/tmp/final'];
+    for (const flag of ['--review-of', '--require-different-family']) expect(() => parseWorkerCommandArgs([...argv, flag, 'synthetic'])).toThrow('Unsupported');
+  });
+
+  it.each(['groupCaps', 'memberCaps', 'cliCaps', 'modelCaps', 'quotaCaps'] as const)('G07 renders %s and matches the resolver minimum for local processing', async field => {
+    const f = workerResolutionFixture();
+    const p = f.snapshot.config.parallelism!;
+    p.max_parallel_subagents = 12;
+    p.groups!.workers.maxParallel = 10;
+    p.clis = { codex: { adapter: 'providers:codex', accountScope: 'synthetic', quotaScope: 'local-shared' } };
+    for (const row of f.snapshot.catalog.discovery!.instances!.codex.models) row.worker!.dataUse.processing = 'local';
+    const keys = { groupCaps: 'workers', memberCaps: 'workers/primary', cliCaps: 'codex', modelCaps: 'vendor/synthetic%2Fa%25b', quotaCaps: 'local-shared' };
+    p.admission = Object.fromEntries(Object.entries(keys).map(([name, key]) => [name, { [key]: name === field ? 1 : 9 }]));
+    writeFixture(f);
+    const section = await buildParallelismSection(tmpDir);
+    expect(section).toContain(`${field}: ${keys[field]}=1`);
+    expect(section).toContain('Local/self-hosted models obey these same ceilings');
+    expect(section).toContain('Tier 0 conductors must self-count active workers');
+    expect(section).toContain('outside your own harness sandbox');
+    expect(section).toContain('`sandbox.excludedCommands` or an unsandboxed Bash call');
+    expect(section).toContain('never nest sandboxes');
+    expect(section).not.toContain('your own harness sandbox applies');
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected?.effectiveMaxParallel).toBe(1);
+    f.request.maxParallel = 0;
+    expect(section).toContain('a current/request capacity ceiling of zero blocks selection');
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+  });
+
+  it.each(PROVIDER_IDS)('G08 renders identical group policy facts for conductor %s', async provider => {
+    const f = writeFixture();
+    const deps = { now: () => new Date(f.request.now) };
+    const baseline = await buildParallelismSection(tmpDir, deps);
+    f.snapshot.config.providers = [provider];
+    writeFixture(f);
+    const section = await buildParallelismSection(tmpDir, deps);
+    const groupBlock = (text: string) => text.slice(text.indexOf('### Orchestration groups'));
+    expect(groupBlock(section)).toBe(groupBlock(baseline));
+    const original = `Operator introduction\n${baseline}\nOperator closing text`;
+    const replaced = replaceOrAppendParallelismBlock(original, section);
+    expect(replaced).toContain('Operator introduction');
+    expect(replaced).toContain('Operator closing text');
+    expect(replaced.split(PARALLELISM_BLOCK_START)).toHaveLength(2);
+  });
+
+  it('G09 hiding guidance leaves resolver review and capacity guards intact and reads no catalog', async () => {
+    const f = writeFixture();
+    const readCatalog = vi.fn();
+    vi.stubEnv('AIWG_HIDE_PARALLELISM_IN_CONTEXT', '1');
+    expect(await buildParallelismSection(tmpDir, { readCatalog })).toBe('');
+    expect(readCatalog).not.toHaveBeenCalled();
+    f.request.requireDifferentFamily = true;
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
+    delete f.request.requireDifferentFamily;
+    f.request.maxParallel = 0;
+    expect(resolveWorkerPlan(f.snapshot, f.request).selected).toBeNull();
   });
 });
 

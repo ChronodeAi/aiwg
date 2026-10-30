@@ -10,11 +10,13 @@
   "entry": {
     "rules": "rules/",
     "templates": "templates/",
-    "skills": "skills/"
+    "skills": "skills/",
+    "gatePacks": "gate-packs/"
   },
   "provides": {
     "rules": ["dev-ci-self-contained", "dev-pipeline-safety"],
     "templates": ["pipeline", "ci-builder-dockerfile", "ci-builder-workflow"],
     "skills": ["dev-ci-builder", "dev-pipeline-audit"]
-  }
+  },
+  "gatePacks": ["ci-flake"]
 }

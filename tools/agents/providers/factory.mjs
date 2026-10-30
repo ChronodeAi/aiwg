@@ -1,3 +1,4 @@
+import { withModelWrapper } from './model-wrapper.mjs';
 /**
  * Factory AI Provider
  *
@@ -16,7 +17,6 @@
  *   - Enables custom droids in ~/.factory/settings.json
  *   - Creates/updates AGENTS.md from template
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -25,6 +25,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listMdFilesRecursive,
@@ -54,14 +55,11 @@ import {
   deploySoulCompanions
 } from './base.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
-
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'factory';
 export const aliases = [];
-
 export const paths = {
   agents: '.factory/droids/',
   commands: '.factory/commands/',
@@ -296,7 +294,8 @@ export function mapModel(originalModel, modelCfg, modelsConfig) {
 /**
  * Transform AIWG agent to Factory droid format
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('factory', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { modelsConfig = {} } = opts;
 
   // Parse existing frontmatter
@@ -576,6 +575,7 @@ export function deploySkills(skillDirs, targetDir, opts) {
  * Deploy rules to .factory/rules/
  */
 export function deployRules(ruleFiles, targetDir, opts) {
+  if (opts.ruleDelivery) return [];
   const destDir = path.join(targetDir, paths.rules);
   ensureDir(destDir, opts.dryRun);
   cleanupOldRuleFiles(destDir, opts);
@@ -816,7 +816,7 @@ export async function postDeploy(targetDir, opts) {
 
   // Create/update AGENTS.md if requested
   if (opts.createAgentsMd) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
 }
 
@@ -945,6 +945,10 @@ export function getFileExtension(type) {
  * Main deployment function for Factory provider
  */
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath, transformSkillMd: transformSkillFrontmatter }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,

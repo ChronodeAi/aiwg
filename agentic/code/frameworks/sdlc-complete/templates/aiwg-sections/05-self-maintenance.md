@@ -40,7 +40,7 @@ If steward is not loaded natively, discover and show it:
 
 ```bash
 aiwg discover "steward repair AIWG setup" --type skill
-aiwg show skill steward
+aiwg show skill steward --body
 ```
 
 Standard recovery ladder:

@@ -23,6 +23,7 @@ beforeEach(async () => {
   // Index rebuilds must not contend with other tests or use the operator cache.
   vi.stubEnv('HOME', homeDir);
   vi.stubEnv('USERPROFILE', homeDir);
+  vi.stubEnv('CODEX_HOME', path.join(homeDir, '.codex'));
   vi.stubEnv('XDG_CACHE_HOME', path.join(homeDir, '.cache'));
   vi.stubEnv('XDG_CONFIG_HOME', path.join(homeDir, '.config'));
   vi.stubEnv('XDG_DATA_HOME', path.join(homeDir, '.local', 'share'));
@@ -94,6 +95,7 @@ describe('compound-memory addon activation', () => {
   });
 
   it('activates over standalone line-memory and llm-wiki data without rewriting either store', async () => {
+    expect(process.env.CODEX_HOME).toBe(path.join(homeDir, '.codex'));
     const linePath = path.join(projectDir, '.aiwg/memory/line-memory.txt');
     const wikiPath = path.join(projectDir, '.aiwg/wiki/concepts/existing.md');
     await mkdir(path.dirname(linePath), { recursive: true });

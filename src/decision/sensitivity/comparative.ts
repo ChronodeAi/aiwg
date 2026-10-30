@@ -1,3 +1,4 @@
+import { assertDecisionCeiling, ceilingDecision } from '../../gates/lattice.js';
 import { pairedBinaryDifferenceInterval, wilsonScoreInterval } from '../qualification/quality.js';
 import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from '../qualification/release.js';
 import { checkSensitivitySchema, sensitivityDigest, validateSensitivityReport } from './contract.js';
@@ -196,9 +197,8 @@ export function buildComparativeReplayReport(input: ComparativeReplayInput): Com
   if (input.reviewerAuditDigest !== null) throw new Error('operator review ingestion is not implemented');
   findings.add('reviewer-audit-pending');
   const upstreamDecision = input.integrity.release_gate.decision;
-  const decision = upstreamDecision === 'ROLLBACK' || input.integrity.integrity_state === 'compromised'
-    || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK'
-    : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
+  const decision = ceilingDecision(upstreamDecision, input.integrity.integrity_state === 'compromised'
+    || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' : 'PROMOTE', findings.size > 0 ? 'HOLD' : 'PROMOTE');
   const payload: Omit<ComparativeReplayReport, 'digest'> = {
     schemaVersion: 'decision-comparative-replay-report/v1', mode: 'shadow',
     semantics: 'associative-sensitivity-not-causal', actionAuthorization: 'not-authorized',
@@ -216,6 +216,8 @@ export function buildComparativeReplayReport(input: ComparativeReplayInput): Com
 
 export function validateComparativeReplayReport(report: ComparativeReplayReport, input: ComparativeReplayInput): void {
   checkSensitivitySchema('comparativeReport', report);
+  assertDecisionCeiling(report.decision, report.upstreamDecision, input.integrity.release_gate.decision);
   const expected = buildComparativeReplayReport(input);
+  assertDecisionCeiling(report.decision, expected.decision);
   if (sensitivityDigest(report) !== sensitivityDigest(expected)) throw new Error('comparative replay report differs from bound inputs');
 }

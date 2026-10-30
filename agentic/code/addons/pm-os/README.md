@@ -15,6 +15,10 @@ This is the project-local, promotion-ready AIWG packaging of PMOS 2.6.0. It keep
 
 The canonical invocation surfaces remain PMOS skills. `registry/commands.json` is their auditable interface registry, including `skill-browser` as the fifteenth core surface; `commands/` contains the exact 26 thin Codex adapters derived from that registry.
 
+The runtime safety and resource-resolution rule declares explicit `kernel`
+activation so its confirmation and addon-root requirements remain loaded whenever
+PMOS is selected. It does not rely on the missing-activation on-demand fallback.
+
 ## Layout
 
 ```text

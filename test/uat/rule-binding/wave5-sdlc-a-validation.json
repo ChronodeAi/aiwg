@@ -1,0 +1,1120 @@
+{
+  "issue": "roctinam/aiwg#2945",
+  "lane": "sdlc-a",
+  "rule_count": 19,
+  "activation_counts": {
+    "kernel": 1,
+    "summary": 1,
+    "bound": 15,
+    "paths": 2,
+    "on-demand": 0
+  },
+  "critical_decisions": [
+    {
+      "rule": "citation-policy",
+      "enforcement": "critical",
+      "activation": "kernel",
+      "reason": "CRITICAL universal prohibition on fabricated citations and unsupported claims applies across all roles; retain the ADR kernel default."
+    }
+  ],
+  "fallback_rollbacks": [],
+  "source_integrity": "All 19 original bodies and pre-existing frontmatter fields are preserved byte for byte; only activation, authored summaries, concrete bindings, paths and discovery triggers were added.",
+  "rules": [
+    {
+      "name": "actionable-feedback",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/actionable-feedback.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "summary": "Give feedback with an exact location, concrete change, rationale, severity and score; align the verdict with findings and track improvement.",
+      "bound_to": {
+        "agents": [
+          "code-reviewer",
+          "documentation-synthesizer",
+          "quality-assessor",
+          "requirements-reviewer",
+          "security-auditor",
+          "test-engineer"
+        ],
+        "skills": [
+          "agent-loop",
+          "artifact-orchestration",
+          "execute-feedback",
+          "flow-architecture-evolution",
+          "flow-guided-implementation",
+          "flow-requirements-evolution",
+          "pr-review",
+          "ralph",
+          "ralph-external"
+        ],
+        "flows": [
+          "flow-architecture-evolution",
+          "flow-guided-implementation",
+          "flow-requirements-evolution"
+        ]
+      },
+      "triggers": [
+        "how to give actionable review feedback",
+        "feedback needs a location and rationale",
+        "score refinement feedback"
+      ]
+    },
+    {
+      "name": "agent-fallback",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/agent-fallback.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "summary": "Route failed or unavailable specialists through the capability fallback chain; respect retry limits, log coverage and triggers, and report degraded capability.",
+      "bound_to": {
+        "agents": [
+          "executive-orchestrator",
+          "ralph-loop",
+          "recovery-orchestrator"
+        ],
+        "skills": [
+          "agent-loop",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "mission-control",
+          "orchestrate-project",
+          "ralph",
+          "ralph-external"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "triggers": [
+        "specialist agent unavailable fallback",
+        "agent invocation failed route replacement",
+        "report degraded agent capability"
+      ]
+    },
+    {
+      "name": "agent-friendly-code",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "summary": "Keep generated code small, focused and greppable; follow size and complexity thresholds, use explicit modules and purpose comments, and extract additions from oversized files.",
+      "bound_to": {
+        "agents": [
+          "ai-ml-engineer",
+          "blockchain-developer",
+          "build-engineer",
+          "code-reviewer",
+          "component-owner",
+          "data-engineer",
+          "database-optimizer",
+          "debugger",
+          "devops-engineer",
+          "django-expert",
+          "frontend-specialist",
+          "integration-engineer",
+          "kubernetes-expert",
+          "legacy-modernizer",
+          "mobile-developer",
+          "performance-engineer",
+          "react-expert",
+          "reliability-engineer",
+          "self-debug",
+          "software-implementer",
+          "spring-boot-expert",
+          "test-architect",
+          "test-engineer",
+          "toolsmith",
+          "toolsmith-dynamic",
+          "toolsmith-provider"
+        ],
+        "skills": [
+          "address-issues",
+          "agent-loop",
+          "auto-test-execution",
+          "build-poc",
+          "code-chunker",
+          "decompose-file",
+          "flow-delivery-track",
+          "flow-guided-implementation",
+          "flow-iteration-dual-track",
+          "flow-test-strategy-execution",
+          "generate-tests",
+          "ralph",
+          "ralph-external"
+        ],
+        "flows": [
+          "flow-delivery-track",
+          "flow-guided-implementation",
+          "flow-iteration-dual-track",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "paths": [
+        "**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,c,cc,cpp,h,hpp,cs,rb,php,swift,scala,sh,bash,ps1,sql,tf,yaml,yml}"
+      ],
+      "triggers": [
+        "keep generated code agent friendly",
+        "code file size and complexity thresholds",
+        "split oversized source modules"
+      ]
+    },
+    {
+      "name": "agent-generation-guardrails",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/agent-generation-guardrails.md",
+      "enforcement": "high",
+      "activation": "paths",
+      "summary": "Check existing and proposed line counts before writing code; warn at 300 lines, split before 500, and extract large additions with descriptive names and purpose comments.",
+      "bound_to": {
+        "agents": [
+          "ai-ml-engineer",
+          "blockchain-developer",
+          "build-engineer",
+          "code-reviewer",
+          "component-owner",
+          "data-engineer",
+          "database-optimizer",
+          "debugger",
+          "devops-engineer",
+          "django-expert",
+          "frontend-specialist",
+          "integration-engineer",
+          "kubernetes-expert",
+          "legacy-modernizer",
+          "mobile-developer",
+          "performance-engineer",
+          "react-expert",
+          "reliability-engineer",
+          "self-debug",
+          "software-implementer",
+          "spring-boot-expert",
+          "test-architect",
+          "test-engineer",
+          "toolsmith",
+          "toolsmith-dynamic",
+          "toolsmith-provider"
+        ],
+        "skills": [
+          "address-issues",
+          "agent-loop",
+          "auto-test-execution",
+          "build-poc",
+          "code-chunker",
+          "decompose-file",
+          "flow-delivery-track",
+          "flow-guided-implementation",
+          "flow-iteration-dual-track",
+          "flow-test-strategy-execution",
+          "generate-tests",
+          "ralph",
+          "ralph-external"
+        ],
+        "flows": [
+          "flow-delivery-track",
+          "flow-guided-implementation",
+          "flow-iteration-dual-track",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "paths": [
+        "**/*.{ts,tsx,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,c,cc,cpp,h,hpp,cs,rb,php,swift,scala,sh,bash,ps1,sql,tf,yaml,yml}"
+      ],
+      "triggers": [
+        "check file size before generating code",
+        "generated file would exceed 500 lines",
+        "extract additions from oversized code"
+      ]
+    },
+    {
+      "name": "artifact-discovery",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/artifact-discovery.md",
+      "enforcement": "high",
+      "activation": "summary",
+      "summary": "Query the artifact index as JSON before phase work, check dependencies before edits, rebuild after artifact changes, and use index statistics for project health.",
+      "bound_to": {
+        "agents": [
+          "architecture-designer",
+          "context-librarian",
+          "executive-orchestrator",
+          "requirements-analyst",
+          "technical-writer",
+          "test-architect"
+        ],
+        "skills": [
+          "artifact-lookup",
+          "artifact-orchestration",
+          "build-artifact-index",
+          "check-traceability",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "orchestrate-project",
+          "project-health-check"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "triggers": [
+        "discover existing SDLC artifacts before phase work",
+        "check artifact dependencies before editing",
+        "query artifact index as JSON"
+      ]
+    },
+    {
+      "name": "auto-reply-chains",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/auto-reply-chains.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Bound auto-reply conversations with explicit termination and turn limits; preserve history, honor human-input modes, and terminate gracefully on null replies or failures.",
+      "bound_to": {
+        "agents": [
+          "executive-orchestrator",
+          "ralph-loop"
+        ],
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "artifact-orchestration",
+          "flow-guided-implementation",
+          "mission-control"
+        ],
+        "flows": [
+          "flow-guided-implementation"
+        ]
+      },
+      "triggers": [
+        "configure auto reply chain termination",
+        "stop autonomous agent conversation",
+        "limit multi agent dialogue turns"
+      ]
+    },
+    {
+      "name": "best-output-selection",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/best-output-selection.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Preserve iterations and select the best validated output; record hypotheses before changes, exclude VOID results, and stop at budget exhaustion with a best-output report.",
+      "bound_to": {
+        "agents": [
+          "ralph-loop",
+          "ralph-verifier"
+        ],
+        "skills": [
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "execute-feedback",
+          "flow-guided-implementation",
+          "mission-control",
+          "ralph",
+          "ralph-external",
+          "ralph-resume"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-guided-implementation"
+        ]
+      },
+      "triggers": [
+        "select best iteration rather than final output",
+        "loop budget exhausted best output report",
+        "preserve iteration hypotheses and results"
+      ]
+    },
+    {
+      "name": "citation-policy",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/citation-policy.md",
+      "enforcement": "critical",
+      "activation": "kernel",
+      "summary": "Retrieve and verify corpus sources before citing; never invent references, quotes or locations, and match claim strength to evidence quality.",
+      "triggers": [
+        "verify citations before making claims",
+        "never invent citations or source locations",
+        "match claim language to evidence quality"
+      ]
+    },
+    {
+      "name": "config-in-environment",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/config-in-environment.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Store environment-varying configuration outside source; centralize and validate startup reads, document variables, and load secrets from managers or referenced files.",
+      "bound_to": {
+        "agents": [
+          "cloud-architect",
+          "deployment-manager",
+          "devops-engineer",
+          "security-auditor",
+          "software-implementer"
+        ],
+        "skills": [
+          "build-poc",
+          "flow-deploy-to-production",
+          "flow-release"
+        ],
+        "flows": [
+          "flow-deploy-to-production",
+          "flow-release"
+        ]
+      },
+      "triggers": [
+        "store deployment configuration in environment",
+        "validate environment variables at startup",
+        "document environment config and secret files"
+      ]
+    },
+    {
+      "name": "conversable-agent-interface",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/conversable-agent-interface.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Define send, receive and generateReply interfaces for SDLC agents; preserve history, honor requestReply, include artifact metadata, and return null when no reply is needed.",
+      "bound_to": {
+        "agents": [
+          "agentsmith",
+          "executive-orchestrator"
+        ],
+        "skills": [
+          "add-agent",
+          "agent-loop",
+          "artifact-orchestration",
+          "devkit-create-agent",
+          "smith-agenticdef"
+        ]
+      },
+      "triggers": [
+        "define conversable agent interface",
+        "agent send receive generateReply protocol",
+        "preserve agent conversation history"
+      ]
+    },
+    {
+      "name": "criticality-panel-sizing",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/criticality-panel-sizing.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Size review panels and agreement thresholds by task criticality; include required reviewers, escalate low confidence, and log justified human overrides.",
+      "bound_to": {
+        "agents": [
+          "code-reviewer",
+          "executive-orchestrator",
+          "quality-assessor",
+          "security-auditor"
+        ],
+        "skills": [
+          "artifact-orchestration",
+          "flow-gate-check",
+          "flow-security-review-cycle",
+          "gate-evaluation",
+          "pr-review"
+        ],
+        "flows": [
+          "flow-gate-check",
+          "flow-security-review-cycle"
+        ]
+      },
+      "triggers": [
+        "choose review panel size by criticality",
+        "ensemble review agreement threshold",
+        "log review criticality override"
+      ]
+    },
+    {
+      "name": "disposable-processes",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/disposable-processes.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Start processes quickly and shut down gracefully on SIGTERM; drain or requeue work within the grace window, checkpoint before acknowledgment, and make retries safe.",
+      "bound_to": {
+        "agents": [
+          "deployment-manager",
+          "devops-engineer",
+          "reliability-engineer",
+          "software-implementer"
+        ],
+        "skills": [
+          "build-poc",
+          "flow-deploy-to-production",
+          "flow-release"
+        ],
+        "flows": [
+          "flow-deploy-to-production",
+          "flow-release"
+        ]
+      },
+      "triggers": [
+        "graceful SIGTERM process shutdown",
+        "disposable process crash safety",
+        "fast startup and queue drain"
+      ]
+    },
+    {
+      "name": "executable-feedback",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "summary": "Execute tests before returning generated code; record results and root causes, apply targeted fixes, retry at most three times, and escalate with execution history.",
+      "bound_to": {
+        "agents": [
+          "ai-ml-engineer",
+          "blockchain-developer",
+          "build-engineer",
+          "code-reviewer",
+          "component-owner",
+          "data-engineer",
+          "database-optimizer",
+          "debugger",
+          "devops-engineer",
+          "django-expert",
+          "frontend-specialist",
+          "integration-engineer",
+          "kubernetes-expert",
+          "legacy-modernizer",
+          "mobile-developer",
+          "performance-engineer",
+          "react-expert",
+          "reliability-engineer",
+          "self-debug",
+          "software-implementer",
+          "spring-boot-expert",
+          "test-architect",
+          "test-engineer",
+          "toolsmith",
+          "toolsmith-dynamic",
+          "toolsmith-provider"
+        ],
+        "skills": [
+          "address-issues",
+          "agent-loop",
+          "agent-loop-ext",
+          "aiwg-mission",
+          "auto-test-execution",
+          "build-poc",
+          "code-chunker",
+          "decompose-file",
+          "execute-feedback",
+          "flow-delivery-track",
+          "flow-guided-implementation",
+          "flow-iteration-dual-track",
+          "flow-test-strategy-execution",
+          "generate-tests",
+          "mission-control",
+          "ralph",
+          "ralph-external"
+        ],
+        "flows": [
+          "flow-delivery-track",
+          "flow-guided-implementation",
+          "flow-iteration-dual-track",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "triggers": [
+        "run tests before returning generated code",
+        "retry failing tests with root cause analysis",
+        "persist executable feedback debug memory"
+      ]
+    },
+    {
+      "name": "failure-mitigation",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/failure-mitigation.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "summary": "Load validation context, detect and classify generation failures, apply archetype-specific mitigations and severity responses, and log issues without overstating evidence.",
+      "bound_to": {
+        "agents": [
+          "architecture-designer",
+          "code-reviewer",
+          "executive-orchestrator",
+          "quality-assessor",
+          "recovery-orchestrator",
+          "requirements-analyst",
+          "security-auditor",
+          "software-implementer",
+          "technical-writer",
+          "test-engineer"
+        ],
+        "skills": [
+          "agent-loop",
+          "aiwg-mission",
+          "artifact-orchestration",
+          "execute-feedback",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "gate-evaluation",
+          "orchestrate-project",
+          "ralph"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "triggers": [
+        "classify and mitigate agent failure archetypes",
+        "detect hallucination context and instruction failures",
+        "apply severity response to generation failure"
+      ]
+    },
+    {
+      "name": "few-shot-examples",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/few-shot-examples.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Keep two or three complete, diverse examples reachable per agent; inline at most one compact example, externalize the rest, and keep definitions within the 16 KB ceiling.",
+      "bound_to": {
+        "agents": [
+          "agentsmith"
+        ],
+        "skills": [
+          "add-agent",
+          "devkit-create-agent",
+          "smith-agenticdef"
+        ]
+      },
+      "triggers": [
+        "agent few shot examples catalog",
+        "externalize examples from agent definitions",
+        "agent definition 16 KB size ceiling"
+      ]
+    },
+    {
+      "name": "hitl-gates",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/hitl-gates.md",
+      "enforcement": "high",
+      "activation": "bound",
+      "summary": "Require blocking human approval at SDLC phase transitions and artifact omissions; declare gate modes and conditions, track cost and rationale, and present decision context.",
+      "bound_to": {
+        "agents": [
+          "deployment-manager",
+          "executive-orchestrator",
+          "quality-assessor",
+          "security-gatekeeper"
+        ],
+        "skills": [
+          "artifact-orchestration",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-deploy-to-production",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-inception-to-elaboration",
+          "gate-evaluation",
+          "orchestrate-project",
+          "ralph",
+          "ralph-external",
+          "security-gate"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-deploy-to-production",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-inception-to-elaboration"
+        ]
+      },
+      "triggers": [
+        "human approval gate at phase transition",
+        "artifact omission requires explicit approval",
+        "configure blocking gate timeout"
+      ]
+    },
+    {
+      "name": "hitl-patterns",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/hitl-patterns.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Present explicit review, approval, decision or override gates; mark drafts and uncertainties, incorporate human revisions, and preserve gate history and timeout handling.",
+      "bound_to": {
+        "agents": [
+          "architecture-designer",
+          "deployment-manager",
+          "executive-orchestrator",
+          "security-auditor",
+          "test-architect"
+        ],
+        "skills": [
+          "agent-loop",
+          "artifact-orchestration",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-deploy-to-production",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-inception-to-elaboration",
+          "gate-evaluation",
+          "orchestrate-project",
+          "ralph",
+          "ralph-external",
+          "security-gate"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-deploy-to-production",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-inception-to-elaboration"
+        ]
+      },
+      "triggers": [
+        "draft then edit human review workflow",
+        "human gate approve revise abort delegate",
+        "record gate history and draft uncertainty"
+      ]
+    },
+    {
+      "name": "human-gate-display",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/human-gate-display.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Display gate identity, context, deliverables and next steps; offer approve, reject, view, diff, edit, skip and quit, and log decisions with artifact review history.",
+      "bound_to": {
+        "agents": [
+          "deployment-manager",
+          "executive-orchestrator",
+          "quality-assessor",
+          "security-gatekeeper"
+        ],
+        "skills": [
+          "artifact-orchestration",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-deploy-to-production",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-inception-to-elaboration",
+          "gate-evaluation",
+          "orchestrate-project",
+          "ralph",
+          "ralph-external",
+          "security-gate"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-deploy-to-production",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-inception-to-elaboration"
+        ]
+      },
+      "triggers": [
+        "display human approval gate options",
+        "show gate deliverables and next steps",
+        "log human gate decisions"
+      ]
+    },
+    {
+      "name": "index-generation",
+      "source": "agentic/code/frameworks/sdlc-complete/rules/index-generation.md",
+      "enforcement": "medium",
+      "activation": "bound",
+      "summary": "Generate current artifact indexes from frontmatter with topic, year, license and full listings; preserve custom sections, validate required fields, and reject orphan entries.",
+      "bound_to": {
+        "agents": [
+          "context-librarian"
+        ],
+        "skills": [
+          "artifact-metadata",
+          "build-artifact-index",
+          "index"
+        ]
+      },
+      "triggers": [
+        "generate artifact directory INDEX markdown",
+        "preserve custom index sections",
+        "validate index entries against frontmatter"
+      ]
+    }
+  ],
+  "gates": {
+    "U1": {
+      "status": "See real_deploy for native-directory bytes; this lane does not assert the combined Wave 5 release ceiling.",
+      "note": "Claude directory bytes include native conditional path rules, so they are not a measurement of unconditional startup loading.",
+      "base_rule_bytes_from_brief": 168337,
+      "after_native_rule_directory_bytes": 144761,
+      "reference_reduction_bytes": 23576,
+      "baseline_note": "The base count is supplied by the lane brief, not remeasured here. Native directory bytes include conditional path rules."
+    },
+    "U2": {
+      "passed": true,
+      "tagged_lane_rules": 19,
+      "activation_lint_exit_code": 0,
+      "remaining_corpus_migration_warnings": 124,
+      "complete_corpus_coverage": false,
+      "note": "Other lanes own remaining rules and the final migration-wide warning-to-error switch."
+    },
+    "U3": {
+      "passed": true,
+      "declared_pairs": 498,
+      "distinct_artifacts": 123,
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "minimum_pair_checks": 2988,
+      "note": "Every declared pair is present with one managed block in its deployed definitions; flow entry points bind both indexed skills and YAML flows where both exist."
+    },
+    "U4": {
+      "passed": true,
+      "cli_pairs": 498,
+      "cli_envelopes": 123,
+      "mcp": "Existing CLI/MCP parity and flow forwarding tests pass in the unit suite."
+    },
+    "U5": {
+      "status": "not run; conductor on titan",
+      "new_probe_rules": 9,
+      "new_probes": 27,
+      "high_rules_moved": 8,
+      "additional_legacy_high_severity_rule": "disposable-processes",
+      "schema_validation": "Shared probes.schema.json and loadProbes both pass. The lane YAML preserves the 21 baseline rows required by the schema and runner, then appends nine lane rows.",
+      "planned_calls_at_n5": 135
+    },
+    "U6": {
+      "passed": true,
+      "moved_rules_ranked_top_three": 18,
+      "index": "Framework index force-built in isolated HOME before show and discover."
+    },
+    "U7": {
+      "status": "not run; conductor on titan",
+      "negative_probes_added": 9
+    },
+    "U8": {
+      "status": "not run; full-deploy model dispatch/headroom requires conductor validation"
+    },
+    "U9": {
+      "passed": true,
+      "scope": "Canonical lane workloads plus existing per-provider deployment fixtures; no claim about a combined full-corpus Hermes profile.",
+      "codex_agents_md_limit_bytes": 32768,
+      "hermes_context_hard_limit_chars": 19000,
+      "hermes_workloads": [
+        "coding: citation-policy plus the three code-generation rules",
+        "workflow: citation-policy plus the other fifteen scoped rules"
+      ],
+      "hermes_initial_combined_fixture": {
+        "passed": false,
+        "chars": 19536,
+        "limit": 19000,
+        "resolution": "Keep complete citation-policy kernel text and all bindings; validate coding and workflow installations separately without changing the production cap."
+      }
+    }
+  },
+  "real_deploy": {
+    "framework": "sdlc",
+    "provider": "claude",
+    "exit_code": 0,
+    "command": [
+      "env",
+      "-u",
+      "AIWG_HOME",
+      "node",
+      "/srv/jmagly/aiwg-wt/w5-sdlc-a/bin/aiwg.mjs",
+      "use",
+      "sdlc",
+      "--provider",
+      "claude"
+    ],
+    "project": "/tmp/aiwg-wave5-sdlc-a-rv7hkuno/deploy-sdlc-claude-final/project",
+    "home": "/tmp/aiwg-wave5-sdlc-a-rv7hkuno/deploy-sdlc-claude-final/home",
+    "aiwg_config": "/tmp/aiwg-wave5-sdlc-a-rv7hkuno/deploy-sdlc-claude-final/config",
+    "channel": {
+      "channel": "edge",
+      "edgePath": "/srv/jmagly/aiwg-wt/w5-sdlc-a",
+      "devMode": true,
+      "checkOnStartup": false
+    },
+    "aiwg_home_unset": true,
+    "git_initialization": "Standard empty repository metadata written directly; no git commands.",
+    "rule_files": 28,
+    "rule_bytes": 144761,
+    "behavior_bytes": 0,
+    "log": "/tmp/aiwg-wave5-sdlc-a-rv7hkuno/deploy-sdlc-claude-final/deploy.log",
+    "initial_attempt": {
+      "status": "timeout",
+      "timeout_seconds": 240,
+      "note": "No rule failure reported; reran in another fresh isolated repository with a longer harness timeout."
+    },
+    "inline_budget": "Default 64000 tokens; no budget override; normal local report-only guard.",
+    "lane_placement_checks": "All lane kernel/path bodies retained in full, bound/summary bodies absent from native rules, artifact-discovery present in the kernel index, and architecture-evolution entry points include actionable-feedback.",
+    "architecture_evolution_definitions_checked": 1
+  },
+  "validation": {
+    "build_cli": "pass",
+    "typecheck": "pass",
+    "package_plugins": "pass",
+    "plugin_copies": "pass; the packager does not mirror these 19 rules, so regeneration changes no plugin files",
+    "unit_tests": {
+      "passed": 331,
+      "files": 15,
+      "failed": 0,
+      "skipped": 0,
+      "report": "/tmp/aiwg-wave5-sdlc-a-rv7hkuno/unit-tests.json"
+    },
+    "orchestration_conformance": {
+      "passed": 932,
+      "failed": 0,
+      "skipped": 0,
+      "files": 36,
+      "success": true,
+      "config": "config/vitest.config.js",
+      "maxWorkers": 4,
+      "report": "/tmp/aiwg-wave5-sdlc-a-rv7hkuno/orchestration-tests.json",
+      "note": "Vitest API changes only include/exclude to admit the required orchestrationConformanceFiles lane."
+    },
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:plugin-copies",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-triggers",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-activation",
+        "exit_code": 0
+      }
+    ],
+    "omitted_ci_lints": [
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Requires npm registry network access, prohibited by task."
+      },
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Invokes git ls-files, prohibited by task."
+      },
+      {
+        "script": "lint:affected-packages",
+        "reason": "Requires an external affected-package CSV feed; none was supplied within the allowed workspace or temp scope."
+      }
+    ],
+    "corrected_iterations": [
+      "Added 21 matching skill bindings after provider checks found that YAML flow bindings did not cover separate skill entry points with the same name.",
+      "Preserved pre-existing identities and kept path lists inline so the existing untagged fallback snapshot remains byte-stable.",
+      "The synthetic combined Hermes installation exceeded its hard cap; scoped coding/workflow fixtures retain the full kernel rule and verify every binding."
+    ],
+    "constraints": "Only this worktree and system temp; no explicit git commands, network, installs, tracker writes, model calls or model probes. One Vitest invocation at a time, nice -n 19, config/vitest.config.js, maxWorkers=4."
+  },
+  "temporary_evidence_root": "/tmp/aiwg-wave5-sdlc-a-rv7hkuno"
+}

@@ -12,16 +12,18 @@ This is your always-loaded directory for the AIWG **research-complete** framewor
 
 ## Canonical access pattern: discover → show
 
-When you find a candidate via `aiwg discover`, fetch its body with `aiwg show <type> <name>`. **Never** use `find`, `ls`, `Glob`, or direct `Read` on `<provider>/skills/` paths — those reflect the kernel-pivot deploy state, not the full surface.
+When you find a candidate via `aiwg discover`, fetch its body with `aiwg show <type> <name> --body`. **Never** use `find`, `ls`, `Glob`, or direct `Read` on `<provider>/skills/` paths — those reflect the kernel-pivot deploy state, not the full surface.
 
 ```bash
 aiwg discover "<phrase>"             # find — returns ranked candidates
-aiwg show skill <name>               # fetch — streams the SKILL.md body
+aiwg show skill <name> --body               # fetch — streams the SKILL.md body
 ```
 
 If your platform's Skill tool errors on a non-kernel skill (expected — most aren't kernel), the fallback is `aiwg show`, never filesystem browsing. Last-resort if `aiwg` itself is broken: read directly from `$AIWG_ROOT/agentic/code/...` (the canonical corpus, always present).
 
 ## How to use this quickref
+
+`aiwg show <type> <name>` returns a metadata card. Inspect its outline, then fetch a needed `--section "Heading"` or use `--body` for the full instructions. Fetch required rules with `--rules --with-rule-bodies` before governed work.
 
 1. Identify the **capability domain** the user's need belongs to
 2. Pick a **curated phrase** from that domain (or paraphrase the user's words)

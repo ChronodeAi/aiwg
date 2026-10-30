@@ -1,13 +1,78 @@
 ---
 enforcement: medium
 paths:
-  - ".aiwg/**"
-  - "AIWG.md"
+  - .aiwg/**
+  - AIWG.md
   - "**/skills/sdlc-quickref/SKILL.md"
   - "**/skills/orchestrate-project/SKILL.md"
   - "**/commands/flow-*.md"
   - "**/commands/intake-*.md"
   - "**/commands/project-*.md"
+activation: paths
+summary: Discover and fetch canonical SDLC skills, right-size workflows, follow their gates, and coordinate independent work through provider-native mechanics.
+bound_to:
+  skills:
+    - sdlc-quickref
+    - orchestrate-project
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+  agents:
+    - executive-orchestrator
+    - project-manager
+  flows:
+    - flow-agentloop-lfd-controls
+    - flow-architecture-evolution
+    - flow-change-control
+    - flow-compliance-validation
+    - flow-concept-to-inception
+    - flow-construction-to-transition
+    - flow-cross-team-sync
+    - flow-delivery-track
+    - flow-deploy-to-production
+    - flow-discovery-track
+    - flow-elaboration-to-construction
+    - flow-gate-check
+    - flow-guided-implementation
+    - flow-handoff-checklist
+    - flow-hypercare-monitoring
+    - flow-inception-to-elaboration
+    - flow-incident-response
+    - flow-iteration-dual-track
+    - flow-knowledge-transfer
+    - flow-performance-optimization
+    - flow-release
+    - flow-requirements-evolution
+    - flow-retrospective-cycle
+    - flow-risk-management-cycle
+    - flow-security-review-cycle
+    - flow-team-onboarding
+    - flow-test-strategy-execution
+triggers:
+  - how to orchestrate canonical SDLC workflows
 ---
 
 # SDLC Orchestration Rules
@@ -22,7 +87,7 @@ Canonical AIWG skills are the authoritative source of workflow behavior. Start w
 
 ```bash
 aiwg discover "<SDLC capability or workflow>"
-aiwg show skill <name>
+aiwg show skill <name> --body
 ```
 
 For project-wide lifecycle coordination, prefer `orchestrate-project`. Flow skills such as `flow-inception-to-elaboration`, `flow-security-review-cycle`, and `flow-gate-check` define their own inputs, artifacts, gates, and orchestration behavior. Do not enumerate the SDLC catalog from memory; query the index and fetch the selected skill.
@@ -68,7 +133,7 @@ Commands retained by a provider are adapters only. Explicit `/flow-*` input from
 Follow this logical pattern when the selected skill calls for collaborative artifact work:
 
 ```text
-Primary Author -> Independent Reviewers -> Synthesizer -> Baseline/Archive
+Primary Author -> Separate Initial Reviews -> Synthesizer -> Baseline/Archive
 ```
 
 Use the current provider's supported delegation and parallelism primitives. Consult steward/provider guidance when mechanics differ. Parallelize only independent work, respect the workspace concurrency cap, and synthesize all results before finalizing artifacts. Do not mandate Claude's `Task` syntax in provider-neutral guidance.
@@ -105,6 +170,10 @@ Common adapter parameters such as `--guidance` and `--interactive` remain valid 
 7. **Parallel Execution**: Launch only independent work concurrently and respect configured provider/workspace caps.
 8. **Wire-As-You-Go**: Include AIWG @-mentions in generated artifacts according to the active mention-wiring rule.
 9. **Complete Docset by Default**: Do not silently skip or abbreviate required artifacts. If an artifact seems low-value, use the selected skill's HITL mechanism to confirm the exception.
+
+## Review Evidence
+
+Agreement is not proof, including same-vendor and cross-vendor agreement. Consequential claims require an executable check or accountable human acceptance. Prefer independent voting, or structured review with diverse initial answers and calibrated confidence, over plain debate. Record observed evaluator model/vendor/family, acceptance criteria reference, generator/evaluator disagreements and a re-review link after material fixes. Do not claim reduced human-review time. See `$AIWG_ROOT/docs/decision/evaluator-calibration.md` for calibration and REF-2922, REF-2923, REF-2919/2921 public sources.
 
 ## Phase Overview
 

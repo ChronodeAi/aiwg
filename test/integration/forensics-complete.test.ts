@@ -420,19 +420,26 @@ describe('Deployment Scaffold', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-dfir-use-'));
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-dfir-config-'));
     try {
-      const result = spawnSync(process.execPath, [BIN, 'use', 'forensics', '--target', dir, '--provider', 'claude', '--copy-all', '--no-project-local'], {
+      // This checks the framework's workspace scaffold. Optional addon sweeps
+      // are covered by use-all-deployment and can exhaust this child's deadline.
+      const result = spawnSync(process.execPath, [BIN, 'use', 'forensics', '--target', dir, '--provider', 'claude', '--copy-all', '--no-project-local', '--no-utils'], {
         cwd: dir,
         encoding: 'utf8',
         timeout: 120_000,
         env: {
           ...process.env,
           AIWG_ROOT: REPO_ROOT,
+          HOME: configDir, USERPROFILE: configDir,
+          XDG_CONFIG_HOME: path.join(configDir, 'config'),
+          XDG_CACHE_HOME: path.join(configDir, 'cache'),
+          XDG_DATA_HOME: path.join(configDir, 'data'),
+          XDG_STATE_HOME: path.join(configDir, 'state'),
           AIWG_CONFIG: configDir,
           NO_UPDATE_NOTIFIER: '1',
           AIWG_NO_UPDATE_CHECK: '1',
         },
       });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.status, [result.stdout, result.stderr, result.error?.message, result.signal].filter(Boolean).join('\n')).toBe(0);
       const scopedBase = path.join(dir, '.aiwg/frameworks/forensics-complete');
       for (const rel of ['profiles', 'plans', 'triage', 'evidence', 'findings', 'timelines', 'iocs', 'reports', 'sigma']) {
         expect(fs.existsSync(path.join(scopedBase, rel))).toBe(true);

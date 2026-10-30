@@ -15,11 +15,15 @@ afterAll(() => { vi.unstubAllEnvs(); rmSync(testState, { recursive: true, force:
 
 const promptId = 'ad0eac57-f070-4464-855a-46b60455704b';
 const otherId = 'f2724988-cfa5-4f75-9799-bac165ef92b9';
+// Retain the credential when this fixture reconnects to its persisted identity.
+let executorToken: string | undefined;
 function setup() {
-  const registry = new ExecutorRegistry();
+  const registry = new ExecutorRegistry(join(testState, 'trusted', 'executor-identities.json'));
   const registration = registry.register({ executor_id: 'ad0eac57-f070-4464-855a-46b60455704a', name: 'fixture', version: '1.0.0', spec_version: '1.0.0',
-    transport_endpoints: { rest: 'http://fixture.test', ws: 'ws://fixture.test' }, capabilities: ['hitl'] });
+    transport_endpoints: { rest: 'http://fixture.test', ws: 'ws://fixture.test' }, capabilities: ['hitl'] }, executorToken);
   expect(registration).not.toHaveProperty('error');
+  if ('error' in registration) throw new Error(registration.error);
+  executorToken = registration.token;
   const mission = registry.assignMission('mission', 'ad0eac57-f070-4464-855a-46b60455704a');
   mission.a2a = { instanceId: 'instance', taskId: 'task', contextId: 'context', protocolVersion: '0.3', acceptedPrompts: new Set() };
   const prompt: Record<string, unknown> = { prompt_id: promptId, prompt: 'Approve?',

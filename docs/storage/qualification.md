@@ -53,6 +53,37 @@ Checked-in measurements are registered in
 each rendered documentation block to exact correctness results, the benchmark
 source digest, and a bounded validity window. Normal CI and every tag-driven
 publication path run the same dependency-free verifier.
+
+For a disposable loopback reference host, pin the recorded container image
+digests, publish random high ports on `127.0.0.1`, and run each live suite with
+`AIWG_STORAGE_EVIDENCE_DIR`, `AIWG_STORAGE_QUALIFICATION_COMMIT` and
+`AIWG_STORAGE_QUALIFICATION_BRANCH` set to the observed checkout. Enable
+`AIWG_POSTGRES_BACKUP_LIVE=1` for the direct suite's backup/restore check.
+Keep Vitest's JSON reporter output alongside the emitted qualification report.
+Import each run through the existing claim tool:
+
+```bash
+node tools/benchmarks/verify-storage-claims.mjs --import-server-run <run-metadata.json>
+npm run verify:storage-claims
+```
+
+The metadata supplies the registered claim `id`, repository-relative `report`,
+`testResults` and `testFile` paths, and observed `server` identity (engine/transport
+and driver versions, image name and digest). The importer takes measurements
+from the report, summarizes its observed side-effect outcomes, takes pass/skip counts and coverage from Vitest, runtime identity
+from Node, source scope and validity duration from the registry, and renders
+the documentation with the release gate's own renderer. It validates the run
+before replacing evidence; rerun the verifier after both server imports.
+
+Main evidence comes from main. When a source change and its evidence must land
+together, a detached reference run is accepted only when it records branch
+`HEAD`, its public base commit in `subject.commit`, `subject.checkout.baseCommit`
+and `qualification.scope.commit`, and the exact modified source files inside
+the registered claim scope in `subject.checkout.modifiedSourceFiles` (with
+`kind: "detached-worktree"`). The source digest binds the tested source bytes;
+the base commit records their provenance. After integration, changed registered
+source bytes require another qualification.
+
 The runner uses bounded exponential backoff for classified transient failures;
 the configured retry ceiling and observed retry/error rates remain part of the
 evidence rather than being hidden by the benchmark.
@@ -60,11 +91,11 @@ evidence rather than being hidden by the benchmark.
 ## Shared-server reference envelopes
 
 <!-- aiwg-storage-benchmark-claim:postgres-direct-reference-v1:start -->
-A 2026-08-28 disposable loopback reference-host qualification on linux x64, Node 24.12.0, and PostgreSQL 17.11 via pg 8.23.0 produced:
+A 2026-10-26 disposable loopback reference-host qualification on linux x64, Node 24.22.1, and PostgreSQL 17.11 via pg 8.23.0 produced:
 
 | Records / readers / writers | Throughput | Latency p50/p95/p99 | Errors / retries | DB / WAL bytes | Write amplification | Pool saturation | HTTP overhead |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 128 / 4 / 4 | 325.21 ops/s | 5.13 / 49.98 / 111.66 ms | 40 / 40 | 8,410,803 / 314,216 | 9.58 | 0.75 | n/a |
+| 128 / 4 / 4 | 177.44 ops/s | 7.16 / 59.38 / 107.71 ms | 45 / 45 | 8,410,803 / 335,728 | 10.24 | 0.5 | n/a |
 
 6 live tests passed with no skips. This is a reference-host envelope, not production or remote-service certification.
 
@@ -72,11 +103,11 @@ Evidence: [postgres-direct-reference-v1](evidence/postgres-direct-reference-v1.j
 <!-- aiwg-storage-benchmark-claim:postgres-direct-reference-v1:end -->
 
 <!-- aiwg-storage-benchmark-claim:postgres-postgrest-reference-v1:start -->
-A 2026-08-28 disposable loopback reference-host qualification on linux x64, Node 24.12.0, and PostgreSQL 17.11 via PostgREST 14.16 produced:
+A 2026-10-26 disposable loopback reference-host qualification on linux x64, Node 24.22.1, and PostgreSQL 17.11 via PostgREST 14.16 produced:
 
 | Records / readers / writers | Throughput | Latency p50/p95/p99 | Errors / retries | DB / WAL bytes | Write amplification | Pool saturation | HTTP overhead |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 64 / 4 / 4 | 576.69 ops/s | 6.17 / 9.06 / 13.9 ms | 0 / 0 | n/a / n/a | n/a | n/a | 6.11 ms |
+| 64 / 4 / 4 | 394.63 ops/s | 8.95 / 18.92 / 22.75 ms | 0 / 0 | n/a / n/a | n/a | n/a | 9.37 ms |
 
 4 live tests passed; 1 authenticated-RLS test was skipped because this loopback run had no JWT authority. This is a reference-host envelope, not production or remote-service certification.
 

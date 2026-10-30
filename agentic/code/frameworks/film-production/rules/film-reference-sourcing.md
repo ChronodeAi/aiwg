@@ -3,6 +3,12 @@ id: film-reference-sourcing
 name: Film Reference Sourcing
 description: Use third-party reference footage only with recorded license provenance that permits modification, publication and AI processing.
 enforcement: high
+activation: bound
+summary: Use third-party reference footage only with recorded license provenance permitting the intended modification, publication, and AI processing.
+bound_to:
+  agents: [film-producer, film-story-director, film-scene-supervisor, film-continuity-supervisor, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-reference-footage, film-reference-edit, film-provider-preflight, film-continuity-pack, film-motion-coverage, film-delivery]
+  flows: [film-develop, film-design, film-previs, film-generate, film-finish, film-deliver, film-resume, film-revise-with-impact]
 ---
 
 # Film Reference Sourcing

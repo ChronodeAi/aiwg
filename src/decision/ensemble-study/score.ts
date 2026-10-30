@@ -1,3 +1,4 @@
+import { ceilingDecision } from '../../gates/lattice.js';
 import { heldoutDigest, validateHeldoutAttempt, validateHeldoutInputs } from '../heldout/contract.js';
 import type { HeldoutStudyModule, Digest, HeldoutRow, HeldoutAttempt } from '../heldout/types.js';
 import { artifactPin } from '../validate.js';
@@ -157,7 +158,7 @@ export async function scoreD17Study(input: ScoreInput, prepared: Prepared) {
     calibrationDiagnostics: { champion: binary('champion'), challenger: binary('challenger'), calibrated: false },
     pending: ['D09 compatible member and aggregate calibration', 'blind gold audit and delayed repeats', 'separate extra-cost tradeoff approval',
       'protected native report approval and eligibility'],
-    decision: input.integrity.release_gate.decision === 'ROLLBACK' || input.integrity.compromise_labels.length ? 'ROLLBACK' : 'HOLD' };
+    decision: ceilingDecision('HOLD', input.integrity.release_gate.decision, input.integrity.compromise_labels.length ? 'ROLLBACK' : 'PROMOTE') };
   validateD17Artifact('report', report);
   return report;
 }
@@ -338,7 +339,7 @@ export async function scoreD17StagedStudy(input: Omit<ScoreInput, 'approvedCalib
     mappingDigest: heldoutDigest(verified[role].mapping), compatibility: { action: 'allow' as const,
       state: verified[role].compatibility.state as 'exact' | 'approved-compatible', pinId: verified[role].compatibility.pinId } });
   const approved = input.approvedCalibration as { calibrationPhaseRecordDigest: Digest; priorApprovalDigest: Digest };
-  const decision = input.integrity.release_gate.decision === 'ROLLBACK' || input.integrity.compromise_labels.length ? 'ROLLBACK' as const : 'HOLD' as const;
+  const decision = ceilingDecision('HOLD', input.integrity.release_gate.decision, input.integrity.compromise_labels.length ? 'ROLLBACK' : 'PROMOTE');
   const report = { schemaVersion: 'decision-d17-study-report/v2' as const, scope: 'synthetic-staged-calibrated' as const,
     calibrated: true as const, d09Qualified: true as const, calibratedGate: true as const,
     corpusDigest: heldoutDigest(prepared.corpus), preregistrationDigest: heldoutDigest(prepared.preregistration),
@@ -463,7 +464,7 @@ export function d17NativeIntegrity(input: { base: QualificationIntegrityMetadata
   // The ensemble integrity contract carries only the gate decision and reasons (eval-tool thresholds are dropped).
   const gate = { decision: input.base.release_gate.decision, reasons: [...input.base.release_gate.reasons] };
   const release_gate = gate.decision === 'PROMOTE' && missing.length
-    ? { decision: 'HOLD' as const, reasons: [...gate.reasons, ...missing.map(reason => `promotion withheld: ${reason}`)] } : gate;
+    ? { decision: ceilingDecision(gate.decision, 'HOLD'), reasons: [...gate.reasons, ...missing.map(reason => `promotion withheld: ${reason}`)] } : gate;
   const { sample_n, uncertainty, integrity_mode, fresh_workspace_required, fresh_workspace_verified, integrity_state,
     trusted_score_source, compromise_labels, weak_signal_reason } = input.base;
   return { sample_n, uncertainty, paired_baseline: { ...input.pairedBaseline, d17TradeoffApprovalDigest: tradeoffDigest },

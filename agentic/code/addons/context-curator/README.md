@@ -1,6 +1,8 @@
 # Context Curator Addon
 
-Context curation and distractor filtering for production-grade agent reliability.
+Evidence status: paper-reported (REF-002, not measured in AIWG); targets below are unmeasured.
+
+Context curation and distractor filtering intended to improve agent reliability (design intent, unmeasured).
 
 ## Research Foundation
 
@@ -18,7 +20,7 @@ Across all model tiers (32B to 671B parameters), agents failed when:
 - Entity filter specified, but similar entities remained in context
 - Scope was time-bounded, but historical data was included
 
-Even DeepSeek V3.1 (92% success rate overall) showed degraded performance on distractor-heavy tasks.
+REF-002 reports that even DeepSeek V3.1 (92% success rate overall) showed degraded performance on distractor-heavy tasks (paper-reported, not measured in AIWG).
 
 ## Components
 
@@ -150,7 +152,7 @@ The distractor filter rules automatically apply when Claude works with any conte
 
 ## Success Metrics
 
-From the Unified Production Plan:
+Targets from the Unified Production Plan (unmeasured; no AIWG measurement yet):
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
@@ -160,6 +162,6 @@ From the Unified Production Plan:
 
 ## References
 
-- [REF-002: Roig (2025)](~/.local/share/ai-writing-guide/docs/references/REF-002-llm-failure-modes-agentic.md)
-- [Agent Design Bible - Rule 6](~/.local/share/ai-writing-guide/docs/AGENT-DESIGN.md#rule-6-scoped-context)
-- [Gap Analysis](~/.local/share/ai-writing-guide/.aiwg/planning/roig-2025-gap-analysis.md)
+- [REF-002: Roig (2025)]($AIWG_ROOT/docs/references/REF-002-llm-failure-modes-agentic.md)
+- [Agent Design Bible - Rule 6]($AIWG_ROOT/docs/frameworks/sdlc-complete/agent-design.md#rule-6-scoped-context)
+- Gap Analysis

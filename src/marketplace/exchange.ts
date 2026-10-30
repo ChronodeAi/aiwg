@@ -19,6 +19,7 @@ import {
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveSensitiveInput, type SensitiveInputDependencies, type SensitiveInputOptions } from '../auth/sensitive-input.js';
 
 import { setPackageEntry } from '../packages/package-registry.js';
 import { discoverInstallablePackage } from '../packages/package-discovery.js';
@@ -329,7 +330,9 @@ export async function verifyIndexedPackage(options: MarketplaceScopeOptions & {
 export async function publishLocalPackage(options: {
   sourceDir: string;
   outputDir: string;
-  privateKeyPath: string;
+  /** Compatibility path alias; validated exactly like --key-file. */
+  privateKeyPath?: string;
+  keyInput?: SensitiveInputOptions;
   publicKeyPath?: string;
   keyId?: string;
   publisher: string;
@@ -337,7 +340,7 @@ export async function publishLocalPackage(options: {
   packageSelector?: string;
   sequence?: number;
   actor?: string;
-}): Promise<{
+}, sensitiveDependencies: SensitiveInputDependencies = {}): Promise<{
   envelope: MarketplaceProvenanceEnvelope;
   lock: MarketplacePackageLock;
   receipt: MarketplaceOperationReceipt;
@@ -346,6 +349,12 @@ export async function publishLocalPackage(options: {
   receiptPath: string;
   shardPath: string;
 }> {
+  const privateKey = await resolveSensitiveInput({
+    ...options.keyInput,
+    prefix: 'key',
+    file: options.keyInput?.file ?? options.privateKeyPath,
+    multiline: true,
+  }, sensitiveDependencies);
   const sourceDir = path.resolve(options.sourceDir);
   const discovered = await discoverInstallablePackage(sourceDir, options.packageSelector);
   const unsigned = await createProvenanceEnvelope({
@@ -357,12 +366,16 @@ export async function publishLocalPackage(options: {
     publisher: options.publisher,
     sequence: options.sequence,
   });
-  const privateKey = await readFile(path.resolve(options.privateKeyPath), 'utf8');
   const publicKey = options.publicKeyPath ? await readFile(path.resolve(options.publicKeyPath), 'utf8') : undefined;
-  const envelope = signProvenanceEnvelope(unsigned, privateKey, {
-    keyId: options.keyId,
-    publicKeyPem: publicKey,
-  });
+  let envelope: MarketplaceProvenanceEnvelope;
+  try {
+    envelope = signProvenanceEnvelope(unsigned, privateKey, {
+      keyId: options.keyId,
+      publicKeyPem: publicKey,
+    });
+  } catch {
+    throw new Error('Marketplace signing failed; check the Ed25519 private key and public-key options.');
+  }
   const lock = createPackageLock(envelope, envelope.publication.publishedAt);
   const fortemi = await buildFortemiEnvelopeShard(envelope);
   const receipt = createOperationReceipt({

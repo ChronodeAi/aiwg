@@ -5,15 +5,15 @@ import { parseWriterProfile, type WriterProfile } from './writer-profile.js';
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 const identifier = z.string().min(1).max(120);
 const tags = z.array(z.string().min(1).max(100)).max(100);
-const descriptorSchema = z.object({ sampleId: identifier, profileId: identifier, genre: z.string().min(1).max(100), topicTags: tags, styleTags: tags }).strict();
-const partitionSchema = z.object({
+export const exemplarDescriptorSchema = z.strictObject({ sampleId: identifier, profileId: identifier, genre: z.string().min(1).max(100), topicTags: tags, styleTags: tags });
+const partitionSchema = z.strictObject({
   version: identifier, purpose: z.enum(['development', 'final-author']),
   developmentAuthorIds: z.array(identifier), finalAuthorIds: z.array(identifier),
-  holdouts: z.array(z.object({ id: identifier, authorId: identifier, text: z.string().max(1_000_000) }).strict()),
+  holdouts: z.array(z.strictObject({ id: identifier, authorId: identifier, text: z.string().max(1_000_000) })),
   nearDuplicateThreshold: z.number().min(0).max(1),
   duplicateMetric: z.literal('normalized-word-trigram-jaccard-v1'),
-}).strict();
-export type ExemplarDescriptor = z.infer<typeof descriptorSchema>;
+});
+export type ExemplarDescriptor = z.infer<typeof exemplarDescriptorSchema>;
 export type ExemplarPartition = z.infer<typeof partitionSchema>;
 export const EXEMPLAR_STRATEGIES = ['random', 'style-varied', 'length-matched', 'topic-matched'] as const;
 export type ExemplarStrategy = typeof EXEMPLAR_STRATEGIES[number];
@@ -104,7 +104,7 @@ function enroll(profile: WriterProfile, descriptors: ExemplarDescriptor[], parti
 /** A data-only store; enrollment never trains descriptors or reads another author's profile. */
 export function createExemplarStore(input: WriterProfile, descriptorInput: ExemplarDescriptor[], partitionInput: ExemplarPartition): ExemplarStore {
   const profile = parseWriterProfile(input); const partition = validatePartition(profile.id, partitionInput);
-  const parsed = z.array(descriptorSchema).safeParse(descriptorInput);
+  const parsed = z.array(exemplarDescriptorSchema).safeParse(descriptorInput);
   if (!parsed.success || new Set(descriptorInput.map(d => d.sampleId)).size !== descriptorInput.length) throw new Error('Invalid or duplicate exemplar descriptors');
   const { accepted, exclusions } = enroll(profile, parsed.data, partition);
   const store: Omit<ExemplarStore, 'fingerprint'> = { schemaVersion: 1, profileId: profile.id, profileFingerprint: profileFingerprint(profile), descriptors: accepted, partition, enrollmentExclusions: exclusions };
@@ -116,7 +116,7 @@ function validateStore(profile: WriterProfile, store: ExemplarStore): void {
   const { fingerprint, ...body } = store;
   if (storeFingerprint(body) !== fingerprint) throw new Error('Exemplar store integrity changed; recreate enrollment');
   validatePartition(profile.id, store.partition);
-  if (!z.array(descriptorSchema).safeParse(store.descriptors).success) throw new Error('Invalid exemplar descriptors');
+  if (!z.array(exemplarDescriptorSchema).safeParse(store.descriptors).success) throw new Error('Invalid exemplar descriptors');
 }
 function checkedCount(counter: ExemplarTokenizer, value: string): number {
   const count = counter.count(value);

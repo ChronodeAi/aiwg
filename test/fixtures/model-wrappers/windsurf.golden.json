@@ -1,0 +1,22 @@
+{
+  "aiwg-model-reasoning-worker": {
+    "capabilities": "\n- Bash\n- Read\n- Write\n- Edit\n- Grep\n",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-coding-worker": {
+    "capabilities": "\n- Bash\n- Read\n- Write\n- Edit\n- Grep\n",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-efficiency-worker": {
+    "capabilities": "\n- Bash\n- Read\n- Write\n- Edit\n- Grep\n",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-explorer": {
+    "capabilities": "\n- Read\n- Grep\n- Glob\n- Bash\n",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  },
+  "aiwg-model-verifier": {
+    "capabilities": "\n- Read\n- Grep\n- Glob\n- Bash\n",
+    "contract": "WorkerClaims: criterion + evidence + verdict; stop rules"
+  }
+}

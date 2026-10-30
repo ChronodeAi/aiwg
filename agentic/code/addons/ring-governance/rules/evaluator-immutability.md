@@ -1,3 +1,12 @@
+---
+enforcement: high
+activation: bound
+summary: Keep evaluators, criteria, policy, credentials, and verdict binding outside the producer's edit surface.
+bound_to:
+  agents: [governance-skeptic]
+  skills: [evolution-surface-review, governance-corpus-inventory, governance-escape-hatch-audit]
+---
+
 # Evaluator Immutability
 
 **Enforcement Level**: HIGH

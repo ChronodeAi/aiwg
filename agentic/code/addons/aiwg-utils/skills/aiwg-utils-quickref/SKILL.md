@@ -17,39 +17,10 @@ This is your always-loaded core directory for AIWG. It does **not** list every u
 
 ## How to use this quickref
 
-Walk the action hierarchy in order. The agent always prefers a **skill** over a raw CLI invocation:
+`aiwg show <type> <name>` returns a metadata card. Inspect its outline, then fetch a needed `--section "Heading"` or use `--body` for the full instructions. Fetch required rules with `--rules --with-rule-bodies` before governed work.
 
-1. **Priority 1 — Local skill or agent**: check if a skill already in your context handles the need (kernel skills listed below, framework quickrefs, deployed agents like `aiwg-steward` / `aiwg-finder`). These cost nothing to invoke.
-2. **Priority 2 — Discovered skill**: if no local match, pick a **curated phrase** from a capability domain (or paraphrase the user's words), run `aiwg discover "<phrase>"`, surface the top match, and fetch its body with `aiwg show <type> <name>` — never `find` / `ls` / `Read`.
-3. **Priority 3 — Raw CLI**: only when no skill exists at priorities 1 or 2, OR the command is on the discovery surface (`aiwg discover`, `aiwg show`, `aiwg list`, `aiwg version`, `aiwg runtime-info`), OR you are inside a skill that's calling the CLI as its step.
-
-**Do not enumerate skills from memory.** AIWG ships hundreds of skills; you only see the kernel set in your context. See the [`cli-secondary` rule](../../rules/cli-secondary.md) for the full hierarchy and per-command pairings.
-
-## The canonical pipeline: `discover → show`
-
-Most AIWG skills (~460 of 480) are **not in your context** and are not in `<provider>/skills/` either — they stay at `$AIWG_ROOT` (no per-project copy by default, #1217). Two commands close the loop:
-
-```bash
-# 1. Find — returns ranked candidates with absolute paths
-aiwg discover "<the user's need, paraphrased>"
-
-# 2. Fetch — streams the SKILL.md body for the chosen candidate
-aiwg show skill <name>          # or: agent | command | rule
-```
-
-`discover` and `show` are designed to compose. **You should never need to navigate the filesystem to read AIWG content.** That's the whole point of the CLI.
-
-### When the platform Skill tool errors
-
-Most AIWG skills aren't kernel-listed, so the platform's Skill tool will reject them. This is expected behavior, not a bug. The fallback hierarchy:
-
-1. **`aiwg show <type> <name>`** — primary fetch. Always works regardless of kernel status.
-2. **`aiwg show <type> <name> --json`** — same fetch with `{ path, content }` envelope, useful for forwarding to a sub-agent.
-3. **Read directly from `$AIWG_ROOT/agentic/code/`** — last-resort fallback. Only if the `aiwg` CLI itself is broken. The corpus at `$AIWG_ROOT/agentic/code/frameworks/<name>/skills/<skill>/SKILL.md` and `$AIWG_ROOT/agentic/code/addons/<name>/skills/<skill>/SKILL.md` is the canonical source — it is always present at the install root and survives any deploy-state corruption.
-
-**Forbidden after `discover` returns a path**: running `find`, `ls`, `Glob`, or `Read` on a `<provider>/skills/` directory. Those reflect the kernel-pivot deploy state, not the full surface. Use `aiwg show`.
-
-This is mandated by the `skill-discovery` HIGH rule. Surface the top match (or top-3) to the user — the search is auditable.
+Routing authority: `aiwg show rule skill-discovery --body` (kernel). Skill/CLI precedence:
+`aiwg show rule cli-secondary --body`. The capability phrases below are lookup aids.
 
 ## Framework quickrefs (loaded if framework is installed)
 
@@ -103,7 +74,7 @@ Route these phrases carefully:
 | User intent | Use |
 |---|---|
 | Workspace inventory, installed frameworks, deployed provider files | `aiwg-status` / `aiwg status` |
-| Cross-framework project progress, "project-status", "where are we?", "what is next?" | `aiwg discover "project status"` → `aiwg show skill project-status --first` |
+| Cross-framework project progress, "project-status", "where are we?", "what is next?" | `aiwg discover "project status"` → `aiwg show skill project-status --body --first` |
 | SDLC-specific project health or lifecycle gate status | `aiwg discover "SDLC project health check"` and prefer `project-health-check` or `orchestrate-project` when those rank above generic workspace inventory |
 
 Do not answer `project-status` by running only `aiwg status`; that command reports workspace install/deployment inventory, not project progress.
@@ -136,7 +107,7 @@ aiwg discover "aiwg status"                    # → aiwg-status
 aiwg discover "aiwg doctor"                    # → aiwg-doctor
 aiwg discover "version"                        # → version
 aiwg discover "runtime info"                   # → runtime-info
-aiwg discover "project status"                 # → project-status (cross-framework project progress; then `aiwg show skill project-status --first`)
+aiwg discover "project status"                 # → project-status (cross-framework project progress; then `aiwg show skill project-status --body --first`)
 aiwg discover "SDLC project health check"       # → project-health-check / orchestrate-project
 aiwg discover "workspace health"               # → workspace-health
 ```

@@ -128,7 +128,7 @@ CI runs on `origin` (Gitea) after the merge, on the push to `main`. Work isn't d
 If it fails:
 
 1. Diagnose the failure
-2. **Fix the underlying issue** — no `|| true`, no `continue-on-error: true`, no test deletion. See [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md) and [`dev-pipeline-safety`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/dev-pipeline-safety.md) rules.
+2. **Fix the underlying issue** — no `|| true`, no `continue-on-error: true`, no test deletion. See [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/anti-laziness.md) and [`dev-pipeline-safety`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/dev-pipeline-safety.md) rules.
 3. Open a fix PR, verify it locally, merge it, and wait for the next `main` run
 4. Don't declare the work done until `main` is green
 
@@ -162,14 +162,14 @@ See [`flow-release`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frame
 - **`continue-on-error: true` on tests** — never silence the smoke detector. See [`dev-pipeline-safety`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/dev-pipeline-safety.md).
 - **Skipping CI green wait** — if CI fails, fix it before declaring done.
 - **Bundling unrelated changes** — split into focused PRs.
-- **Workarounds instead of root-cause fixes** — see [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md) Rule 9: "real fix over workaround".
+- **Workarounds instead of root-cause fixes** — see [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/anti-laziness.md) Rule 9: "real fix over workaround".
 - **`Closes #N` in a PR body for `direct` mode** — wrong; use the commit message instead.
 
 ---
 
 ## When stuck
 
-If the verification gates fail and you can't fix them in 3 attempts, **escalate** per the [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md) recovery protocol. Don't take destructive shortcuts (skip tests, weaken assertions, etc.).
+If the verification gates fail and you can't fix them in 3 attempts, **escalate** per the [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/anti-laziness.md) recovery protocol. Don't take destructive shortcuts (skip tests, weaken assertions, etc.).
 
 ---
 
@@ -188,7 +188,7 @@ If the verification gates fail and you can't fix them in 3 attempts, **escalate*
 - **In-context kernel skill**: `aiwg-pr` (always loaded; same content as this doc, accessible to agents)
 - **Issue companion**: [filing issues](./filing-issues.md)
 - **Templates**: [`.gitea/pull_request_template.md`](https://git.integrolabs.net/roctinam/aiwg/src/branch/main/.gitea/pull_request_template.md), [`.github/pull_request_template.md`](https://github.com/jmagly/aiwg/blob/main/.github/pull_request_template.md)
-- **Rules**: [`delivery-policy`](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/delivery-policy.md) (kernel), [`no-attribution`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/no-attribution.md) (kernel), [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md), [`dev-pipeline-safety`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/dev-pipeline-safety.md)
+- **Rules**: [`delivery-policy`](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/delivery-policy.md) (kernel), [`no-attribution`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/no-attribution.md) (kernel), [`anti-laziness`](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/anti-laziness.md), [`dev-pipeline-safety`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/rules/dev-pipeline-safety.md)
 - **Release flow**: [`flow-release`](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/skills/flow-release/SKILL.md)
 - **Versioning**: [versioning policy](./versioning.md)
 - **Origin**: #1269 (templates infrastructure), #1264–#1268 (tester report sweep that codified this pattern)

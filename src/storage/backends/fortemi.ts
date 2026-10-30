@@ -38,6 +38,9 @@
  */
 
 import { createHash } from 'node:crypto';
+import { debuglog } from 'node:util';
+import { hasSecretLookingLiterals } from '../../mcp/credentials.mjs';
+import type { SensitiveInputDependencies } from '../../auth/sensitive-input.js';
 import type {
   FortemiBackendConfig,
   StorageAdapter,
@@ -137,6 +140,7 @@ interface RemoteServerDefinition {
   env?: Record<string, string>;
   headers?: Record<string, string>;
   headerEnv?: Record<string, string>;
+  envFrom?: Record<string, string>;
 }
 
 export function resolveMcpRequestHeaders(
@@ -147,7 +151,7 @@ export function resolveMcpRequestHeaders(
   for (const [header, envName] of Object.entries(server.headerEnv ?? {})) {
     if (!ENV_NAME.test(envName)) {
       throw new Error(
-        `storage(fortemi): invalid environment variable reference "${envName}"`,
+        'storage(fortemi): invalid environment variable reference; use ENV_NAME, file:ABSOLUTE_PATH or store:NAME.',
       );
     }
     const value = environment[envName];
@@ -513,8 +517,9 @@ export const createDefaultMcpClient = async (
     get(name: string): Promise<RemoteServerDefinition | undefined>;
   },
   environment: NodeJS.ProcessEnv = process.env,
+  sensitiveInput: SensitiveInputDependencies = {},
 ): Promise<McpClientLike> => {
-  const { McpServerRegistry } = await import('../../mcp/registry.js');
+  const { McpServerRegistry, resolveMcpCredentialMaps } = await import('../../mcp/registry.js');
   const registry = registryOverride ?? new McpServerRegistry();
   const server = await registry.get(serverName);
   if (!server) {
@@ -525,69 +530,119 @@ export const createDefaultMcpClient = async (
   }
   // Lazy imports keep unit tests that inject a stub isolated from transports.
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
-  let transport;
-  if (server.type === 'stdio') {
-    const { StdioClientTransport } =
-      await import('@modelcontextprotocol/sdk/client/stdio.js');
-    transport = new StdioClientTransport({
-      command: server.command ?? '',
-      args: server.args ?? [],
-      env: server.env as Record<string, string> | undefined,
-    });
-  } else {
-    if (!server.url) {
-      throw new Error(
-        `storage(fortemi): MCP server "${serverName}" has no URL`,
-      );
-    }
-    const url = validateRemoteMcpUrl(server.url);
-    const headers = resolveMcpRequestHeaders(server, environment);
-    if (server.type === 'http') {
-      const { StreamableHTTPClientTransport } =
-        await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
-      transport = new StreamableHTTPClientTransport(url, {
-        requestInit: { headers },
-      });
-    } else if (server.type === 'sse') {
-      const { SSEClientTransport } =
-        await import('@modelcontextprotocol/sdk/client/sse.js');
-      transport = new SSEClientTransport(url, {
-        requestInit: { headers },
-        eventSourceInit: {
-          fetch: async (input, init) => {
-            const merged = new Headers(init?.headers);
-            for (const [name, value] of Object.entries(headers))
-              merged.set(name, value);
-            return fetch(input, { ...init, headers: merged });
-          },
-        },
-      });
-    } else {
-      throw new Error(
-        `storage(fortemi): unsupported MCP transport "${String(server.type)}"`,
-      );
+  const hasCredentials = [server.env, server.headers, server.envFrom, server.headerEnv]
+    .some(map => Object.keys(map ?? {}).length > 0);
+  if (hasCredentials && server.type === 'stdio' && debuglog('child_process').enabled) {
+    throw new Error('MCP stdio credentials require NODE_DEBUG child_process logging to be disabled.');
+  }
+  // Reuse the registry resolver for file/store references. Preserve legacy env
+  // bytes and Authorization's existing Bearer prefix at the transport boundary.
+  const hasNewReferences = [...Object.values(server.headerEnv ?? {}), ...Object.values(server.envFrom ?? {})]
+    .some(reference => /^(?:file|store):/.test(reference));
+  const resolved = hasNewReferences
+    ? await resolveMcpCredentialMaps(server, { ...sensitiveInput, environment })
+    : { env: server.env ? { ...server.env } : undefined, headers: resolveMcpRequestHeaders(server, environment) };
+  if (!hasNewReferences) {
+    for (const [key, name] of Object.entries(server.envFrom ?? {})) {
+      if (!ENV_NAME.test(name) || !environment[name]) {
+        throw new Error('storage(fortemi): envFrom requires a set ENV_NAME, file:ABSOLUTE_PATH or store:NAME.');
+      }
+      resolved.env = { ...resolved.env, [key]: environment[name]! };
     }
   }
-  const client = new Client(
-    { name: 'aiwg-storage-fortemi-adapter', version: '1.0.0' },
-    { capabilities: {} },
-  );
-  await client.connect(transport);
-
-  return {
-    async callTool(name, args) {
-      return unwrapMcpToolResult(
-        await client.callTool({ name, arguments: args }),
-      );
-    },
-    async listTools() {
-      return client.listTools();
-    },
-    serverVersion() {
-      return client.getServerVersion();
-    },
-    async close() {
-      await client.close();
-    },
+  const secrets = [
+    ...Object.entries(resolved.env ?? {}).filter(([key, value]) =>
+      key in (server.envFrom ?? {}) || hasSecretLookingLiterals({ name: server.name, env: { [key]: value } })).map(([, value]) => value),
+    ...Object.values(resolved.headers ?? {}),
+    ...Object.values(resolved.headers ?? {}).map(value => value.replace(/^Bearer /i, '')),
+  ].filter(Boolean).sort((a, b) => b.length - a.length);
+  const redact = (text: string): string => secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), text);
+  const protect = async <T>(operation: () => Promise<T>): Promise<T> => {
+    try { return await operation(); }
+    catch (error) { throw new Error(redact(error instanceof Error ? error.message : 'MCP transport failed')); }
   };
+  const protectResult = <T>(value: T): T => {
+    if (typeof value === 'string') return redact(value) as T;
+    if (Array.isArray(value)) return value.map(protectResult) as T;
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, value]) => [redact(key), protectResult(value)])) as T;
+    return value;
+  };
+  try {
+    let transport;
+    if (server.type === 'stdio') {
+      const { StdioClientTransport } =
+        await import('@modelcontextprotocol/sdk/client/stdio.js');
+      transport = new StdioClientTransport({
+        command: server.command ?? '',
+        args: server.args ?? [],
+        env: resolved.env,
+        ...(hasCredentials ? { stderr: 'pipe' as const } : {}),
+      });
+    } else {
+      if (!server.url) {
+        throw new Error(
+          `storage(fortemi): MCP server "${serverName}" has no URL`,
+        );
+      }
+      const url = validateRemoteMcpUrl(server.url);
+      const headers = resolved.headers ?? {};
+      if (hasNewReferences) {
+        for (const header of Object.keys(server.headerEnv ?? {})) {
+          if (header.toLowerCase() === 'authorization') headers[header] = `Bearer ${headers[header]}`;
+        }
+      }
+      if (server.type === 'http') {
+        const { StreamableHTTPClientTransport } =
+          await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+        transport = new StreamableHTTPClientTransport(url, {
+          requestInit: { headers },
+        });
+      } else if (server.type === 'sse') {
+        const { SSEClientTransport } =
+          await import('@modelcontextprotocol/sdk/client/sse.js');
+        transport = new SSEClientTransport(url, {
+          requestInit: { headers },
+          eventSourceInit: {
+            fetch: async (input, init) => {
+              const merged = new Headers(init?.headers);
+              for (const [name, value] of Object.entries(headers))
+                merged.set(name, value);
+              return fetch(input, { ...init, headers: merged });
+            },
+          },
+        });
+      } else {
+        throw new Error(
+          `storage(fortemi): unsupported MCP transport "${String(server.type)}"`,
+        );
+      }
+    }
+    const client = new Client(
+      { name: 'aiwg-storage-fortemi-adapter', version: '1.0.0' },
+      { capabilities: {} },
+    );
+    if (hasCredentials && server.type === 'stdio') {
+      // The recipient's stderr can contain credentials. Drain without forwarding.
+      (transport as import('@modelcontextprotocol/sdk/client/stdio.js').StdioClientTransport).stderr?.on('data', () => {});
+    }
+    await protect(() => client.connect(transport));
+
+    return {
+      async callTool(name, args) {
+        const call = async () => unwrapMcpToolResult(await client.callTool({ name, arguments: args }));
+        return protectResult(await protect(call));
+      },
+      async listTools() {
+        return protectResult(await protect(() => client.listTools()));
+      },
+      serverVersion() {
+        return protectResult(client.getServerVersion());
+      },
+      async close() {
+        await protect(() => client.close());
+      },
+    };
+  } catch (error) {
+    throw new Error(redact(error instanceof Error ? error.message : 'MCP transport failed'));
+  }
 };

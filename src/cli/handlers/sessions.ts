@@ -6,6 +6,7 @@ import {
   basename, dirname, isAbsolute, join, resolve,
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { providerScopeWarnings } from '../../sessions/coverage-preflight.js';
 import {
   CLAUDE_ADAPTER_VERSION,
   ClaudeSessionAdapter,
@@ -30,7 +31,8 @@ import {
   GrokbotSessionAdapter,
   GROK_BUILD_ADAPTER_VERSION,
   GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS,
-  GrokBuildSessionAdapter,
+  GROK_BUILD_NATIVE_LOCATOR_CLASS,
+  GrokBuildSessionAdapter, grokBuildNativeAvailability,
   grokBuildList,
   grokBuildSearch,
   grokBuildExport,
@@ -63,9 +65,19 @@ import {
   resolveMemoryConsumerManifest,
   assertSessionProviderId,
   acquireImportLease,
+  countUniqueSessionsAcrossCatalogs,
   defaultDiscoveryManifestPath,
+  defaultHostCatalogPath,
+  HOST_CATALOG_WORKSPACE_ID,
+  indexIdentitiesBySessionId,
+  manifestNeedsHostCatalog,
+  mergeCrossCatalogRows,
+  mergeSessionLists,
+  resolveHostReferences,
+  summarizeSessionAnalyticsFacts,
   discoverWorkspaceHistories,
   createSessionAdapterRegistry,
+  providerDiscoveryCapability,
   coveragePreflight,
   expectedSessionProviders,
   deriveSessionTimeline,
@@ -85,8 +97,13 @@ import {
   recoverEmbeddedAttachments,
   SESSION_EXPORT_PLAN_SCHEMA_VERSION,
   type SessionExportPlan,
+  type HostSessionReference,
+  type Session,
+  type SessionIdentityRow,
   type SessionProviderId,
   type SessionAuthorizationContext,
+  type SessionSearchHit,
+  type SessionSearchOptions,
   type SessionAnalyticsCategory,
   type SessionAnalyticsFact,
   type SessionAnalyticsQuery,
@@ -101,6 +118,8 @@ import { resolveImportLimits } from '../../sessions/import-limits.js';
 import { classifyGrokbotBlobName } from '../../sessions/adapters/grokbot-locator.js';
 import { readAiwgConfig } from '../../config/aiwg-config.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
+import { importFromDir } from './sessions-intake.js';
+import { executeSessionsTail } from './sessions-tail.js';
 
 const JSON_CONTRACT_VERSION = '1.0.0';
 
@@ -138,7 +157,7 @@ const EXIT = {
   locked: 7, coverage: 8,
 } as const;
 
-interface Envelope {
+export interface Envelope {
   contractVersion: typeof JSON_CONTRACT_VERSION;
   command: string;
   status: 'ok' | 'error' | 'preview';
@@ -157,9 +176,13 @@ Commands:
   grok-export <id> --workspace <path> --out <dir>  Export one CLI transcript
   grok-id <file> --format json|streaming-json  Read a headless session ID
   import <file> --source-id <id>  Import a supported provider JSONL source
+  import --from-dir <dir> [--source-id <prefix>]  Batch-import every recognised export in a directory
   list [--workspace <path-or-id>] [--limit N] [--cursor N]  List normalized sessions
   timeline [--workspace <path-or-id>] [--gap 30m]  Report chronological activity segments
   show <session-id> [--workspace <path-or-id>]  Show a session with events and tags
+  tail <session-id> | --provider <p> --latest [--workspace <path-or-id>] [--follow] [--json] [--import]
+                                  Read new native events; --follow polls every 500 ms
+                                  Read-only unless --import; --input <file> authorizes older direct imports
   search <query> [--workspace <path-or-id>]  Search authorized normalized content
   extract [session-id] --workspace <id> Extract structural candidates
   export plan --workspace <id> --out <file> <session-id...>  Select sessions into a reviewable plan
@@ -178,7 +201,7 @@ Commands:
   audit --workspace <id>          Read content-free mutation events
   analytics <view> --workspace <id>  Summary, tool-calls, escalations, or HITL
   forensics <view> --workspace <id>  Authorized timeline, indicators, or evidence
-  doctor                          Check catalog availability and integrity
+  doctor                          Check catalog integrity and configured provider scope
 
 Options:
   --json          Emit the versioned JSON contract
@@ -190,14 +213,19 @@ Options:
                    Catalog defaults to <project-or-cwd>/.aiwg/sessions/catalog.sqlite
                    Imports for other workspaces stay in the selected catalog;
                    use --db to read that catalog from another directory
-  --expected-providers <ids>  Comma-separated authorized scope, independent of runtime inventory
+  --expected-providers <ids>  Explicit scope for this invocation; refresh re-reads workspace config
+  --carry-forward <catalog>  Rebuild from sources plus re-redacted stored history (import-discovered)
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Authorize a shared Codex sessions/export root (repeatable)
+                   Adds to defaults separately authorized by --provider-home
   --omp-root <path>  Explicitly authorize an OMP profile sessions root
   --muse-root <path>  Explicitly authorize a Muse Code sessions root
   --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
   --grokbot-root <path>  Explicitly authorize a Grok Bot sand-client-persistence root
+  --grok-root <path>  Authorize experimental Grok Build native sessions (requires AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL=1; unqualified)
+  --grok-active-sessions <path>  Authorize experimental active_sessions.json live detection (same opt-in; requires --grok-root)
+  --hermes-root <path>  Explicitly authorize a Hermes home for a read-only state.db backup snapshot
   --grok-bin <path>  Absolute Grok Build CLI path for grok-list/grok-search/grok-export
                    (default: grok on PATH, then $GROK_HOME/bin/grok)
   --confirm, --yes  Confirm a persistent discovered batch import
@@ -209,6 +237,9 @@ Options:
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
   --min-coverage <0..1>  Fail list/report commands below a coverage ratio
   --provider <id> Filter list or select an import adapter
+  --from-dir <dir>  Batch-import every recognised export file in a directory (import only);
+                   --source-id becomes an optional per-file source-ID prefix;
+                   files already imported are skipped by content digest
   --consumer <id> Select a named memory consumer for promotion
   --tag <tag>, --limit <n>, --cursor <n>
   --page-size <n>  Extraction scan page size (default 250, maximum 500)
@@ -272,6 +303,7 @@ export const sessionsHandler: CommandHandler = {
       const explicitHelp = parsed.flags.has('--help') || parsed.flags.has('-h');
       return printHelp(ctx, explicitHelp ? EXIT.ok : EXIT.usage);
     }
+    if (parsed.command === 'tail') return executeSessionsTail(ctx, parsed, { databasePath, readAuthorizationContext });
     try {
       const result = await executeCommand(ctx, parsed);
       if (json) await emit(result.envelope);
@@ -287,7 +319,7 @@ export const sessionsHandler: CommandHandler = {
   },
 };
 
-interface ParsedArgs {
+export interface ParsedArgs {
   command?: string;
   positionals: string[];
   flags: Set<string>;
@@ -303,7 +335,10 @@ async function executeCommand(
   const command = args.command!;
   if (command === 'sources') {
     const registry = createSessionAdapterRegistry();
-    const reports = registry.list().map((adapter) => providerDisposition(adapter.provider));
+    const reports = registry.list().map((adapter) => ({
+      ...providerDisposition(adapter.provider),
+      discovery: providerDiscoveryCapability(adapter.provider, adapter.supportedOperations),
+    }));
     const preflight = coveragePreflight({ expectedProviders: requestedProviders(args), registry });
     return ok(command, { providers: reports, count: reports.length, preflight });
   }
@@ -349,18 +384,35 @@ async function executeCommand(
           limit,
           cursor,
         });
+        // Account-scoped sessions live once in the host catalog; the
+        // workspace holds references (#3232). Read through them on the
+        // opening page so the workspace lists its referenced sessions.
+        // Cursor pages continue the local snapshot. Totals dedupe legacy
+        // copied rows against references, counting each session once.
+        const hostView = cursor
+          ? null
+          : readHostReferencedSessions(repository, { provider, tag: args.values.get('--tag') });
+        const items = hostView && hostView.sessions.length > 0
+          ? mergeSessionLists(result.items, hostView.sessions).slice(0, limit)
+          : result.items;
+        const total = hostView && hostView.references.length > 0
+          ? countUniqueSessionsAcrossCatalogs([{
+            identities: repository.listSessionIdentities(workspaceId),
+            references: hostView.resolvedReferences,
+          }])
+          : result.total;
         const coverage = {
           ...repository.getCoverage(workspaceId),
           catalogScope: catalogScope(ctx, args, repository, workspaceId),
         };
         const response = {
-          items: result.items,
+          items,
           page: {
             limit,
             cursor: cursor ?? null,
             nextCursor: result.nextCursor,
             snapshotRowid: result.snapshotRowid,
-            total: result.total,
+            total,
           },
           coverage,
         };
@@ -450,10 +502,15 @@ async function executeCommand(
         if (!session) throw new CliError('SESSION_NOT_FOUND',
           `session not found: ${id}${scope.hint ? `; ${scope.hint}` : ''}`,
           EXIT.unavailable, { catalogScope: scope });
+        // Image references resolve against the blob store: available blobs
+        // report their reference, missing ones an explicit unavailable
+        // state. Bytes stay out of the response; fetch by digest (#3265).
+        const events = repository.listEvents(session.sessionId, session.workspaceId)
+          .map((event) => ({ ...event, images: repository.resolveEventImages(event) }));
         return ok(command, {
           session,
           tags: repository.listTags(session.sessionId, session.workspaceId),
-          events: repository.listEvents(session.sessionId, session.workspaceId),
+          events,
           catalogScope: catalogScope(ctx, args, repository, session.workspaceId),
         });
       }
@@ -462,7 +519,8 @@ async function executeCommand(
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
         const providerInput = args.values.get('--provider');
         const provider = providerInput ? assertSessionProviderId(providerInput) : undefined;
-        const result = repository.search({
+        const limit = boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit');
+        const searchOptions = {
           query,
           workspaceId,
           providers: provider ? [provider] : undefined,
@@ -477,13 +535,30 @@ async function executeCommand(
           sensitivity: args.values.get('--sensitivity'),
           extractionState: args.values.get('--extraction-state'),
           controlEvents: controlEventMode(args.values.get('--control-events')),
-          limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
+          limit,
           cursor: args.values.get('--cursor'),
-        });
+        };
+        const result = repository.search(searchOptions);
+        // Read through host references on the opening page so workspace
+        // search finds referenced account-scoped sessions. Each session
+        // counts once: host hits for sessions already present locally
+        // (legacy copied rows) are dropped by provider + native session.
+        const hostRead = searchOptions.cursor
+          ? null
+          : searchHostReferencedSessions(repository, searchOptions, provider);
+        const items = hostRead && hostRead.hits.length > 0
+          ? mergeCrossCatalogRows(
+            result.items,
+            hostRead.hits,
+            indexIdentitiesBySessionId(repository.listSessionIdentities(workspaceId)),
+            indexIdentitiesBySessionId(hostRead.hostIdentities),
+            (hit) => [hit.provider, hit.eventId].join(' '),
+          ).slice(0, limit)
+          : result.items;
         return ok(command, {
-          items: result.items,
+          items,
           catalogScope: catalogScope(ctx, args, repository, workspaceId),
-          page: { limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
+          page: { limit,
             nextCursor: result.nextCursor },
         });
       }
@@ -491,14 +566,22 @@ async function executeCommand(
         const view = requiredPositional(args, 0, 'analytics view');
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
         const query = analyticsQuery(args, workspaceId);
+        // Host references resolve to facts stored under the host catalog;
+        // each session counts once by provider + native session id. Without
+        // references the single-catalog path below is unchanged.
+        const mergedFacts = readWorkspaceAnalyticsFacts(repository, query);
         if (view === 'summary') {
           return ok(command, {
             view,
-            summary: repository.analyticsSummary(query),
+            summary: mergedFacts
+              ? summarizeSessionAnalyticsFacts(mergedFacts, workspaceId)
+              : repository.analyticsSummary(query),
           });
         }
         const categories = analyticsCategories(view);
-        const items = repository.listAnalyticsFacts({ ...query, categories });
+        const items = mergedFacts
+          ? mergedFacts.filter((fact) => categories.includes(fact.category))
+          : repository.listAnalyticsFacts({ ...query, categories });
         return ok(command, {
           analyticsVersion: '1.0.0',
           view,
@@ -903,12 +986,22 @@ async function executeCommand(
           providerLogsModified: false,
         });
       }
-      case 'doctor':
+      case 'doctor': {
+        const workspacePath = resolve(ctx.cwd, args.values.get('--workspace') ?? ctx.cwd);
+        const workspace = existsSync(workspacePath) ? realpathSync(workspacePath) : workspacePath;
+        const config = await readAiwgConfig(workspace);
+        const manifestPath = resolve(ctx.cwd, args.values.get('--manifest') ?? defaultDiscoveryManifestPath(workspace));
+        const preflight = existsSync(manifestPath)
+          ? (await readDiscoveryManifest(manifestPath)).preflight
+          : repository.getCoverage(workspace).preflight;
+        const warnings = providerScopeWarnings(config?.providers ?? [], preflight?.expectedProviders ?? [], preflight?.scopeWarnings);
         return ok(command, {
           database: redactSourceLocator(databasePath(ctx, args)),
           health: repository.doctor(),
+          warnings,
           jsonContractVersion: JSON_CONTRACT_VERSION,
         });
+      }
       default:
         throw new CliError('UNKNOWN_COMMAND', `unknown sessions command: ${command}`, EXIT.usage);
     }
@@ -917,13 +1010,7 @@ async function executeCommand(
   }
 }
 
-async function importSource(
-  ctx: HandlerContext,
-  args: ParsedArgs,
-): Promise<{ envelope: Envelope; exitCode: number }> {
-  const limits = await configuredImportLimits(ctx, args);
-  const input = resolve(ctx.cwd, requiredPositional(args, 0, 'file'));
-  const providerInput = args.values.get('--provider') ?? 'generic';
+function assertSupportedImportProvider(providerInput: string): SessionProviderId {
   const provider = assertSessionProviderId(providerInput);
   if (provider !== 'generic' && provider !== 'claude' && provider !== 'codex'
     && provider !== 'copilot' && provider !== 'cursor' && provider !== 'factory'
@@ -931,6 +1018,61 @@ async function importSource(
     && provider !== 'openhuman' && provider !== 'grokbot' && provider !== 'grok-build' && provider !== 'muse' && provider !== 'pi' && provider !== 'omp' && provider !== 'deepseek-harness' && provider !== 'warp' && provider !== 'devin-desktop') {
     throw new CliError('UNSUPPORTED_OPERATION', `session import is not implemented for ${provider}`, EXIT.unsupported);
   }
+  return provider;
+}
+
+function adapterVersionFor(provider: SessionProviderId): string {
+  switch (provider) {
+    case 'claude': return CLAUDE_ADAPTER_VERSION;
+    case 'codex': return CODEX_ADAPTER_VERSION;
+    case 'copilot': return COPILOT_ADAPTER_VERSION;
+    case 'cursor': return CURSOR_ADAPTER_VERSION;
+    case 'factory': return FACTORY_ADAPTER_VERSION;
+    case 'hermes': return HERMES_ADAPTER_VERSION;
+    case 'opencode': return OPENCODE_ADAPTER_VERSION;
+    case 'openclaw': return OPENCLAW_ADAPTER_VERSION;
+    case 'openhuman': return OPENHUMAN_ADAPTER_VERSION;
+    case 'grokbot': return GROKBOT_ADAPTER_VERSION;
+    case 'grok-build': return GROK_BUILD_ADAPTER_VERSION;
+    case 'muse': return MUSE_ADAPTER_VERSION;
+    case 'pi': return PI_ADAPTER_VERSION;
+    case 'omp': return OMP_ADAPTER_VERSION;
+    case 'deepseek-harness': return DEEPSEEK_HARNESS_ADAPTER_VERSION;
+    case 'warp': return WARP_ADAPTER_VERSION;
+    case 'devin-desktop': return DEVIN_DESKTOP_ADAPTER_VERSION;
+    default: return GENERIC_ADAPTER_VERSION;
+  }
+}
+
+/**
+ * `aiwg sessions import --from-dir <dir>` (#3168). Batch-imports every
+ * recognised provider export file in one intake directory: one receipt per
+ * file plus a summary. Files already imported are skipped by content digest
+ * before any adapter work; unrecognised files are skipped with a reason.
+ * Each remaining file imports through the single-file path, so adapter
+ * selection, redaction, and idempotency semantics are identical.
+ */
+function importFailureReason(error: unknown): string {
+  if (error instanceof CliError) return `${error.code}: ${error.message}`;
+  if (error instanceof SessionContractError) return `${error.code}: ${error.message}`;
+  return `IMPORT_INTERRUPTED: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+async function importSource(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const fromDir = args.values.get('--from-dir');
+  if (fromDir !== undefined) {
+    return importFromDir(ctx, args, resolve(ctx.cwd, fromDir), {
+      assertSupportedImportProvider, normalizeWorkspaceId, isDryRun, preview, ok,
+      openRepository, adapterVersionFor, importSource, importFailureReason,
+    });
+  }
+  const limits = await configuredImportLimits(ctx, args);
+  const input = resolve(ctx.cwd, requiredPositional(args, 0, 'file'));
+  const providerInput = args.values.get('--provider') ?? 'generic';
+  const provider = assertSupportedImportProvider(providerInput);
   const sourceId = requiredValue(args, '--source-id');
   const workspaceId = args.values.has('--workspace')
     ? normalizeWorkspaceId(ctx.cwd, args.values.get('--workspace')!)
@@ -948,6 +1090,8 @@ async function importSource(
   const isGrokbotNative = isGrokbot
     && classifyGrokbotBlobName(basename(input))?.kind === 'transcript-replica';
   const isGrokBuild = provider === 'grok-build';
+  const isGrokBuildNative = isGrokBuild
+    && basename(input) === 'chat_history.jsonl';
   const isMuse = provider === 'muse';
   const isPi = provider === 'pi';
   const isOmp = provider === 'omp';
@@ -1006,7 +1150,7 @@ async function importSource(
                   : isGrokbot
                     ? (isGrokbotNative ? GROKBOT_NATIVE_REPLICA_LOCATOR_CLASS : 'manual-export')
                     : isGrokBuild
-                      ? GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS
+                      ? (isGrokBuildNative ? GROK_BUILD_NATIVE_LOCATOR_CLASS : GROK_BUILD_CLI_EXPORT_LOCATOR_CLASS)
                     : isMuse
                       ? 'manual-export'
                     : isPi
@@ -1045,7 +1189,7 @@ async function importSource(
                       : isGrokbot
                         ? (isGrokbotNative ? 'grokbot-native-transcript-replica-v1' : 'manual-interchange')
                         : isGrokBuild
-                          ? 'documented-cli-markdown-export'
+                          ? (isGrokBuildNative ? 'grok-build-native-chat-history-v1' : 'documented-cli-markdown-export')
                         : isMuse
                           ? 'muse-export-trajectory-v1'
                         : isWarp
@@ -1112,7 +1256,7 @@ async function importSource(
                       : isGrokbot
                         ? { 'native.grokbot': {} }
                         : isGrokBuild
-                          ? { 'native.grok-build': { acquisition: 'grok-cli-export-markdown' } }
+                          ? { 'native.grok-build': { acquisition: isGrokBuildNative ? GROK_BUILD_NATIVE_LOCATOR_CLASS : 'grok-cli-export-markdown' } }
                         : isMuse
                           ? { 'native.muse': {} }
                         : isWarp
@@ -1286,6 +1430,9 @@ async function exportBuild(
   }));
   const index = buildSessionAiwgFortemiIndexExport(
     plan.workspaceId, sessions, eventsBySessionId, outputs, catalogTagsBySessionId,
+    // Resolve image references against the live catalog: available blobs
+    // export as references, missing ones as explicit unavailable (#3265).
+    (event) => repository.resolveEventImages(event),
   );
   // aiwgFortemiIndexToKnowledgeShardWithReport targets the declared
   // full-v1/2.0.0 archive contract and validates losslessness -- unlike the
@@ -1523,12 +1670,19 @@ async function discoverWorkspace(
       ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     grokbotRoot: args.values.has('--grokbot-root')
       ? resolve(ctx.cwd, args.values.get('--grokbot-root')!) : undefined,
+    grokRoot: args.values.has('--grok-root')
+      ? resolve(ctx.cwd, args.values.get('--grok-root')!) : undefined,
+    grokActiveSessions: args.values.has('--grok-active-sessions')
+      ? resolve(ctx.cwd, args.values.get('--grok-active-sessions')!) : undefined,
+    hermesRoot: args.values.has('--hermes-root')
+      ? resolve(ctx.cwd, args.values.get('--hermes-root')!) : undefined,
     codexRoots: [
       ...(config?.sessions?.codex_roots ?? []).map((root) => resolve(workspace, root)),
       ...args.codexRoots.map((root) => resolve(ctx.cwd, root)),
     ],
   });
   const data = {
+    warnings: manifest.preflight?.scopeWarnings ?? [],
     manifest: publicDiscoveryManifest(manifest),
     manifestPath: redactSourceLocator(manifestPath),
     exactManifestRequiredForImport: true,
@@ -1561,7 +1715,20 @@ async function importDiscovered(
       EXIT.contract,
     );
   }
+  const carryPath = args.values.has('--carry-forward')
+    ? resolve(ctx.cwd, args.values.get('--carry-forward')!) : undefined;
+  if (carryPath) {
+    const sourceStat = statSync(carryPath);
+    const target = databasePath(ctx, args);
+    if (existsSync(target)) {
+      const targetStat = statSync(target);
+      if (sourceStat.dev === targetStat.dev && sourceStat.ino === targetStat.ino) {
+        throw new CliError('INVALID_ARGUMENT', 'carry-forward requires a separate destination catalog', EXIT.usage);
+      }
+    }
+  }
   const expected = requestedProviders(args);
+  const warnings = providerScopeWarnings(config?.providers ?? [], manifest.preflight?.expectedProviders ?? [], manifest.preflight?.scopeWarnings);
   if (expected && JSON.stringify(expected) !== JSON.stringify(manifest.preflight?.expectedProviders)) {
     throw new SessionContractError('INVALID_ARGUMENT',
       'expected provider scope differs from the saved manifest; rediscover with --expected-providers');
@@ -1580,33 +1747,47 @@ async function importDiscovered(
       // A preview can still describe the exact manifest before a catalog exists.
     }
     return preview('import-discovered', {
+      warnings,
       manifest: publicDiscoveryManifest(manifest),
       receipt: previewDiscoveryImport(manifest, existing, new Date(), exclude),
       confirmationRequired: !isDryRun(ctx, args),
       wouldPersist: false,
+      ...(carryPath ? { carryForward: redactSourceLocator(carryPath) } : {}),
     });
   }
 
+  const waitMs = boundedInteger(args.values.get('--lock-wait-ms'), 5_000, 0, 300_000, '--lock-wait-ms');
   const lease = await acquireImportLease(
     databasePath(ctx, args),
     sha256(['discovered-import', manifest.manifestId, manifest.workspaceId].join('\0')),
-    {
-      waitMs: boundedInteger(
-        args.values.get('--lock-wait-ms'),
-        5_000,
-        0,
-        300_000,
-        '--lock-wait-ms',
-      ),
-    },
+    { waitMs },
   );
+  let hostLease: Awaited<ReturnType<typeof acquireImportLease>> | undefined;
   try {
-    const repository = openRepository(ctx, args);
+    const previous = carryPath ? new SessionRepository(carryPath, { readonly: true }) : undefined;
+    let repository: SessionRepository | undefined;
+    let hostRepository: SessionRepository | undefined;
     try {
+      repository = openRepository(ctx, args);
+      // Account-scoped providers (Grok Bot) import once into the host
+      // catalog; the workspace catalog records a reference (#3232). The
+      // host catalog is only opened when the manifest actually holds an
+      // account-scoped source.
+      const hostCatalogPath = defaultHostCatalogPath();
+      if (manifestNeedsHostCatalog(manifest.sources)) {
+        mkdirSync(dirname(hostCatalogPath), { recursive: true, mode: 0o700 });
+        // The workspace lease does not cover the shared host catalog; serialize
+        // host writers the same way the hourly refresh does.
+        hostLease = await acquireImportLease(hostCatalogPath, `host-import-${process.pid}`, { waitMs });
+        hostRepository = new SessionRepository(hostCatalogPath);
+      }
       const interruptedRuns = repository.interruptRunningBatchImports();
       const receipt = await importDiscoveryManifest({
         manifest,
         repository,
+        hostRepository,
+        hostCatalogPath,
+        carryForward: previous,
         limits,
         exclude,
         signal: ctx.signal,
@@ -1614,6 +1795,7 @@ async function importDiscovered(
       });
       receipt.interruptedRuns = interruptedRuns;
       return ok('import-discovered', {
+        warnings,
         manifestId: manifest.manifestId,
         receipt,
         resumable: receipt.run.status !== 'complete',
@@ -1624,9 +1806,12 @@ async function importDiscovered(
         },
       });
     } finally {
-      repository.close();
+      repository?.close();
+      hostRepository?.close();
+      previous?.close();
     }
   } finally {
+    await hostLease?.release();
     await lease.release();
   }
 }
@@ -1706,10 +1891,10 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
   if (provider === 'hermes') {
     return {
       provider, disposition: 'implemented', operationalState: 'available',
-      supportedOperations: ['inspect', 'stream'],
+      supportedOperations: ['discover', 'inspect', 'stream'],
       acquisitionModes: ['jsonl', 'api', 'sqlite-snapshot'],
       reasonCode: null,
-      remediation: 'Use `hermes sessions export` or an explicitly verified sqlite3.backup() snapshot export.',
+      remediation: 'Pass --hermes-root with an explicitly authorized Hermes home for a read-only state.db backup snapshot; or use `hermes sessions export` and import the explicitly authorized JSONL file.',
       evidence: {
         adapterVersion: HERMES_ADAPTER_VERSION,
         verifiedAt: '2026-07-27',
@@ -1815,12 +2000,12 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
     };
   }
   if (provider === 'grok-build') {
+    const adapter = new GrokBuildSessionAdapter();
     return {
       provider, disposition: 'implemented', operationalState: 'available',
-      supportedOperations: ['inspect', 'stream'],
-      acquisitionModes: ['manual-export'],
-      reasonCode: 'CLI_EXPORT_REQUIRED',
-      remediation: 'Run `grok sessions list`, then `grok export <session-id> <session-id>.md` and import the explicitly authorized Markdown file. `aiwg sessions grok-list` finds `grok` on PATH or in $GROK_HOME/bin; pass --grok-bin <absolute path> otherwise.',
+      supportedOperations: adapter.supportedOperations,
+      acquisitionModes: adapter.acquisitionModes,
+      ...grokBuildNativeAvailability(),
       evidence: {
         adapterVersion: GROK_BUILD_ADAPTER_VERSION,
         verifiedAt: '2026-09-21',
@@ -1962,6 +2147,150 @@ function catalogScope(
   };
 }
 
+/**
+ * Host-catalog read-through for account-scoped sessions (#3232). The
+ * workspace catalog holds references instead of copies; each reference
+ * records its host catalog path. Every referenced catalog opens read-only
+ * and closes before returning. Unreadable catalogs contribute nothing, so
+ * local rows still list when the host catalog is missing.
+ */
+function eachReferencedHostCatalog<T>(
+  repository: SessionRepository,
+  provider: string | undefined,
+  read: (host: SessionRepository, references: HostSessionReference[]) => T,
+): Array<{ references: HostSessionReference[]; value: T }> {
+  const references = repository.listHostSessionReferences()
+    .filter((reference) => !provider || reference.provider === provider);
+  if (references.length === 0) return [];
+  const byCatalog = new Map<string, HostSessionReference[]>();
+  for (const reference of references) {
+    const group = byCatalog.get(reference.hostCatalog);
+    if (group) group.push(reference);
+    else byCatalog.set(reference.hostCatalog, [reference]);
+  }
+  const reads: Array<{ references: HostSessionReference[]; value: T }> = [];
+  for (const [catalogPath, group] of byCatalog) {
+    let host: SessionRepository | undefined;
+    try {
+      host = new SessionRepository(catalogPath, { readonly: true });
+    } catch {
+      continue;
+    }
+    try {
+      reads.push({ references: group, value: read(host, group) });
+    } finally {
+      host.close();
+    }
+  }
+  return reads;
+}
+
+function readHostReferencedSessions(
+  repository: SessionRepository,
+  filters: { provider?: SessionProviderId; tag?: string },
+): { references: HostSessionReference[]; resolvedReferences: HostSessionReference[]; sessions: Session[] } {
+  const reads = eachReferencedHostCatalog(repository, filters.provider, (host, group) => {
+    const page = host.listSessions({
+      provider: filters.provider,
+      workspaceId: HOST_CATALOG_WORKSPACE_ID,
+      limit: group.length,
+    });
+    const sessions = resolveHostReferences(group, page.items)
+      .filter((session) => !filters.tag || host.listTags(session.sessionId).includes(filters.tag));
+    const resolvedSourceIds = new Set(sessions.map((session) => session.sourceId));
+    return {
+      sessions,
+      resolvedReferences: group.filter((reference) => resolvedSourceIds.has(reference.sourceId)),
+    };
+  });
+  return {
+    references: reads.flatMap((read) => read.references),
+    resolvedReferences: reads.flatMap((read) => read.value.resolvedReferences),
+    sessions: reads.flatMap((read) => read.value.sessions),
+  };
+}
+
+function searchHostReferencedSessions(
+  repository: SessionRepository,
+  searchOptions: Omit<SessionSearchOptions, 'workspaceId'>,
+  provider: SessionProviderId | undefined,
+): { hits: SessionSearchHit[]; hostIdentities: SessionIdentityRow[] } {
+  const reads = eachReferencedHostCatalog(repository, provider, (host) => {
+    const result = host.search({
+      ...searchOptions,
+      workspaceId: HOST_CATALOG_WORKSPACE_ID,
+      cursor: undefined,
+    });
+    return {
+      hits: result.items,
+      hostIdentities: host.listSessionIdentities(HOST_CATALOG_WORKSPACE_ID),
+    };
+  });
+  return {
+    hits: reads.flatMap((read) => read.value.hits),
+    hostIdentities: reads.flatMap((read) => read.value.hostIdentities),
+  };
+}
+
+function readHostReferencedAnalyticsFacts(
+  repository: SessionRepository,
+  query: SessionAnalyticsQuery,
+): { facts: SessionAnalyticsFact[]; hostIdentities: SessionIdentityRow[] } {
+  // query.sessionId is a workspace-local internal id; host rows carry host
+  // stable ids, so resolve it to a provider + native session key first.
+  let sessionKey: string | null = null;
+  if (query.sessionId) {
+    const session = repository.getSession(query.sessionId, query.workspaceId);
+    if (!session) return { facts: [], hostIdentities: [] };
+    sessionKey = `${session.provider} ${session.nativeSessionId}`;
+  }
+  const reads = eachReferencedHostCatalog(repository, query.provider, (host, group) => {
+    const wanted = new Set(group.map((reference) => `${reference.provider} ${reference.nativeSessionId}`));
+    const identities = host.listSessionIdentities(HOST_CATALOG_WORKSPACE_ID);
+    const hostSessionIds = new Set(
+      identities
+        .filter((identity) => wanted.has(`${identity.provider} ${identity.nativeSessionId}`))
+        .map((identity) => identity.sessionId),
+    );
+    const { sessionId: _localSessionId, ...hostQuery } = query;
+    const facts = host.listAnalyticsFacts({ ...hostQuery, workspaceId: HOST_CATALOG_WORKSPACE_ID })
+      .filter((fact) => hostSessionIds.has(fact.sessionId)
+        && (!sessionKey || `${fact.provider} ${hostSessionKey(fact.sessionId, identities)}` === sessionKey));
+    return { facts, identities };
+  });
+  return {
+    facts: reads.flatMap((read) => read.value.facts),
+    hostIdentities: reads.flatMap((read) => read.value.identities),
+  };
+}
+
+function hostSessionKey(sessionId: string, identities: readonly SessionIdentityRow[]): string | null {
+  return identities.find((identity) => identity.sessionId === sessionId)?.nativeSessionId ?? null;
+}
+
+/**
+ * Workspace analytics facts with host references resolved. Returns null
+ * when the workspace holds no references so callers keep the exact
+ * single-catalog query path (SQL limit/filter semantics unchanged).
+ */
+function readWorkspaceAnalyticsFacts(
+  repository: SessionRepository,
+  query: SessionAnalyticsQuery,
+): SessionAnalyticsFact[] | null {
+  const references = repository.listHostSessionReferences()
+    .filter((reference) => !query.provider || reference.provider === query.provider);
+  if (references.length === 0) return null;
+  const hostRead = readHostReferencedAnalyticsFacts(repository, query);
+  if (hostRead.facts.length === 0) return null;
+  return mergeCrossCatalogRows(
+    repository.listAnalyticsFacts(query),
+    hostRead.facts,
+    indexIdentitiesBySessionId(repository.listSessionIdentities(query.workspaceId)),
+    indexIdentitiesBySessionId(hostRead.hostIdentities),
+    (fact) => `${fact.provider} ${fact.factId}`,
+  );
+}
+
 async function configuredImportLimits(ctx: HandlerContext, args: ParsedArgs, workspace?: string) {
   const selectedWorkspace = workspace ?? (args.values.has('--workspace')
     ? resolve(ctx.cwd, args.values.get('--workspace')!) : ctx.cwd);
@@ -1983,12 +2312,12 @@ function parseArgs(argv: string[]): ParsedArgs {
   const exclude: string[] = [];
   const positionals: string[] = [];
   const valueFlags = new Set([
-    '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id',
+    '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id', '--from-dir',
     '--date-from', '--date-to', '--participant', '--model', '--role', '--tool',
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--carry-forward', '--manifest', '--provider-home', '--codex-root', '--omp-root', '--muse-root', '--dsh-root', '--grokbot-root', '--grok-root', '--grok-active-sessions', '--hermes-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold', '--expected-providers', '--exclude', '--max-record-bytes', '--max-source-bytes',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',

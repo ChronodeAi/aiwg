@@ -101,6 +101,60 @@ async function fakeProviderResponse(script, request) {
 }
 
 describe('T-OG-16/22 launcher-owned provider evidence', () => {
+  it.each(['shell', 'mcp'])('opens only the resolved provider after three distinct trusted %s observations', async transport => {
+    let now = 1_000;
+    const breaker = breakerAt(() => now);
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 503 }));
+    const charge = vi.fn();
+    const invocation = { transport, selected: { cli: 'fixture', inferenceProvider: 'vendor' } };
+    for (let n = 0; n < 3; n++) {
+      const invocationId = `outage-${n}`;
+      const { token } = breaker.admit({ invocationId, scopeKeys: ['provider:vendor', 'provider:other', 'host:local'] });
+      breaker.beginDispatch(token, { invocationId, selectionDigest: null });
+      breaker.commitDispatch(token);
+      const result = { invocationId, attemptOutcome: 'failed', termination: 'confirmed', exitCode: 1,
+        health: { reasonCode: 'NETWORK' } };
+      const options = { invocation, result, installation, breaker, fetchImpl,
+        beforeRequest: async () => true, onDispatch: charge };
+      await observeLauncherRecoveryOutcome(options);
+      await observeLauncherRecoveryOutcome(options);
+      breaker.settle(token, classifyAttemptForSettlement(invocation, result));
+      expect(breaker.getState('provider:vendor').state).toBe(n < 2 ? 'closed' : 'open');
+      now++;
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(charge).toHaveBeenCalledTimes(3);
+    expect(breaker.getState('provider:other').state).toBe('closed');
+    expect(breaker.getState('host:local').state).toBe('closed');
+    expect(breaker.admit({ invocationId: 'paused', scopeKeys: ['provider:vendor'] }).ok).toBe(false);
+  });
+
+  it.each([200, 401, 403, 404])('worker outage text with independent HTTP %s never widens scope', async status => {
+    const breaker = breakerAt();
+    for (let n = 0; n < 4; n++) {
+      const invocationId = `text-${n}`;
+      const { token } = breaker.admit({ invocationId, scopeKeys: ['provider:vendor', 'quota:shared-account'] });
+      const invocation = { transport: 'shell', selected: { inferenceProvider: 'vendor' } };
+      const result = { invocationId, attemptOutcome: 'failed', termination: 'confirmed', exitCode: 1,
+        health: { reasonCode: 'NETWORK' }, stderr: '503 outage quota exhausted' };
+      await observeLauncherRecoveryOutcome({ invocation, result, installation, breaker,
+        beforeRequest: async () => true, onDispatch: vi.fn(), fetchImpl: async () => new Response(null, { status }) });
+      breaker.settle(token, classifyAttemptForSettlement(invocation, result, { quotaAccount: 'shared-account' }));
+    }
+    expect(breaker.getState('provider:vendor').state).toBe('closed');
+    expect(breaker.getState('quota:shared-account').state).toBe('closed');
+  });
+
+  it('neither a failed transport nor replay of its result grants evidence or another request', async () => {
+    const result = { attemptOutcome: 'failed', termination: 'confirmed', health: { reasonCode: 'NETWORK' } };
+    const fetchImpl = vi.fn(async () => { throw new Error('synthetic connection failure'); });
+    const options = { result, installation, beforeRequest: async () => true, onDispatch: vi.fn(), fetchImpl };
+    await observeLauncherRecoveryOutcome(options);
+    await observeLauncherRecoveryOutcome(options);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(classifyLaunchOutcomeForRecovery(result).reasonCode).toBeNull();
+  });
+
   it('ingests a real failed launch and fake-provider 429/reset headers, pausing aliases sharing quota', async () => {
     vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     const now = 1_000_000;

@@ -16,6 +16,9 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ExecutorShim } from '../../../tools/ralph-external/executor-shim.mjs';
 
 // ── Stub DaemonSupervisor ────────────────────────────────────────────────────
@@ -151,7 +154,9 @@ describe('ExecutorShim — constructor', () => {
 // ── register / deregister ────────────────────────────────────────────────────
 
 describe('ExecutorShim — register', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  const roots: string[] = [];
+  const tempRoot = () => { const root = mkdtempSync(join(tmpdir(), 'executor-shim-token-')); roots.push(root); return root; };
+  afterEach(() => { vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
   it('POSTs correct payload and stores token', async () => {
     const token = 'exec_tk_test123';
@@ -191,6 +196,88 @@ describe('ExecutorShim — register', () => {
     await shim.register();
     expect(events).toHaveLength(1);
     expect(events[0].executorId).toBe('test-executor-uuid-1234');
+  });
+
+  it('sends its current token when registering again', async () => {
+    mockFetch([0, 1].map(() => ({ ok: true, status: 201, json: async () => ({ token: 'prior-token' }) })));
+    const { shim } = makeShim();
+    await shim.register();
+    await shim.register();
+    expect(vi.mocked(fetch).mock.calls[0][1].headers.Authorization).toBeUndefined();
+    expect(vi.mocked(fetch).mock.calls[1][1].headers.Authorization).toBe('Bearer prior-token');
+  });
+
+  it('authenticates an existing identity with an explicitly supplied token', async () => {
+    mockFetch([{ ok: true, status: 201, json: async () => ({ token: 'existing-token' }) }]);
+    await makeShim({ token: 'existing-token' }).shim.register();
+    expect(vi.mocked(fetch).mock.calls[0][1].headers.Authorization).toBe('Bearer existing-token');
+  });
+
+  it('persists a private token and authenticates a restarted shim', async () => {
+    const root = tempRoot();
+    const tokenPath = join(root, 'tokens', 'token.json');
+    mockFetch([0, 1].map(() => ({ ok: true, status: 201, json: async () => ({ token: 'restart-token' }) })));
+    await makeShim({ tokenPath }).shim.register();
+    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
+    expect(statSync(join(root, 'tokens')).mode & 0o777).toBe(0o700);
+    expect(JSON.parse(readFileSync(tokenPath, 'utf8')).token).toBe('restart-token');
+    await makeShim({ tokenPath }).shim.register();
+    expect(vi.mocked(fetch).mock.calls[1][1].headers.Authorization).toBe('Bearer restart-token');
+    for (const overrides of [{ executorId: 'other-executor' }, { aiwgServeUrl: 'http://other-server:7337' }]) {
+      const other = makeShim({ tokenPath, ...overrides }).shim;
+      mockFetch([{ body: { token: 'different-token' } }]);
+      await other.register();
+      expect(vi.mocked(fetch).mock.calls[0][1].headers.Authorization).toBeUndefined();
+    }
+  });
+
+  it.each(['group', 'other', 'symlink', 'owner'])('refuses an insecure %s cache before registration', async kind => {
+    const root = tempRoot();
+    const tokenPath = join(root, 'token.json');
+    const target = join(root, 'target.json');
+    writeFileSync(target, JSON.stringify({ token: 'private-cache-value' }), { mode: 0o600 });
+    if (kind === 'symlink') symlinkSync(target, tokenPath);
+    else {
+      writeFileSync(tokenPath, readFileSync(target), { mode: 0o600 });
+      if (kind === 'group') chmodSync(tokenPath, 0o640);
+      if (kind === 'other') chmodSync(tokenPath, 0o604);
+    }
+    if (kind === 'owner') vi.spyOn(process, 'getuid').mockReturnValue(statSync(target).uid + 1);
+    mockFetch([]);
+    try {
+      await expect(makeShim({ tokenPath }).shim.register()).rejects.toThrow(/group or other|symlink|not owned/);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); }
+  });
+
+  it('rejects malformed cache records without echoing their contents', async () => {
+    const tokenPath = join(tempRoot(), 'token.json');
+    writeFileSync(tokenPath, 'private-cache-value invalid JSON', { mode: 0o600 });
+    await expect(makeShim({ tokenPath }).shim.register()).rejects.toThrow('Executor token cache contains invalid JSON.');
+  });
+
+  it('refuses a public cache directory before requesting a newly issued token', async () => {
+    const directory = join(tempRoot(), 'tokens');
+    mkdirSync(directory, { mode: 0o755 });
+    mockFetch([{ body: { token: 'issued-private-value' } }]);
+    await expect(makeShim({ tokenPath: join(directory, 'token.json') }).shim.register()).rejects.toThrow(/private directory/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps tokens out of events, logs and reflected registration errors', async () => {
+    const token = 'private-executor-value';
+    const logs = [vi.spyOn(console, 'log'), vi.spyOn(console, 'error'), vi.spyOn(console, 'warn')];
+    mockFetch([{ body: { token } }]);
+    const { shim } = makeShim();
+    const events: unknown[] = [];
+    shim.on('registered', event => events.push(event));
+    await shim.register();
+    expect(JSON.stringify(events)).not.toContain(token);
+    expect(logs.flatMap(log => log.mock.calls).flat().join(' ')).not.toContain(token);
+    mockFetch([{ ok: false, status: 403, text: async () => token }]);
+    await expect(shim.register(8)).rejects.toThrow('register HTTP 403');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error(`transport reflected ${token}`)));
+    await expect(shim.register(8)).rejects.toThrow('transport reflected [REDACTED]');
   });
 
   it('retries on failure up to 8 times then throws', async () => {

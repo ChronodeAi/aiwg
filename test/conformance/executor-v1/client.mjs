@@ -20,7 +20,8 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve as resolvePath } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { createHash } from 'crypto';
 import EventEmitter from 'events';
 
@@ -88,6 +89,14 @@ export function loadFixture(fixtureName) {
 
 // ── ExecutorRegistry shim for fixture mode ──
 
+const originalIdentityStore = process.env.AIWG_EXECUTOR_IDENTITY_STORE;
+const registryStateDirs = [];
+process.once('exit', () => {
+  for (const stateDir of registryStateDirs) rmSync(stateDir, { recursive: true, force: true });
+  if (originalIdentityStore === undefined) delete process.env.AIWG_EXECUTOR_IDENTITY_STORE;
+  else process.env.AIWG_EXECUTOR_IDENTITY_STORE = originalIdentityStore;
+});
+
 /**
  * Create a fresh ExecutorRegistry instance loaded from source.
  * Used in fixture mode to drive the AIWG-side dispatch path without
@@ -96,7 +105,17 @@ export function loadFixture(fixtureName) {
 export async function createRegistryForTest() {
   const registryPath = join(PROJECT_ROOT, 'dist', 'src', 'serve', 'executor-registry.js');
   const mod = await import(`file://${registryPath}`);
-  const registry = new mod.ExecutorRegistry();
+  // Independent fixture registries must not reclaim identities from other tests
+  // or from a developer's running executor. Reconnects within a fixture still
+  // use the same store and must present the credential issued by that registry.
+  const stateDir = mkdtempSync(join(tmpdir(), 'executor-conformance-'));
+  registryStateDirs.push(stateDir);
+  process.env.AIWG_EXECUTOR_IDENTITY_STORE = join(stateDir, 'identities.json');
+  const registry = new mod.ExecutorRegistry(join(stateDir, 'host-identities.json'));
+  const shutdown = registry.shutdown.bind(registry);
+  registry.shutdown = () => {
+    try { shutdown(); } finally { rmSync(stateDir, { recursive: true, force: true }); }
+  };
   return { registry, mod };
 }
 

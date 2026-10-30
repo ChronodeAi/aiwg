@@ -56,7 +56,7 @@ Generates comprehensive test suites for the specified scope.
 ## References
 
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md — Test execution requirements
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Never delete tests
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Never delete tests
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/templates/testing/ — Test artifact templates
 - @.aiwg/testing/ — Project-specific test strategy and existing coverage baseline
 ```

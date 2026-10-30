@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { load as loadYaml } from 'js-yaml';
 
 const REQUIRED_ADDONS = ['aiwg-utils', 'semantic-memory', 'llm-wiki', 'line-memory'];
 const LINE_PATH = '.aiwg/memory/line-memory.txt';
@@ -608,7 +609,17 @@ async function reviewSignals(cwd) {
   for (const file of wiki.files) {
     const locator = path.relative(cwd, file).split(path.sep).join('/');
     const name = path.basename(file, '.md').toLocaleLowerCase();
-    const content = (await fs.readFile(file, 'utf8')).slice(0, 65536);
+    const raw = await fs.readFile(file, 'utf8');
+    const content = raw.slice(0, 65536);
+    const frontmatter = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (frontmatter) {
+      try {
+        const record = loadYaml(frontmatter[1])?.memoryRecord;
+        if (record && (record.lifecycle !== 'active' || record.placement === 'archived')) continue;
+      } catch (error) {
+        console.warn(`compound-memory: ${locator}: malformed frontmatter (${error.message})`);
+      }
+    }
     const stat = await fs.stat(file);
     pages.push({ locator, name, mtimeMs: stat.mtimeMs });
     for (const match of content.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)) {
@@ -627,6 +638,8 @@ async function reviewSignals(cwd) {
   const staleFacts = metadata?.entries && typeof metadata.entries === 'object'
     ? Object.values(metadata.entries)
       .filter(entry => entry?.status === 'active'
+        && (!entry.maintenance?.lifecycle || entry.maintenance.lifecycle === 'active')
+        && (!entry.maintenance?.placement || entry.maintenance.placement === 'resident')
         && Date.parse(entry.lastAccessedAt ?? entry.updatedAt ?? '') < staleCutoff)
       .map(entry => ({ handle: entry.id, digest: entry.digest }))
     : [];
@@ -648,7 +661,9 @@ async function reviewSignals(cwd) {
 
   const canonical = await readJson(path.join(cwd, '.aiwg/context/compound-memory/context.json'));
   const activeContext = canonical?.entries ? Object.values(canonical.entries)
-    .filter(entry => entry?.status === 'active') : [];
+    .filter(entry => entry?.status === 'active'
+      && (!entry.maintenance?.lifecycle || entry.maintenance.lifecycle === 'active')
+      && (!entry.maintenance?.placement || entry.maintenance.placement === 'resident')) : [];
   const contextUpdates = activeContext
     .filter(entry => entry.reviewAt && Date.parse(entry.reviewAt) <= Date.now())
     .map(entry => ({ entryId: entry.entryId, reason: 'review-due' }));

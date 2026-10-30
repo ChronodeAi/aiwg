@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { buildSessionEnvironment } from '../../../tools/ralph-external/lib/session-environment.mjs';
 import {
   compileModelPolicy,
   assertOperatorWorkerNativeArgv,
+  assertWorkerLaunchMode,
   WORKER_OPERATOR_APPROVAL,
   loadProviderModelCapabilities,
   loadProviderModelCatalog,
@@ -12,6 +14,68 @@ import {
 } from '../../../src/models/provider-policy.js';
 
 describe('provider model registry', () => {
+  const sessionPolicies = {
+    antigravity: ['GEMINI_API_KEY'],
+    cursor: ['CURSOR_API_KEY'],
+    warp: ['WARP_API_KEY'],
+    windsurf: [],
+    openclaw: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_OAUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY',
+      'OPENROUTER_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY', 'OPENCLAW_HOME',
+      'OPENCLAW_STATE_DIR', 'OPENCLAW_CONFIG_PATH', 'OPENCLAW_GATEWAY_URL',
+      'OPENCLAW_GATEWAY_TOKEN', 'OPENCLAW_GATEWAY_PASSWORD'],
+    grokbot: [],
+    'grok-build': ['XAI_API_KEY', 'GROK_HOME'],
+    hermes: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'GEMINI_API_KEY',
+      'GOOGLE_API_KEY', 'OPENROUTER_API_KEY', 'GROQ_API_KEY', 'MISTRAL_API_KEY',
+      'XAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL',
+      'OPENROUTER_BASE_URL', 'CUSTOM_BASE_URL', 'HERMES_HOME', 'HERMES_INFERENCE_PROVIDER'],
+    openhuman: ['OPENHUMAN_CORE_TOKEN', 'OPENHUMAN_CORE_RPC_URL', 'OPENHUMAN_CORE_HOST',
+      'OPENHUMAN_CORE_PORT', 'OPENHUMAN_WORKSPACE', 'OPENHUMAN_DOTENV_PATH',
+      'OPENHUMAN_KEYRING_MASTER_KEY', 'OPENHUMAN_KEYRING_MASTER_KEY_FILE',
+      'OPENHUMAN_APP_ENV', 'BACKEND_URL', 'OPENHUMAN_MODEL'],
+  };
+
+  it('makes session inheritance an explicit decision for every bundled provider', () => {
+    for (const capability of Object.values(loadProviderModelCapabilities().providers)) {
+      expect(Object.hasOwn(capability, 'sessionEnvAllowlist')).toBe(true);
+      expect(Array.isArray(capability.sessionEnvAllowlist)).toBe(true);
+    }
+  });
+
+  it.each(Object.entries(sessionPolicies))('inherits only declared provider variables for %s', (provider, names) => {
+    expect(loadProviderModelCapabilities().providers[provider].sessionEnvAllowlist).toEqual(names);
+    const candidates = new Set([
+      ...Object.values(sessionPolicies).flat(), 'UNRELATED_API_KEY', 'AIWG_RESOURCE_TOKEN',
+      'GROK_CODE_XAI_API_KEY', 'OPENHUMAN_HOME', 'HERMES_YOLO_MODE',
+    ]);
+    const source = Object.fromEntries([...candidates].map(name => [name, `dummy-${name}`]));
+    const expected = Object.fromEntries(names.map(name => [name, source[name]]));
+    expect(buildSessionEnvironment(provider, {}, source)).toEqual(expected);
+    expect(buildSessionEnvironment(provider, {}, { ...source, HOME: '/synthetic-home', PATH: '/synthetic-bin' }))
+      .toEqual({ ...expected, HOME: '/synthetic-home', PATH: '/synthetic-bin' });
+    expect(source.UNRELATED_API_KEY).toBe('dummy-UNRELATED_API_KEY');
+  });
+
+  it.each(['windsurf', 'grokbot'])('keeps %s coverage-only with an explained empty session policy', provider => {
+    const capability = loadProviderModelCapabilities().providers[provider];
+    expect(capability.sessionEnvAllowlist).toEqual([]);
+    expect(capability.verification).toContain('no CLI credential variable is evidenced');
+    expect(capability.workerAdapter).toBeUndefined();
+    expect(capability.workerHealthAdapter).toBeUndefined();
+    expect(capability.workerHealthCoverage?.scope).toBe('out');
+  });
+
+  it('confirms Antigravity key prerequisites without broadening worker policy', () => {
+    const adapter = loadProviderModelCapabilities().providers.antigravity.workerHealthAdapter!;
+    expect(adapter.invocation.kind).toBe('process');
+    if (adapter.invocation.kind !== 'process') throw new Error('Expected process adapter');
+    expect(adapter.invocation.envAllowlist).toEqual(['GEMINI_API_KEY', 'HOME', 'PATH']);
+    const profile = adapter.invocationProfiles!['direct-shell'];
+    expect(profile.envAllowlist).toEqual(adapter.invocation.envAllowlist);
+    expect(profile.pitfalls.join(' ')).toContain('modelProvider to gemini');
+    expect(adapter.qualification.status).toBe('unqualified');
+  });
+
   it('covers every audited provider with sourced, dated capability entries', () => {
     const registry = loadProviderModelCapabilities();
     expect(Object.keys(registry.providers).sort()).toEqual([
@@ -29,7 +93,7 @@ describe('provider model registry', () => {
     const catalog = loadProviderModelCatalog();
     expect(catalog.version).toBe('1.0.0');
     expect(catalog.staleAfterDays).toBeGreaterThan(0);
-    expect(catalog.providers.codex.roles.coding.id).toBe('gpt-5.6-terra');
+    expect(catalog.providers.codex.roles.coding.id).toBe('gpt-6.1-terra');
   });
 });
 describe('project/user model config validation', () => {
@@ -52,7 +116,7 @@ describe('canonical model policy validation', () => {
   });
   it.each([
     { role: 'unknown', tier: 'economy' },
-    { role: 'coding', tier: 'max-quality' },
+    { role: 'coding', tier: 'unknown-tier' },
     { role: 'coding', tier: 'standard', extra: true },
   ])('rejects invalid policy before compilation: %j', policy => {
     const result = validateCanonicalModelPolicy(policy);
@@ -66,14 +130,14 @@ describe('provider-aware compilation', () => {
     const result = compileModelPolicy({ provider: 'codex', artifact: 'agent', policy });
     expect(result.outcome).toBe('native');
     expect(result.fields).toEqual({
-      model: 'gpt-5.6-luna',
+      model: 'gpt-6-luna',
       model_reasoning_effort: 'low',
     });
   });
   it('honors an effective dynamic catalog supplied by callers', () => {
     const catalog = JSON.parse(JSON.stringify(loadProviderModelCatalog()));
-    catalog.providers.codex.roles.efficiency.id = 'gpt-dynamic-cheap';
-    catalog.providers.codex.roles.efficiency.status = 'active';
+    catalog.providers.codex.tiers.economy.id = 'gpt-dynamic-cheap';
+    catalog.providers.codex.tiers!.economy.status = 'active';
     const result = compileModelPolicy({
       provider: 'codex',
       artifact: 'agent',
@@ -101,7 +165,7 @@ describe('provider-aware compilation', () => {
   it('reports catalog staleness deterministically', () => {
     const result = compileModelPolicy({
       provider: 'codex', artifact: 'agent', policy,
-      now: new Date('2027-01-01T00:00:00Z'),
+      now: new Date('2027-03-01T00:00:00Z'),
     });
     expect(result.diagnostics.map(item => item.code)).toContain('MODEL_CATALOG_STALE');
   });
@@ -122,7 +186,7 @@ describe('provider-aware compilation', () => {
   });
   it('rejects a deprecated catalog selection with a stable diagnostic', () => {
     const catalog = loadProviderModelCatalog();
-    const entry = catalog.providers.codex.roles.efficiency;
+    const entry = catalog.providers.codex.tiers!.economy;
     const originalStatus = entry.status;
     try {
       entry.status = 'deprecated';
@@ -203,8 +267,15 @@ describe('operator-approved native Codex controls', () => {
   const permissions = { sandbox: 'workspace-write', approval: 'never' };
   const argv = ['/trusted/codex', '--no-daemon', 'exec', '--ignore-user-config', '-m', selected.model,
     '-c', 'model_reasoning_effort="medium"', '-s', 'workspace-write', '-c', 'approval_policy="never"', '-'];
-  it('accepts exact model, effort, sandbox and approval flags', () => {
-    expect(() => assertOperatorWorkerNativeArgv(adapter(), argv, selected, permissions)).not.toThrow();
+  it.each(['read-only', 'workspace-write', 'external'])('accepts exact %s flags and rejects other sandbox flags', sandbox => {
+    const rendered = argv.map(token => token === 'workspace-write' ? sandbox === 'external' ? 'danger-full-access' : sandbox : token);
+    expect(() => assertOperatorWorkerNativeArgv(adapter(), rendered, selected, { ...permissions, sandbox })).not.toThrow();
+    for (const other of ['read-only', 'workspace-write', 'external'].filter(value => value !== sandbox)) {
+      expect(() => assertOperatorWorkerNativeArgv(adapter(), rendered, selected, { ...permissions, sandbox: other })).toThrow();
+    }
+  });
+  it.each(['codex', 'muse'])('keeps native-sandbox incompatible with external for %s', provider => {
+    expect(() => assertWorkerLaunchMode({ ...adapter(), provider }, { launchMode: 'native-sandbox', sandbox: 'external' })).toThrow('native-sandbox requires');
   });
   it.each(['-m', '-s', 'model_reasoning_effort="medium"'])('blocks dropped %s', control => {
     const broken = [...argv];
@@ -213,11 +284,11 @@ describe('operator-approved native Codex controls', () => {
     else broken.splice(index - 1, 2);
     expect(() => assertOperatorWorkerNativeArgv(adapter(), broken, selected, permissions)).toThrow('absent or ambiguous');
   });
-  it.each(['external', 'danger-full-access', 'unknown'])('blocks an unrenderable sandbox %s', sandbox => {
+  it.each(['danger-full-access', 'unknown'])('blocks an unrenderable sandbox %s', sandbox => {
     expect(() => assertOperatorWorkerNativeArgv(adapter(), argv, selected, { ...permissions, sandbox })).toThrow('sandbox');
   });
   it.each([
-    ['-s', 'read-only'], ['--dangerously-bypass-approvals-and-sandbox'], ['--full-auto'],
+    ['-s', 'read-only'], ['-s', 'danger-full-access'], ['--dangerously-bypass-approvals-and-sandbox'], ['--full-auto'],
     ['-c', 'model_reasoning_effort="high"'], ['--sandbox=read-only'], ['-sread-only'], ['-cmodel_reasoning_effort="high"'], ['-c', 'sandbox_mode="danger-full-access"'],
   ])('blocks ambiguous or overriding flags %j', (...extra) => {
     expect(() => assertOperatorWorkerNativeArgv(adapter(), [...argv, ...extra], selected, permissions)).toThrow();

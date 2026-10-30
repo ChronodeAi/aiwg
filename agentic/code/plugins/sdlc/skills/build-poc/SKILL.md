@@ -19,7 +19,7 @@ commandHint:
 >
 > ```bash
 > aiwg discover "<capability>"
-> aiwg show skill <name>
+> aiwg show skill <name> --body
 > ```
 >
 > Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/skill-discovery.md).
@@ -531,5 +531,5 @@ This command succeeds when:
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/human-authorization.md — Seek authorization before deciding the PoC outcome changes the architectural approach
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/research-before-decision.md — Research technology and existing patterns before implementation
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/security-audit/SKILL.md — Consider security during PoC if the risk involves authentication or data handling
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md — Never skip testing or weaken PoC validation criteria to declare success faster
+- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md — Never skip testing or weaken PoC validation criteria to declare success faster
 

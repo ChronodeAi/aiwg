@@ -66,6 +66,13 @@ describe('fixture-first provider model conformance', () => {
     },
   );
 
+  it.each(Object.entries(fixture.ladders))('compiles the verified %s ladder', (provider, ladder) => {
+    for (const [tier, model] of Object.entries(ladder as Record<string, string>)) {
+      expect(compileModelPolicy({ provider: provider as any, artifact: 'agent',
+        policy: { role: 'coding', tier: tier as any }, election: 'user' }).effectiveModel).toBe(model);
+    }
+  });
+
   it('diagnoses an unknown exact override without silently changing it', () => {
     const entry = fixture.policies[3];
     const compiled = compileModelPolicy({

@@ -12,8 +12,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { stringify } from 'yaml';
 
-const SURFACE_VOCAB = ['x-account', 'x-search', 'x-bookmarks', 'x-foryou', 'x-following', 'rss', 'newsletter', 'web', 'referral', 'direct'];
+const SURFACE_VOCAB = ['x-account', 'x-search', 'x-bookmarks', 'x-foryou', 'x-following', 'rss', 'newsletter', 'web', 'referral', 'direct', 's2-recommendation'];
 
 export interface DiscoveryFields {
   surface: string;
@@ -40,30 +41,30 @@ export interface DiscoveryLogResult {
 
 /** Render the `discovery:` YAML block (2-space indented under the key). */
 export function renderDiscoveryBlock(f: DiscoveryFields, today: string): string {
-  const lines = ['discovery:', `  date: ${f.date || today}`, `  surface: ${f.surface}`];
-  if (f.via) lines.push(`  via: "${f.via}"`);
-  lines.push(`  curator-id: ${f.curatorId || 'null'}`);
-  if (f.harvestBatch) lines.push(`  harvest-batch: ${f.harvestBatch}`);
-  if (f.harvestedBy) lines.push(`  harvested-by: ${f.harvestedBy}`);
+  // Quote and escape strings for YAML 1.1 readers, including date-like values.
+  const scalar = (value: string | null, quoted = false): string => stringify(value, {
+    schema: 'yaml-1.1',
+    defaultStringType: quoted ? 'QUOTE_DOUBLE' : 'PLAIN',
+    blockQuote: false,
+    doubleQuotedAsJSON: true,
+    lineWidth: 0,
+  }).trimEnd();
+  const lines = ['discovery:', `  date: ${scalar(f.date || today)}`, `  surface: ${scalar(f.surface)}`];
+  if (f.via) lines.push(`  via: ${scalar(f.via, true)}`);
+  lines.push(`  curator-id: ${scalar(f.curatorId || null)}`);
+  if (f.harvestBatch) lines.push(`  harvest-batch: ${scalar(f.harvestBatch)}`);
+  if (f.harvestedBy) lines.push(`  harvested-by: ${scalar(f.harvestedBy)}`);
   return lines.join('\n');
 }
 
-/** Drop an existing top-level `discovery:` block (key + its indented lines) from frontmatter lines. */
-function stripDiscovery(fmLines: string[]): string[] {
-  const out: string[] = [];
-  let skipping = false;
-  for (const line of fmLines) {
-    if (skipping) {
-      if (/^\s/.test(line) || line.trim() === '') continue; // still inside the block's indented body
-      skipping = false;
-    }
-    if (/^discovery:\s*$/.test(line)) {
-      skipping = true;
-      continue;
-    }
-    out.push(line);
-  }
-  return out;
+/** Replace discovery in place, preserving surrounding frontmatter and blank lines. */
+function spliceDiscovery(fmLines: string[], block: string): string {
+  const start = fmLines.findIndex(line => /^discovery:\s*(?:#.*)?$/.test(line));
+  if (start < 0) return [...fmLines, block].join('\n');
+  let end = start + 1;
+  while (end < fmLines.length && (/^\s/.test(fmLines[end]) || fmLines[end] === '')) end++;
+  while (end > start + 1 && fmLines[end - 1].trim() === '') end--;
+  return [...fmLines.slice(0, start), block, ...fmLines.slice(end)].join('\n');
 }
 
 /** Add or replace the discovery block in REF-XXX-citations.md frontmatter. */
@@ -85,8 +86,7 @@ export function logDiscovery(corpusRoot: string, refId: string, opts: DiscoveryL
   if (!m) {
     return { refId, status: 'skip', message: `SKIP ${refId}: citation sidecar has no YAML frontmatter`, block };
   }
-  const fmLines = stripDiscovery(m[1].split('\n'));
-  const newFm = [...fmLines, block].join('\n');
+  const newFm = spliceDiscovery(m[1].split('\n'), block);
   const content = `---\n${newFm}\n---\n${m[2]}`;
 
   if (!opts.write) {

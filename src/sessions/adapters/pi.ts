@@ -1,6 +1,7 @@
 import { opendir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { integer, dateTime } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -12,10 +13,10 @@ import { streamBoundedJsonLines, type ReaderLimits } from '../readers.js';
 
 export const PI_ADAPTER_VERSION = '1.0.0';
 export const PI_SOURCE_SCHEMA_VERSION = '3.0.0';
-const Header = z.object({ type: z.literal('session'), version: z.number().int(), id: z.string().min(1),
-  timestamp: z.string().datetime({ offset: true }), cwd: z.string(), parentSession: z.string().optional() }).passthrough();
-const Entry = z.object({ type: z.string().min(1), id: z.string().min(1),
-  parentId: z.string().nullable(), timestamp: z.string().datetime({ offset: true }) }).passthrough();
+const Header = z.looseObject({ type: z.literal('session'), version: integer(), id: z.string().min(1),
+  timestamp: dateTime({ offset: true }), cwd: z.string(), parentSession: z.string().optional() });
+const Entry = z.looseObject({ type: z.string().min(1), id: z.string().min(1),
+  parentId: z.string().nullable(), timestamp: dateTime({ offset: true }) });
 
 export class PiSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'pi' as const;

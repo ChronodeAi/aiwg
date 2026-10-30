@@ -87,7 +87,7 @@ describe('Codex native custom-agent TOML', () => {
     expect(files).toContain('reviewer.toml');
     expect(files).not.toContain('reviewer.md');
     const deployed = readFileSync(join(root, '.codex', 'agents', 'reviewer.toml'), 'utf8');
-    expect(deployed).toContain('model = "gpt-5.6-sol"');
+    expect(deployed).toContain('model = "gpt-6.1-sol"');
     expect(deployed).toMatch(/^# aiwg:managed vtest test\n/);
   });
 });

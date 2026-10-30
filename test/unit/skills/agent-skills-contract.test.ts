@@ -185,6 +185,7 @@ describe('Agent Skills portability contract', () => {
     expect(AGENT_SKILL_COLLISION_PRECEDENCE).toEqual({
       project: 400,
       user: 300,
+      synced: 250,
       imported: 200,
       'aiwg-managed': 100,
     });
@@ -192,6 +193,7 @@ describe('Agent Skills portability contract', () => {
       'aiwg-managed',
       'imported',
       'user',
+      'synced',
       'project',
     ])).toBe('project');
     expect(resolveAgentSkillCollision([

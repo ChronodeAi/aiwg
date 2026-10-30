@@ -1,3 +1,12 @@
+---
+enforcement: high
+activation: bound
+summary: Require an independent protected verifier and artifact-bound evidence; never let producers redefine their own acceptance.
+bound_to:
+  agents: [governance-skeptic]
+  skills: [evolution-surface-review, governance-corpus-inventory, governance-escape-hatch-audit]
+---
+
 # No Self-Grading
 
 **Enforcement Level**: HIGH

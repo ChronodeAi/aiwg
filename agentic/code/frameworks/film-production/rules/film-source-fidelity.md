@@ -3,6 +3,12 @@ id: film-source-fidelity
 name: Film Source Fidelity
 description: Preserve immutable masters and authentic source pixels across film derivatives and edits.
 enforcement: high
+activation: bound
+summary: Preserve immutable masters and authentic source pixels across film derivatives and edits.
+bound_to:
+  agents: [film-producer, film-story-director, film-scene-supervisor, film-continuity-supervisor, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-continuity-pack, film-reference-footage, film-reference-edit, film-motion-coverage, film-edit-conform, film-review-gate, film-delivery, film-storyboard]
+  flows: [film-design, film-previs, film-generate, film-finish, film-deliver, film-resume, film-revise-with-impact]
 ---
 
 # Film Source Fidelity

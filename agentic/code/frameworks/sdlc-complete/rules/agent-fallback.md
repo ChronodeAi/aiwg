@@ -1,5 +1,15 @@
 ---
 enforcement: high
+activation: "bound"
+summary: "Route failed or unavailable specialists through the capability fallback chain; respect retry limits, log coverage and triggers, and report degraded capability."
+bound_to:
+  agents: ["executive-orchestrator", "ralph-loop", "recovery-orchestrator"]
+  skills: ["agent-loop", "aiwg-mission", "artifact-orchestration", "flow-architecture-evolution", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-cross-team-sync", "flow-delivery-track", "flow-deploy-to-production", "flow-discovery-track", "flow-elaboration-to-construction", "flow-gate-check", "flow-guided-implementation", "flow-handoff-checklist", "flow-hypercare-monitoring", "flow-inception-to-elaboration", "flow-incident-response", "flow-iteration-dual-track", "flow-knowledge-transfer", "flow-performance-optimization", "flow-release", "flow-requirements-evolution", "flow-retrospective-cycle", "flow-risk-management-cycle", "flow-security-review-cycle", "flow-team-onboarding", "flow-test-strategy-execution", "mission-control", "orchestrate-project", "ralph", "ralph-external"]
+  flows: ["flow-agentloop-lfd-controls", "flow-architecture-evolution", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-cross-team-sync", "flow-delivery-track", "flow-deploy-to-production", "flow-discovery-track", "flow-elaboration-to-construction", "flow-gate-check", "flow-guided-implementation", "flow-handoff-checklist", "flow-hypercare-monitoring", "flow-inception-to-elaboration", "flow-incident-response", "flow-iteration-dual-track", "flow-knowledge-transfer", "flow-performance-optimization", "flow-release", "flow-requirements-evolution", "flow-retrospective-cycle", "flow-risk-management-cycle", "flow-security-review-cycle", "flow-team-onboarding", "flow-test-strategy-execution"]
+triggers:
+  - "specialist agent unavailable fallback"
+  - "agent invocation failed route replacement"
+  - "report degraded agent capability"
 ---
 
 # Agent Fallback Rules

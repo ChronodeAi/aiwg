@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  withRuleDeployment,
   collectFrameworkArtifacts,
   createAgentsMdFromTemplate,
   deploySkillsWithKernelRouting,
@@ -54,14 +55,14 @@ export const name = 'muse';
 export const aliases = []; // ADR: no aliases (no muse-spark, muse-code, spark, meta)
 
 // Project-relative paths. Skills deploy into the Muse-native project skills
-// root; agents/commands/rules have no file surface in this wave (indexed via
-// aiwg discover / aiwg show). The discover-first AGENTS.md bridge renders
+// root; agents/commands stay indexed via discover/show, while rules use
+// .muse/rules through the mandatory AGENTS.md hook. The bootstrap renders
 // via createAgentsMd below.
 export const paths = {
   agents: '',
   commands: '',
   skills: '.agents/skills',
-  rules: '',
+  rules: '.muse/rules',
 };
 
 // Kernel skills land at the project skills root itself.
@@ -226,7 +227,7 @@ export async function postDeploy(targetDir, opts = {}) {
   // bridge, managed hooks, and an opted-in MCP profile must not be skipped.
   const fullDeploy = !opts.commandsOnly && !opts.rulesOnly && (!opts.skillsOnly || opts.kernelOnly === true);
   if (opts.createAgentsMd || fullDeploy) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
 
   // #228 — managed project hooks (.muse/hooks.json). Default on, mirroring
@@ -240,7 +241,7 @@ export async function postDeploy(targetDir, opts = {}) {
   // #228 — optional MCP settings profile. Explicit opt-in only (--mcp);
   // default `aiwg use --provider muse` never touches user settings.
   if (fullDeploy && opts.mcp === true) {
-    deployMuseMcp(opts);
+    await deployMuseMcp(opts);
   }
 
   if (!opts.quiet) {
@@ -265,6 +266,10 @@ export async function postDeploy(targetDir, opts = {}) {
 }
 
 export async function deploy(opts = {}) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,

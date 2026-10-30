@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { sourceRules } from './rule-source-expectations.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
@@ -82,22 +83,27 @@ describe('#1627 computeAllArtifactBasenames', () => {
     expect(agents).toBeInstanceOf(Set);
     expect(agents.has('software-implementer')).toBe(true);
     expect(agents.has('code-reviewer')).toBe(true);
-    expect(rules.has('anti-laziness')).toBe(true);
-    expect(rules.has('tao-loop')).toBe(true);
+    // ADR 57–61, 265–272: prune retains body-delivered rules, while migrated
+    // summary/bound/on-demand rules leave the recursively loaded rules tree.
+    const expected = ['frameworks', 'addons'].flatMap(kind =>
+      sourceRules(REPO_ROOT, kind as 'frameworks' | 'addons', true))
+      .filter(rule => rule.fileDelivered && !rule.consolidated).map(rule => rule.name);
+    expect(rules).toEqual(new Set(expected));
+    const nested = path.join(REPO_ROOT, 'agentic/code/addons/aiwg-utils');
+    expect(base.computeAllArtifactBasenames(nested, 'rules')).toEqual(rules);
   });
 
-  it('keeps projected per-bundle rules indexes through a prune, but still prunes retired ones', async () => {
+  it('prunes obsolete per-bundle index projections only with ownership evidence', async () => {
     const base = await importBase();
     const rules = base.computeAllArtifactBasenames(REPO_ROOT, 'rules');
-    const projected = base.rulesIndexProjectionName(
-      path.join(REPO_ROOT, 'agentic', 'code', 'frameworks', 'ops-complete', 'rules', 'RULES-INDEX.md'),
-    );
-    expect(projected).toBe('RULES-INDEX-ops-complete.md');
-    writeManaged(projected);
+    writeManaged('RULES-INDEX-ops-complete.md');
     writeManaged('RULES-INDEX-retired-framework.md');
+    writeUser('RULES-INDEX-operator.md', 'operator index');
     const removed = base.pruneStaleAiwgFiles(dir, rules);
-    expect(removed.map((p: string) => path.basename(p))).toEqual(['RULES-INDEX-retired-framework.md']);
-    expect(fs.existsSync(path.join(dir, projected))).toBe(true);
+    expect(removed.map((p: string) => path.basename(p)).sort()).toEqual([
+      'RULES-INDEX-ops-complete.md', 'RULES-INDEX-retired-framework.md',
+    ]);
+    expect(fs.readFileSync(path.join(dir, 'RULES-INDEX-operator.md'), 'utf8')).toBe('operator index');
   });
 
   it('returns null when there is no AIWG framework/addon tree', async () => {
@@ -354,3 +360,27 @@ describe('#2508 kernel-only flat prune is gated on bundle ownership', () => {
   });
 });
 
+
+
+describe('#3740 activation projection owns rule retirement', () => {
+  it.each([true, false])('preserves projected kernels only with delivery ownership (%s)', async projected => {
+    const { pruneStaleAiwgArtifacts } = await import('../../../tools/agents/providers/stale-artifact-prune.mjs');
+    const rules = path.join(dir, '.omp/rules');
+    const agents = path.join(dir, '.omp/agents');
+    fs.mkdirSync(rules, { recursive: true });
+    fs.mkdirSync(agents, { recursive: true });
+    const kernel = path.join(rules, 'dev-pipeline-safety.md');
+    fs.writeFileSync(kernel, MARKER + 'Extension kernel policy');
+    fs.writeFileSync(path.join(agents, 'retired-agent.md'), MARKER + 'Retired definition');
+    fs.writeFileSync(path.join(rules, 'operator.md'), 'Operator policy');
+    fs.writeFileSync(path.join(rules, '.aiwg-manifest.json'), JSON.stringify({
+      managed: { 'dev-pipeline-safety.md': {} },
+      ...(projected ? { delivery: { rules: '.omp/rules', entryPoint: '.omp/rules/RULES-INDEX.md' } } : {}),
+    }));
+    pruneStaleAiwgArtifacts({ paths: { rules: '.omp/rules', agents: '.omp/agents' } }, dir, REPO_ROOT,
+      { deployRules: true, quiet: true }, null);
+    expect(fs.existsSync(kernel)).toBe(projected);
+    expect(fs.existsSync(path.join(agents, 'retired-agent.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(rules, 'operator.md'), 'utf8')).toBe('Operator policy');
+  });
+});

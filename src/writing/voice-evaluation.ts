@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { integer, dateTime } from '../schema/zod-validation.mjs';
 
 const id = z.string().min(1).max(120);
 const nonempty = z.string().min(1);
@@ -12,18 +13,18 @@ export const EVALUATION_CONDITIONS = Array.from({ length: 8 }, (_, n) => ({
 }));
 export const EVALUATION_DIMENSIONS = ['factual-fidelity', 'author-authenticity', 'reader-suitability', 'effort', 'within-author-preservation', 'between-author-diversity'] as const;
 export type EvaluationDimension = typeof EVALUATION_DIMENSIONS[number];
-const model = z.object({ id, family: nonempty, provider: nonempty, snapshot: nonempty, decoding: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.null()])), promptSha256: sha }).strict();
-const document = z.object({ id, authorId: id, topic: nonempty, split: z.enum(['development', 'enrollment', 'heldout']), text: nonempty, sha256: sha }).strict();
-export const evaluationManifestSchema = z.object({
+const model = z.strictObject({ id, family: nonempty, provider: nonempty, snapshot: nonempty, decoding: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.null()])), promptSha256: sha });
+const document = z.strictObject({ id, authorId: id, topic: nonempty, split: z.enum(['development', 'enrollment', 'heldout']), text: nonempty, sha256: sha });
+export const evaluationManifestSchema = z.strictObject({
   schemaVersion: z.literal(1), id,
   developmentAuthorIds: z.array(id), finalAuthorIds: z.array(id), documents: z.array(document),
-  duplicatePolicy: z.object({ metric: z.literal('normalized-word-trigram-jaccard-v1'), threshold: z.number().gt(0).lte(1), justification: nonempty }).strict(),
-  controls: z.array(z.object({ kind: z.enum(['same-author-different-topic', 'different-author-same-topic']), leftDocumentId: id, rightDocumentId: id }).strict()),
+  duplicatePolicy: z.strictObject({ metric: z.literal('normalized-word-trigram-jaccard-v1'), threshold: z.number().gt(0).lte(1), justification: nonempty }),
+  controls: z.array(z.strictObject({ kind: z.enum(['same-author-different-topic', 'different-author-same-topic']), leftDocumentId: id, rightDocumentId: id })),
   models: z.array(model), extractionModelIds: z.array(id),
-  judges: z.array(z.object({ id, modelId: id, role: z.literal('reader').default('reader'), independentCalibrationSha256: sha, selfPreferenceAuditSha256: sha }).strict()),
-  humanJudges: z.array(z.object({ id, role: z.enum(['author', 'reader']), authorId: id.optional() }).strict()).default([]),
-  voluntaryStrata: z.array(z.object({ authorId: id, suppliedByAuthor: z.literal(true), language: nonempty.optional(), proficiency: nonempty.optional() }).strict()),
-}).strict();
+  judges: z.array(z.strictObject({ id, modelId: id, role: z.literal('reader').default('reader'), independentCalibrationSha256: sha, selfPreferenceAuditSha256: sha })),
+  humanJudges: z.array(z.strictObject({ id, role: z.enum(['author', 'reader']), authorId: id.optional() })).prefault([]),
+  voluntaryStrata: z.array(z.strictObject({ authorId: id, suppliedByAuthor: z.literal(true), language: nonempty.optional(), proficiency: nonempty.optional() })),
+});
 export type EvaluationManifest = z.infer<typeof evaluationManifestSchema>;
 const unique = (items: string[]) => new Set(items).size === items.length;
 const words = (text: string) => text.normalize('NFKC').toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
@@ -66,15 +67,15 @@ export function parseEvaluationManifest(value: unknown): EvaluationManifest {
   return m;
 }
 
-const preregistrationSchema = z.object({
+const preregistrationSchema = z.strictObject({
   schemaVersion: z.literal(1), id, manifestSha256: sha,
-  pilot: z.object({ artifactSha256: sha, completedAt: z.string().datetime(), authorIds: z.array(id).min(1), findings: nonempty }).strict(),
-  registeredAt: z.string().datetime(), finalDataNotAccessed: z.literal(true),
-  plannedAuthors: z.number().int().min(2), sampleSizeJustification: nonempty,
-  thresholds: z.array(z.object({ dimension: z.enum(EVALUATION_DIMENSIONS), value: z.number().finite(), direction: z.enum(['at-least', 'at-most']), justification: nonempty }).strict()).min(1),
+  pilot: z.strictObject({ artifactSha256: sha, completedAt: dateTime(), authorIds: z.array(id).min(1), findings: nonempty }),
+  registeredAt: dateTime(), finalDataNotAccessed: z.literal(true),
+  plannedAuthors: integer().min(2), sampleSizeJustification: nonempty,
+  thresholds: z.array(z.strictObject({ dimension: z.enum(EVALUATION_DIMENSIONS), value: z.number().finite(), direction: z.enum(['at-least', 'at-most']), justification: nonempty })).min(1),
   primaryOutcomes: z.array(z.enum(EVALUATION_DIMENSIONS)).min(1), analysisPlan: nonempty,
-  selectorPoliciesSha256: sha, budget: z.object({ limit: z.number().int().positive(), tokenizerId: nonempty, tokenizerVersion: nonempty }).strict(),
-}).strict();
+  selectorPoliciesSha256: sha, budget: z.strictObject({ limit: integer().positive(), tokenizerId: nonempty, tokenizerVersion: nonempty }),
+});
 export type EvaluationPreregistration = z.infer<typeof preregistrationSchema>;
 /** Records caller declarations; hashes/timestamps do not attest that a pilot occurred or final data stayed unseen. */
 export function preregisterEvaluation(manifest: EvaluationManifest, value: unknown): EvaluationPreregistration {
@@ -86,7 +87,7 @@ export function preregisterEvaluation(manifest: EvaluationManifest, value: unkno
   return p;
 }
 
-const stimulusSchema = z.object({ id, taskId: id, authorId: id, heldoutDocumentId: id, text: nonempty, sha256: sha, budgetUsed: z.number().int().nonnegative(), tokenizerId: nonempty, tokenizerVersion: nonempty, conditionId: z.enum(['r0v0e0', 'r0v0e1', 'r0v1e0', 'r0v1e1', 'r1v0e0', 'r1v0e1', 'r1v1e0', 'r1v1e1']), workflow: z.enum(EVALUATION_WORKFLOWS), modelId: id.nullable(), genre: nonempty, lengthBand: nonempty, editingStrength: nonempty }).strict();
+const stimulusSchema = z.strictObject({ id, taskId: id, authorId: id, heldoutDocumentId: id, text: nonempty, sha256: sha, budgetUsed: integer().nonnegative(), tokenizerId: nonempty, tokenizerVersion: nonempty, conditionId: z.enum(['r0v0e0', 'r0v0e1', 'r0v1e0', 'r0v1e1', 'r1v0e0', 'r1v0e1', 'r1v1e0', 'r1v1e1']), workflow: z.enum(EVALUATION_WORKFLOWS), modelId: id.nullable(), genre: nonempty, lengthBand: nonempty, editingStrength: nonempty });
 export type EvaluationStimulus = z.infer<typeof stimulusSchema>;
 export interface BlindEvaluationPacket { packetId: string; role: 'author' | 'reader'; items: Array<{ label: string; text: string }> }
 export interface EvaluationPrivateKey { packetId: string; judgeId: string; role: 'author' | 'reader'; items: Array<{ label: string; stimulus: EvaluationStimulus }> }
@@ -94,7 +95,7 @@ export interface EvaluationPrivateKey { packetId: string; judgeId: string; role:
 export function createBlindEvaluationPackets(stimuliInput: EvaluationStimulus[], judges: Array<{ id: string; role: 'author' | 'reader' }>, seed: string): { packets: BlindEvaluationPacket[]; privateKeyMap: EvaluationPrivateKey[]; balance: string } {
   const stimuli = z.array(stimulusSchema).min(2).parse(stimuliInput);
   if (stimuli.some(s => evaluationHash(s.text) !== s.sha256)) throw new Error('Stimulus integrity mismatch');
-  z.array(z.object({ id, role: z.enum(['author', 'reader']) }).strict()).min(1).parse(judges);
+  z.array(z.strictObject({ id, role: z.enum(['author', 'reader']) })).min(1).parse(judges);
   if (!seed || !unique(stimuli.map(s => s.id)) || !unique(judges.map(j => j.id))) throw new Error('Seed and unique stimulus/judge IDs required');
   if (new Set(stimuli.map(s => `${s.authorId}\0${s.taskId}\0${s.heldoutDocumentId}`)).size !== 1) throw new Error('Blind block must compare one author and task');
   const shuffled = [...stimuli].sort((a, b) => evaluationHash(`${seed}:stimulus:${a.id}`).localeCompare(evaluationHash(`${seed}:stimulus:${b.id}`)));
@@ -130,7 +131,7 @@ export interface EvaluationRating { stimulusId: string; authorId: string; judgeI
 export interface EvaluationRatingAssignment { stimulusId: string; judgeId: string; role: 'author' | 'reader'; dimension: EvaluationDimension }
 export interface EvaluationRatingContext { manifest: EvaluationManifest; stimuli: EvaluationStimulus[]; assignments?: EvaluationRatingAssignment[] }
 function ingestRatings(ratings: EvaluationRating[], context?: EvaluationRatingContext): EvaluationRating[] {
-  const parsed = z.array(z.object({ stimulusId: id, authorId: id, judgeId: id, role: z.enum(['author', 'reader']), dimension: z.enum(EVALUATION_DIMENSIONS), value: z.number().finite().nullable(), missingReason: nonempty.optional(), tie: z.boolean() }).strict()).parse(ratings);
+  const parsed = z.array(z.strictObject({ stimulusId: id, authorId: id, judgeId: id, role: z.enum(['author', 'reader']), dimension: z.enum(EVALUATION_DIMENSIONS), value: z.number().finite().nullable(), missingReason: nonempty.optional(), tie: z.boolean() })).parse(ratings);
   if (!unique(parsed.map(r => JSON.stringify([r.stimulusId, r.judgeId, r.role, r.dimension])))) throw new Error('Duplicate rating observations');
   if (parsed.some(r => r.value === null && (!r.missingReason || r.tie) || r.value !== null && r.missingReason !== undefined)) throw new Error('Missing ratings require a reason and cannot also be a tie');
   if (!context) return parsed;
@@ -144,7 +145,7 @@ function ingestRatings(ratings: EvaluationRating[], context?: EvaluationRatingCo
   };
   for (const r of parsed) if (validate(r).authorId !== r.authorId) throw new Error('Rating/stimulus author mismatch');
   if (context.assignments !== undefined) {
-    const assignments = z.array(z.object({ stimulusId: id, judgeId: id, role: z.enum(['author', 'reader']), dimension: z.enum(EVALUATION_DIMENSIONS) }).strict()).parse(context.assignments);
+    const assignments = z.array(z.strictObject({ stimulusId: id, judgeId: id, role: z.enum(['author', 'reader']), dimension: z.enum(EVALUATION_DIMENSIONS) })).parse(context.assignments);
     if (!unique(assignments.map(key))) throw new Error('Duplicate rating assignments');
     for (const assignment of assignments) validate(assignment);
     const expected = new Set(assignments.map(key));
@@ -171,7 +172,7 @@ function random(seed: string): () => number {
 }
 /** Equal-weight author means, then author-cluster percentile bootstrap; no independent-text pseudo-replication. */
 export function bootstrapAuthorMeans(rows: Array<{ authorId: string; value: number | null }>, options: { seed: string; iterations: number; confidence: number }) {
-  z.array(z.object({ authorId: id, value: z.number().finite().nullable() }).strict()).parse(rows);
+  z.array(z.strictObject({ authorId: id, value: z.number().finite().nullable() })).parse(rows);
   if (!options.seed || !Number.isSafeInteger(options.iterations) || options.iterations < 2 || !Number.isFinite(options.confidence) || options.confidence <= 0 || options.confidence >= 1) throw new Error('Invalid bootstrap options');
   const authors = [...new Set(rows.map(r => r.authorId))].sort();
   const means = authors.map(authorId => rows.filter(r => r.authorId === authorId && r.value !== null).map(r => r.value!)).filter(v => v.length).map(v => v.reduce((a, b) => a + b, 0) / v.length);
@@ -185,9 +186,9 @@ export function bootstrapAuthorMeans(rows: Array<{ authorId: string; value: numb
 
 /** Outcomes must already share a preregistered decision rule; never compare arbitrary raw scales. */
 export function reportMetricDisagreement(rows: Array<{ itemId: string; human: 'pass' | 'fail' | 'tie' | null; metric: 'pass' | 'fail' | 'tie' | null }>, calibration: { humanReferenceSha256: string; independentOfFinalData: true; decisionRule: string }) {
-  z.object({ humanReferenceSha256: sha, independentOfFinalData: z.literal(true), decisionRule: nonempty }).strict().parse(calibration);
+  z.strictObject({ humanReferenceSha256: sha, independentOfFinalData: z.literal(true), decisionRule: nonempty }).parse(calibration);
   const outcome = z.enum(['pass', 'fail', 'tie']).nullable();
-  z.array(z.object({ itemId: id, human: outcome, metric: outcome }).strict()).parse(rows);
+  z.array(z.strictObject({ itemId: id, human: outcome, metric: outcome })).parse(rows);
   if (!unique(rows.map(r => r.itemId))) throw new Error('Duplicate metric comparison IDs');
   const paired = rows.filter(r => r.human !== null && r.metric !== null); const disagreements = paired.filter(r => r.human !== r.metric);
   return { paired: paired.length, missing: rows.length - paired.length, ties: paired.filter(r => r.human === 'tie' || r.metric === 'tie').length, disagreements: disagreements.map(r => r.itemId), disagreementRate: paired.length ? disagreements.length / paired.length : null, calibration: { ...calibration }, authorshipCertification: false as const };

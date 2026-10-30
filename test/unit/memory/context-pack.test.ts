@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as fortemi from '../../../src/artifacts/fortemi-core-query-adapter.js';
 import {
   buildContextPack,
   buildWorkspaceContextPack,
@@ -9,10 +10,19 @@ import {
   type ContextPackBudget,
 } from '../../../src/memory/context-pack.js';
 
-const discovery = vi.hoisted(() => ({ observe: undefined as (() => void) | undefined }));
+const discovery = vi.hoisted(() => ({ observe: undefined as (() => void) | undefined, headReads: [] as number[], fullReads: [] as string[] }));
 vi.mock('node:fs', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs')>();
-  return { ...original, realpathSync: (...args: Parameters<typeof original.realpathSync>) => {
+  return { ...original,
+    readSync: (...args: Parameters<typeof original.readSync>) => {
+      discovery.headReads.push(Number(args[3]));
+      return original.readSync(...args);
+    },
+    readFileSync: (...args: Parameters<typeof original.readFileSync>) => {
+      discovery.fullReads.push(String(args[0]));
+      return original.readFileSync(...args);
+    },
+    realpathSync: (...args: Parameters<typeof original.realpathSync>) => {
     discovery.observe?.();
     return original.realpathSync(...args);
   } };
@@ -21,6 +31,8 @@ vi.mock('node:fs', async (importOriginal) => {
 const roots: string[] = [];
 afterEach(() => {
   discovery.observe = undefined;
+  discovery.headReads.length = 0;
+  discovery.fullReads.length = 0;
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -159,5 +171,67 @@ describe('bounded hybrid context packs', () => {
     clock.mockReset().mockReturnValueOnce(200).mockReturnValueOnce(207);
     expect(buildContextPack('SQLite', [candidate({})]).metrics.elapsedMs).toBe(7);
     expect(clock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['retired', 'superseded', 'quarantined', 'purged', 'archived'])(
+    'excludes canonical %s wiki content even when its source is retained', lifecycle => {
+      const root = mkdtempSync(join(tmpdir(), 'aiwg-context-disposition-'));
+      roots.push(root);
+      mkdirSync(join(root, '.aiwg/wiki'), { recursive: true });
+      writeFileSync(join(root, '.aiwg/wiki/catalog.md'), `---\nmemoryRecord:\n  lifecycle: ${lifecycle === 'archived' ? 'active' : lifecycle}\n  placement: ${lifecycle === 'archived' ? 'archived' : 'indexed'}\n---\n# SQLite catalog\nRetained source fact.\n`);
+      expect(buildWorkspaceContextPack(root, 'SQLite').items).toEqual([]);
+    },
+  );
+
+  it.each(['wiki-lexical-fallback', 'fortemi-core'])('caps %s source reads at 64 KiB and parses the disposition from that head', backend => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-context-head-'));
+    roots.push(root);
+    mkdirSync(join(root, '.aiwg/wiki'), { recursive: true });
+    writeFileSync(join(root, '.aiwg/wiki/active.md'), '# SQLite catalog\n' + 'x'.repeat(100000));
+    writeFileSync(join(root, '.aiwg/wiki/retired.md'), '---\nmemoryRecord:\n  lifecycle: retired\n  placement: indexed\n---\n# SQLite retired\n' + 'x'.repeat(100000));
+    if (backend === 'fortemi-core') vi.spyOn(fortemi, 'loadFortemiCoreMetadataEntries').mockReturnValue({ entries: ['active', 'retired'].map(name => ({
+      path: `.aiwg/wiki/${name}.md`, type: 'document', phase: 'unknown', title: name, tags: [], created: '', updated: '', checksum: '', summary: '', dependencies: [], dependents: [],
+    })) });
+    const pack = buildWorkspaceContextPack(root, 'SQLite');
+    expect(pack.backend).toEqual([backend]);
+    expect(pack.items.map(item => item.locator)).toEqual(['.aiwg/wiki/active.md']);
+    expect(discovery.headReads).toEqual([65536, 65536]);
+    expect(discovery.fullReads.filter(file => file.endsWith('active.md') || file.endsWith('retired.md'))).toEqual([]);
+  });
+
+  it.each(['---\ntags: [broken\n---\n# SQLite catalog\nStill available.', '---\ntitle: SQLite catalog\nStill available.'])('includes pages with malformed frontmatter and reports a diagnostic: %s', raw => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-context-malformed-'));
+    roots.push(root);
+    mkdirSync(join(root, '.aiwg/wiki'), { recursive: true });
+    writeFileSync(join(root, '.aiwg/wiki/catalog.md'), raw);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(buildWorkspaceContextPack(root, 'SQLite').items.map(item => item.locator)).toEqual(['.aiwg/wiki/catalog.md']);
+    expect(warning).toHaveBeenCalledWith(expect.stringMatching(/catalog\.md: malformed frontmatter.*including page/));
+  });
+
+  it('diagnoses an over-limit retained history and never includes journal text as evidence', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-context-large-history-'));
+    roots.push(root);
+    mkdirSync(join(root, '.aiwg/wiki'), { recursive: true });
+    writeFileSync(join(root, '.aiwg/wiki/catalog.md'), `---\nmemoryMaintenance:\n  history: ${'SQLite'.repeat(12000)}\nmemoryRecord:\n  lifecycle: retired\n  placement: indexed\n---\n# SQLite catalog\nRetained source fact.\n`);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(buildWorkspaceContextPack(root, 'SQLite').items).toEqual([]);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('frontmatter exceeds the 64 KiB scan limit'));
+  });
+
+  it.each([
+    { status: 'retired', maintenance: {} },
+    { status: 'active', maintenance: { placement: 'indexed', lifecycle: 'active' } },
+    { status: 'active', maintenance: { placement: 'resident', lifecycle: 'retired' } },
+  ])('excludes stale resident line text whose owner metadata is disposed or demoted: %j', disposition => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-context-line-disposition-'));
+    roots.push(root);
+    mkdirSync(join(root, '.aiwg/memory'), { recursive: true });
+    const value = 'SQLite catalog constraint';
+    writeFileSync(join(root, '.aiwg/memory/line-memory.txt'), value);
+    writeFileSync(join(root, '.aiwg/memory/line-memory.meta.json'), JSON.stringify({ entries: {
+      retained: { id: 'lm_retained', value, ...disposition },
+    } }));
+    expect(buildWorkspaceContextPack(root, 'SQLite').items).toEqual([]);
   });
 });

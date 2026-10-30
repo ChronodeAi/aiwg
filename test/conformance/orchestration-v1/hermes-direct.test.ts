@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2912 (B-OG-48) Hermes headless CLI worker profile: offline S1 profile work.
  *
@@ -78,11 +79,7 @@ async function installPackage(bytes: Buffer) {
   // provider-adapter.mjs (and that file's own worker-health.mjs/
   // _resolve-impl.mjs imports) must resolve inside the copied package too,
   // even though no test calls through installed.owner's strict-claims path.
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   const resolveImpl = path.join(base, '_resolve-impl.mjs');
   await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
   await chmod(resolveImpl, 0o644);
@@ -97,7 +94,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers.hermes.workerAdapter = structuredClone(registry.providers.hermes.workerHealthAdapter);
   return registry;
 }
@@ -502,7 +499,7 @@ describe('T-OG-15 Hermes direct command contract', () => {
   it('HD10 HERMES_YOLO_MODE (and any other HERMES_* bypass env) can never reach the worker: the allowlist excludes it and an ambient copy in the conductor env is stripped', async () => {
     const bundled = loadProviderModelCapabilities().providers.hermes.workerHealthAdapter!;
     expect(bundled.invocation.envAllowlist).not.toContain('HERMES_YOLO_MODE');
-    expect(bundled.invocationProfiles!['direct-shell'].envAllowlist).toEqual([]);
+    expect(bundled.invocationProfiles!['direct-shell'].envAllowlist).toEqual(['PATH']);
     const { plan, root } = await hermesPlan();
     const invocation = plan.invocation!;
     expect(invocation.envNames).not.toContain('HERMES_YOLO_MODE');

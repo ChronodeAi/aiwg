@@ -14,6 +14,14 @@ This skill executes deterministic manifests. If
 hand it to the current supported AI provider; do not begin deterministic CLI
 execution.
 
+For AIWG's public installer, keep the provider in control of bootstrap and
+repair. Once the CLI is healthy, use `aiwg setup --scope project --providers
+<provider>` for the interview, `aiwg setup --review` for a read-only preview,
+and `aiwg setup --apply` after approval. These guided commands operate on a
+saved plan, not a SetupManifest. Headless interview uses the same answer flags
+with `--non-interactive`; headless apply requires `--yes`. See the
+[guided setup reference](https://github.com/jmagly/aiwg/blob/main/docs/getting-started/guided-setup.md).
+
 ## Trigger Phrases
 
 - "run the setup manifest"

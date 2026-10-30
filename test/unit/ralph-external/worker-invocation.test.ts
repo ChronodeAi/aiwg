@@ -8,7 +8,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAdapter } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
-import { workerModelKey, loadProviderModelCapabilities } from '../../../src/models/provider-policy.js';
+import { workerModelKey, loadProviderModelCapabilities, WorkerPolicyError } from '../../../src/models/provider-policy.js';
+import { workerInvocationDiagnostic, WorkerInvocationCheckError } from '../../../src/serve/worker-invocation.js';
 import { workerInputSchema } from '../../fixtures/ralph-worker-protocol.mjs';
 import { fixtureJson } from '../../conformance/mission-v1/worker-contract-fixtures.js';
 
@@ -63,6 +64,21 @@ afterEach(async () => {
 });
 
 describe('S1 pure installed-path invocation preparation (T-OG-03/14/15/17)', () => {
+  it.each(['invocation_build_failed', 'invocation_prepare_failed', 'installation_recheck_unavailable', 'qualified_workspace_mismatch'] as const)(
+    'publishes only the fixed %s check summary (#3516)', reason => {
+      const error = new WorkerInvocationCheckError('OG_ADAPTER_UNQUALIFIED', reason);
+      const sensitive = 'Bearer synthetic-token ENV_VALUE=synthetic-secret /home/private-user/driver';
+      error.message = sensitive;
+      error.cause = new Error(sensitive);
+      const diagnostic = workerInvocationDiagnostic(error, '/parallelism/clis/codex/invocationProfile');
+      expect(diagnostic).toMatchObject({ code: 'OG_ADAPTER_UNQUALIFIED', reason,
+        pointer: reason === 'qualified_workspace_mismatch' ? '/request/workdir'
+          : reason === 'invocation_build_failed' ? '/invocation/buildInvocation' : '/invocation/prepareWorkerInvocation' });
+      expect(JSON.stringify(diagnostic)).not.toMatch(/synthetic-token|synthetic-secret|private-user/);
+      expect(JSON.stringify(workerInvocationDiagnostic(new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', sensitive), '/invocation')))
+        .not.toMatch(/synthetic-token|synthetic-secret|private-user/);
+    });
+
   describe.each(['shell', 'mcp'] as const)('T-OG-15 %s policy guards', transport => {
     it.each<Array<[string, (f: any) => void, RegExp]>[number]>([
       ['ultra', f => { f.invocation.selected.effort = { support: 'explicit', value: 'ultra' }; }, /denied effort/i],
@@ -388,5 +404,27 @@ describe('T-OG-15 bundled delivery remains byte-identical', () => {
     const bytes = row.stdin === 'closed' ? null : row.stdin === 'brief-text' ? brief
       : Buffer.from(workerStdinDocument({ brief, model: invocation.selected.model, cwd: invocation.cwd }));
     expect(workerStdinBytes(invocation, brief)).toEqual(bytes);
+  });
+});
+
+describe('native sandbox launch boundary qualification', () => {
+  it('refuses an unverified native renderer before building arguments', async () => {
+    const { buildWorkerInvocationTransport } = await import('../../../src/serve/worker-invocation.js');
+    const f = setup();
+    const buildInvocation = vi.fn();
+    await expect(buildWorkerInvocationTransport({ qualification: f.qualification, buildInvocation }, {
+      selected: f.invocation.selected, permissions: { launchMode: 'native-sandbox', sandbox: 'workspace-write' },
+      cwd: '/synthetic/work', briefPath: '/synthetic/brief', brief: 'Synthetic task.', finalPath: '/synthetic/result',
+      limits: f.invocation.limits, health: f.invocation.health,
+    })).rejects.toMatchObject({ code: 'OG_POLICY_RELAXATION' });
+    expect(buildInvocation).not.toHaveBeenCalled();
+  });
+
+  it('refuses an invocation isolation field that disagrees with its execution policy', async () => {
+    const { prepareWorkerInvocation } = await import('../../../src/serve/worker-invocation.js');
+    const f = setup();
+    f.invocation.isolation = 'native-sandbox';
+    f.qualification.adapterId = f.qualification.adapter.id;
+    await expect(prepareWorkerInvocation(f.invocation, f.qualification)).rejects.toMatchObject({ code: 'OG_PIN_MISMATCH' });
   });
 });

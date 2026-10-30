@@ -218,7 +218,7 @@ describe('Consolidated Rules Functions', () => {
     it('content includes @-links to full rule files', () => {
       const content = base.generateConsolidatedRulesContent(REPO_ROOT, 'claude');
       expect(content).toContain('@$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/no-attribution.md');
-      expect(content).toContain('@$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md');
+      expect(content).toContain('@$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md');
     });
 
     it('content includes Quick Reference table', () => {
@@ -512,15 +512,14 @@ describe('Consolidated Rules Functions', () => {
       expect(removed).toHaveLength(0);
     });
 
-    it('handles case sensitivity for RULES-INDEX.md', () => {
-      fs.writeFileSync(path.join(rulesDir, 'RULES-INDEX.md'), 'index');
-      writeAiwgRule('rules-index.md', 'lowercase variant');
+    it('preserves an unmarked operator index during explicit cleanup', () => {
+      writeUserRule('operator-index.md', 'operator index');
+      writeAiwgRule('retired-rule.md');
 
       const removed = base.cleanupOldRuleFiles(rulesDir, CLEAN_OPTS);
 
-      expect(removed).toHaveLength(1);
-      expect(fs.existsSync(path.join(rulesDir, 'RULES-INDEX.md'))).toBe(true);
-      expect(fs.existsSync(path.join(rulesDir, 'rules-index.md'))).toBe(false);
+      expect(removed.map((file: string) => path.basename(file))).toEqual(['retired-rule.md']);
+      expect(fs.readFileSync(path.join(rulesDir, 'operator-index.md'), 'utf8')).toBe('operator index');
     });
 
     it('skips files in incomingFiles (per-deploy refresh)', () => {

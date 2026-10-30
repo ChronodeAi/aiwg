@@ -1,3 +1,4 @@
+import { ceilingDecision } from '../../gates/lattice.js';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -15,6 +16,7 @@ import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReserva
 import { appendHeldoutSpend, appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
   reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile, validateHeldoutJournal, heldoutCollectionAllowance } from './journal.js';
 import { readHeldoutFrozen, sealHeldoutCalibrationPhase, validateHeldoutPhaseAccess } from './calibration.js';
+import { createHeldoutAccess, type HeldoutAccessSigning } from './access.js';
 import { D17_MULTIFACT_CALIBRATION_NOT_AFTER, usesD17MultifactGenerator } from './study-generators.js';
 import type { AdapterObservation, DecisionAdapter, RulesetResult } from '../types.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutStudyModule, HeldoutSummary } from './types.js';
@@ -23,7 +25,7 @@ interface HeldoutHost { resolveCredential(reference: string): Promise<Uint8Array
 export interface HeldoutOptions {
   enabled?: boolean; bundle: HeldoutBundle; trustedApprovalDigest: Digest; sourceRoot: string; artifactRoot: string;
   /** The only offline seam. Supplying it labels all persisted evidence injected-transport. */
-  offline?: { transport: typeof fetch; host: HeldoutHost };
+  offline?: { transport: typeof fetch; host: HeldoutHost; accessSigning?: HeldoutAccessSigning };
   signal?: AbortSignal; now?: () => number; sleep?: (ms: number) => Promise<void>;
 }
 const byteDigest = (bytes: Uint8Array): Digest => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -88,12 +90,17 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
       }
     }
     const testPhaseAccessAt = a.calibration.mode === 'staged' && a.calibration.phase === 'test' ? new Date(started).toISOString() : null;
-    await validateHeldoutPhaseAccess(bundle, heldoutRunsRoot(options.artifactRoot), prior.runs, testPhaseAccessAt);
+    const accessAnchoredAt = await validateHeldoutPhaseAccess(bundle, heldoutRunsRoot(options.artifactRoot), prior.runs, testPhaseAccessAt);
     if (testPhaseAccessAt !== null) await planHeldoutCollection(bundle, options.trustedApprovalDigest);
     const rows = heldoutRowsInScope(bundle);
     const run = join(heldoutRunsRoot(options.artifactRoot), a.runId);
     await mkdir(run, { mode: 0o700 });
     await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, testPhaseAccessAt, collectionStartedAt: new Date(started).toISOString(), digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
+    if (a.study === 'D29' && testPhaseAccessAt !== null) {
+      if (offline && !offline.accessSigning) throw new HeldoutError('offline-access-signing-required');
+      const access = await createHeldoutAccess(bundle, testPhaseAccessAt, options.sourceRoot, offline?.accessSigning, accessAnchoredAt);
+      await writeHeldoutFile(join(run, 'access.json'), access);
+    }
     const events: HeldoutEvent[] = [];
     const allowance = heldoutCollectionAllowance(a, prior);
     let calls = 0, reserved = 0, accounted = 0, tokens = 0, lastDispatch = started - plan.minDispatchIntervalMs;
@@ -311,7 +318,7 @@ export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDig
   const approvedCalibration = structuredClone(approval.calibration);
   const calibrated = approvedCalibration.mode === 'uncalibrated-diagnostic'
     || approvedCalibration.mode === 'staged' && approvedCalibration.phase === 'calibration' ? false : null;
-  const diagnostics = await input.module.score({ corpus: { ...corpus, rows }, preregistration, attempts, gold: input.gold,
+  const diagnostics = await input.module.score({ frozen, corpus: { ...corpus, rows }, preregistration, attempts, gold: input.gold,
     integrity: structuredClone(input.integrity), approvedCalibration: structuredClone(approvedCalibration), calibrated });
   if (calibrated === false && (!diagnostics || typeof diagnostics !== 'object'
     || (diagnostics as Record<string, unknown>).calibrated !== false
@@ -329,6 +336,6 @@ export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDig
   return { schemaVersion: 'decision-heldout-score/v1', source: frozen.priorRuns.some(run => run.source === 'injected-transport') ? 'injected-transport' : frozen.source, evidenceDigest: input.trustedEvidenceDigest, integrityDigest: input.trustedIntegrityDigest,
     complete, diagnostics, approvedCalibration, calibrated: studyValidated ? true : calibrated, d09Qualified: studyValidated,
     calibratedGate: studyValidated && study?.calibratedGate === true,
-    calibrationArtifactValidation: studyValidated ? 'performed-by-study-scorer' : 'not-performed', integrityProblems: problems, decision: input.integrity.release_gate.decision === 'ROLLBACK'
-      || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' as const : 'HOLD' as const };
+    calibrationArtifactValidation: studyValidated ? 'performed-by-study-scorer' : 'not-performed', integrityProblems: problems, decision: ceilingDecision('HOLD', input.integrity.release_gate.decision,
+      input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' : 'PROMOTE') };
 }

@@ -1,4 +1,6 @@
 ---
+activation: summary
+summary: Keep each host specification and runbook self-contained so missing sibling documents cannot block operations.
 enforcement: high
 ---
 

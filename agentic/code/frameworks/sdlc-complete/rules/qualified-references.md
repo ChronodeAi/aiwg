@@ -1,5 +1,29 @@
 ---
 enforcement: medium
+activation: bound
+summary: Use semantic @-mention qualifiers and maintain inverse links so implementation, tests, dependencies, and derivations remain traceable.
+bound_to:
+  skills:
+    - mention-wire
+    - mention-validate
+    - mention-lint
+    - artifact-orchestration
+  agents:
+    - requirements-analyst
+    - requirements-documenter
+    - architecture-designer
+    - architecture-documenter
+    - software-implementer
+    - test-engineer
+    - test-documenter
+    - technical-writer
+    - agentsmith
+    - commandsmith
+    - skillsmith
+    - traceability-manager
+  flows: []
+triggers:
+  - how to qualify cross references
 ---
 
 # Qualified Cross-Reference Rules

@@ -19,10 +19,15 @@ import {
   recordDecisionAsk,
   decisionLedgerHistory,
   decisionLedgerStats,
+  rotateDecisionLedger,
+  parseDecisionLedgerRetention,
   resolveDecisionSessionId,
+  resolveDecisionSession,
+  DECISION_SESSION_ENV_VARS,
   parseDecisionLedgerSince,
   DecisionLedgerSinceError,
   DECISION_LEDGER_SCHEMA,
+  DECISION_LEDGER_SCHEMA_V1,
   ATTRIBUTION_FIELD_PATTERN,
   MAX_ATTRIBUTION_FIELD_LENGTH,
   MAX_RECORDED_CHOICE_IDS,
@@ -47,7 +52,26 @@ import {
   type RecordDecisionAskOptions,
   type LedgerWriteChunk,
 } from './ledger.js';
+export { DEFAULT_DECISION_SAVINGS_WEIGHTS, decisionSavingsWeights, type DecisionSavingsWeights, type DecisionSavingsMethod } from './savings.js';
 import { resolveActiveProvider } from '../cli/provider-resolution.js';
+export {
+  appendDecisionOpportunity,
+  buildDecisionOffloadSnapshot,
+  decisionOffloadCategory,
+  DECISION_OFFLOAD_CHECKPOINT_COVERAGE,
+  DECISION_OFFLOAD_EXECUTABLE_COVERAGE,
+  DECISION_OFFLOAD_SNAPSHOT_SCHEMA,
+  DECISION_OPPORTUNITY_SCHEMA,
+  runDecisionOffloadCheckpoint,
+} from './offload.js';
+export type {
+  BuildDecisionOffloadSnapshotOptions,
+  DecisionOffloadActivationEvidence,
+  DecisionOffloadCheckpointResult,
+  DecisionOffloadThresholds,
+  DecisionOpportunityRecord,
+  RunDecisionOffloadCheckpointOptions,
+} from './offload.js';
 import {
   assertDecisionEvaluateDispatcherConfig,
   decisionPatternPacks,
@@ -111,10 +135,15 @@ export {
   recordDecisionAsk,
   decisionLedgerHistory,
   decisionLedgerStats,
+  rotateDecisionLedger,
+  parseDecisionLedgerRetention,
   resolveDecisionSessionId,
+  resolveDecisionSession,
+  DECISION_SESSION_ENV_VARS,
   parseDecisionLedgerSince,
   DecisionLedgerSinceError,
   DECISION_LEDGER_SCHEMA,
+  DECISION_LEDGER_SCHEMA_V1,
   ATTRIBUTION_FIELD_PATTERN,
   MAX_ATTRIBUTION_FIELD_LENGTH,
   MAX_RECORDED_CHOICE_IDS,

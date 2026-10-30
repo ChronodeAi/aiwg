@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { basename, dirname, relative, resolve } from 'node:path'
 import { boundedExecFileSync } from '../../src/process/bounded-child-process.mjs'
 import { pathToFileURL } from 'node:url'
+import { valid as validVersion } from 'semver'
 
 const SCORE_KEYS = ['supplyChain', 'quality', 'maintenance', 'vulnerability', 'license']
 const CAPABILITY_ALERTS = new Set(['shellAccess', 'filesystemAccess', 'networkAccess', 'envVars', 'urlAccess'])
@@ -38,8 +39,9 @@ function npmPurl(name, version) {
 
 export function componentsFromLock(lock, version, provenance = {}) {
   const rootMetadata = lock.packages?.[''] ?? {}
+  // Secondary locks describe local workspace roots, not published scan targets.
   const roots = new Set(provenance.releaseRoot === false
-    ? (rootMetadata.name && rootMetadata.version ? [npmPurl(rootMetadata.name, rootMetadata.version)] : [])
+    ? []
     : [npmPurl('aiwg', version), npmPurl('@aiwg/cli', version)])
   const directNames = new Set(Object.keys({
     ...(rootMetadata.dependencies ?? {}),
@@ -49,7 +51,7 @@ export function componentsFromLock(lock, version, provenance = {}) {
   const common = { ecosystem: 'npm', ...provenance }
   const components = new Map([...roots].map(purl => [purl, { purl, depth: 'direct', dependencyPath: ['release-root', purl], ...common }]))
   for (const [location, metadata] of Object.entries(lock.packages ?? {})) {
-    if (!location.includes('node_modules/') || !metadata?.version) continue
+    if (!location.includes('node_modules/') || !metadata?.version || metadata.link || metadata.private) continue
     const inferredName = location.match(/node_modules\/((?:@[^/]+\/)?[^/]+)$/)?.[1]
     const name = metadata.name ?? inferredName
     if (!name) continue
@@ -73,6 +75,9 @@ export function componentsFromCargoLock(content, provenance = {}) {
     const name = block.match(/^name = "([^"]+)"$/m)?.[1]
     const version = block.match(/^version = "([^"]+)"$/m)?.[1]
     if (!name || !version) continue
+    // Cargo omits source for local path/workspace packages. Do not hide a
+    // registry or git dependency merely because its version is also 0.0.0.
+    if (version === '0.0.0' && !/^source\s*=/m.test(block)) continue
     components.push({
       purl: `pkg:cargo/${encodeURIComponent(name)}@${encodeURIComponent(version)}`,
       depth: 'transitive',
@@ -100,8 +105,14 @@ function packageName(artifact) {
   return artifact.name ?? artifactPurl(artifact).replace(/^pkg:npm\//, '').replace(/@[^@/]+$/, '')
 }
 
+// Socket sends empty strings for absent identifiers (for example cveId: "" on a
+// GHSA-only advisory); treat them as absent rather than as invalid values.
+function present(value) {
+  return value !== undefined && value !== null && value !== ''
+}
+
 function firstValue(...values) {
-  return values.find(value => value !== undefined && value !== null && value !== '') ?? null
+  return values.find(value => value !== undefined && value !== null) ?? null
 }
 
 function isBehavioral(type) {
@@ -110,7 +121,9 @@ function isBehavioral(type) {
 
 function normalizeEvidence(artifact, alert, component) {
   const value = alert?.value ?? {}
+  const props = firstValue(alert.props, value.props)
   return {
+    props,
     artifactHash: firstValue(alert.artifactHash, value.artifactHash, artifact.integrity, artifact.hash, component?.artifactHash),
     file: firstValue(alert.file, value.file, alert.location?.file, value.location?.file),
     symbol: firstValue(alert.symbol, value.symbol, alert.location?.symbol, value.location?.symbol),
@@ -118,38 +131,64 @@ function normalizeEvidence(artifact, alert, component) {
     excerpt: firstValue(alert.excerpt, value.excerpt),
     behaviorTrace: firstValue(alert.behaviorTrace, value.behaviorTrace),
     confidenceRationale: firstValue(alert.confidenceRationale, value.confidenceRationale),
-    advisoryId: firstValue(alert.advisoryId, value.advisoryId, alert.cve, value.cve, alert.ghsa, value.ghsa, alert.rustsec, value.rustsec),
-    advisoryUrl: firstValue(alert.url, value.url, alert.advisoryUrl, value.advisoryUrl),
-    firstPatchedVersion: firstValue(alert.firstPatchedVersion, value.firstPatchedVersion, alert.fixedVersion, value.fixedVersion)
+    advisoryId: firstValue(alert.advisoryId, value.advisoryId, alert.cve, value.cve, alert.ghsa, value.ghsa, alert.rustsec, value.rustsec, present(props?.cveId) ? props.cveId : null, present(props?.ghsaId) ? props.ghsaId : null),
+    advisoryUrl: firstValue(alert.url, value.url, alert.advisoryUrl, value.advisoryUrl, props?.url),
+    firstPatchedVersion: firstValue(alert.firstPatchedVersion, value.firstPatchedVersion, alert.fixedVersion, value.fixedVersion, props?.firstPatchedVersionIdentifier)
   }
 }
 
 function evidenceErrors(type, evidence) {
   const errors = []
-  if (isBehavioral(type)) {
-    for (const key of ['artifactHash', 'file', 'symbol', 'ruleId', 'confidenceRationale']) {
-      if (!evidence[key]) errors.push(`missing-${key}`)
-    }
-    if (!evidence.excerpt && !evidence.behaviorTrace) errors.push('missing-excerpt-or-behaviorTrace')
+  const isText = value => typeof value === 'string' && value.trim().length > 0
+  const isUrl = value => {
+    if (!isText(value)) return false
+    try { return ['https:', 'http:'].includes(new URL(value).protocol) } catch { return false }
   }
-  if (/^cve$/i.test(type) && !evidence.advisoryId) errors.push('missing-advisory-identifier')
-  if (/cve|vulnerab|advisory/i.test(type) && !evidence.advisoryUrl) errors.push('missing-advisory-url')
+  const isVersion = value => isText(value) && validVersion(value) !== null
+  // Live alerts omit these enrichments; supplied values must still be usable.
+  for (const [key, value] of Object.entries(evidence)) {
+    if (value === null) continue
+    const valid = key === 'props' ? typeof value === 'object' && !Array.isArray(value)
+      : key === 'advisoryUrl' ? isUrl(value)
+      : key === 'firstPatchedVersion' ? isVersion(value) : isText(value)
+    if (!valid) errors.push(`invalid-${key}`)
+  }
+  // Validate recognized props even if a legacy top-level field takes precedence.
+  for (const [key, validate] of Object.entries({ cveId: isText, ghsaId: isText, url: isUrl, firstPatchedVersionIdentifier: isVersion })) {
+    const value = evidence.props?.[key]
+    if (present(value) && !validate(value)) errors.push(`invalid-props.${key}`)
+  }
+  if (isBehavioral(type) && evidence.ruleId === null) errors.push('missing-ruleId')
+  if (/cve/i.test(type) && evidence.advisoryId === null) errors.push('missing-advisory-identifier')
+  if ((/cve|advisory/i.test(type) || type === 'vulnerability' || evidence.advisoryId !== null) && evidence.advisoryUrl === null) {
+    errors.push('missing-advisory-url')
+  }
   return errors
 }
 
-function semverMajor(version) {
-  const match = String(version ?? '').match(/^(?:[<>=~^ ]*)(\d+)\./)
-  return match ? Number(match[1]) : null
+function purlBase(purl) {
+  return String(purl ?? '').replace(/@[^@/]+$/, '')
 }
 
-function reviewMatches(review, finding) {
+// First-party packages (AIWG's own published packages) are reviewed in this
+// repository, and Socket returns no artifact hash for them, so a first-party
+// review matches by package without a hash pin. It never covers third-party code.
+function isFirstParty(finding, baseline) {
+  return (baseline?.firstPartyPackages ?? []).includes(purlBase(finding.purl))
+}
+
+function reviewMatches(review, finding, baseline) {
+  const firstPartyReview = review.scope === 'first-party'
+  if (firstPartyReview && !isFirstParty(finding, baseline)) return false
   return review.type === finding.type &&
     (review.package === '*' || review.package === finding.package) &&
+    (!review.reviewedVersion || review.reviewedVersion === finding.version) &&
     review.depth === finding.depth &&
     (!isBehavioral(finding.type) || (
-      Boolean(review.rationale) &&
-      Boolean(review.artifactHash) &&
-      review.artifactHash === finding.evidence.artifactHash
+      Boolean(review.rationale) && (
+        firstPartyReview ||
+        (Boolean(review.artifactHash) && review.artifactHash === finding.evidence.artifactHash)
+      )
     ))
 }
 
@@ -193,16 +232,14 @@ export function evaluateSocketArtifacts({ artifacts, baseline, components, now =
       const component = matchingComponents[0]
       const evidence = normalizeEvidence(artifact, alert, component)
       const errors = evidenceErrors(type, evidence)
-      const observedMajor = semverMajor(artifact.version)
-      const patchedMajor = semverMajor(evidence.firstPatchedVersion)
-      if (observedMajor !== null && patchedMajor !== null && observedMajor !== patchedMajor) errors.push('patched-version-major-mismatch')
       const originalSeverity = alertSeverity(alert)
       const rationale = evidence.confidenceRationale ?? ''
       const hasSecurityBehavior = Boolean(evidence.behaviorTrace || (
         /malicious|tamper|exfiltrat|remote execution/i.test(rationale) &&
         !/no malicious|not malicious|benign|code[- ]shape|generated|minified|test vector|ffi|platform binary/i.test(rationale)
       ))
-      const severity = /obfuscat/i.test(type) && !hasSecurityBehavior ? 'informational' : originalSeverity
+      const severity = baseline.policy.informationalAlertTypes?.includes(type) || (/obfuscat/i.test(type) && !hasSecurityBehavior)
+        ? 'informational' : originalSeverity
       const finding = {
         id: firstValue(alert.id),
         package: packageName(artifact),
@@ -229,7 +266,7 @@ export function evaluateSocketArtifacts({ artifacts, baseline, components, now =
       if (errors.length) validationErrors.push({ purl, type, errors })
       if (finding.id && findingKeys.has(finding.id)) validationErrors.push({ id: finding.id, error: 'duplicate-finding-id' })
       if (finding.id) findingKeys.set(finding.id, true)
-      const review = baseline.reviewedCapabilityAlerts.find(candidate => reviewMatches(candidate, finding))
+      const review = baseline.reviewedCapabilityAlerts.find(candidate => reviewMatches(candidate, finding, baseline))
       finding.review = review ? {
         classification: review.classification,
         rationale: review.rationale,
@@ -359,12 +396,18 @@ async function waitForQuotaWindow({ token, fetchImpl, deadline, now, sleep, log 
   return true
 }
 
+// Socket bills the org-scoped purl endpoint per request (up to 100 units on a
+// 500-unit hourly free plan), not per component, so a release of ~800
+// components must go in a few large requests rather than many small ones.
+export const SOCKET_PURL_BATCH_SIZE = 500
+
 export async function fetchArtifacts({
   components,
   token,
   orgSlug,
   fetchImpl = fetch,
   paceQuotaMs = 0,
+  batchSize = SOCKET_PURL_BATCH_SIZE,
   now = Date.now,
   sleep = ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms)),
   log = message => console.error(message)
@@ -374,8 +417,9 @@ export async function fetchArtifacts({
   // a 429 waits for the next quota window (bounded by paceQuotaMs overall)
   // instead of consuming a retry. Without it, behaviour is unchanged.
   const paceDeadline = paceQuotaMs > 0 ? now() + paceQuotaMs : null
-  for (let offset = 0; offset < components.length; offset += 100) {
-    const batch = components.slice(offset, offset + 100)
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1) throw new Error('Socket batch size must be a positive integer')
+  for (let offset = 0; offset < components.length; offset += batchSize) {
+    const batch = components.slice(offset, offset + batchSize)
     const url = new URL(`https://api.socket.dev/v0/orgs/${encodeURIComponent(orgSlug)}/purl`)
     url.search = new URLSearchParams({ alerts: 'true', poll: 'true', timeoutSec: '300', summary: 'true' }).toString()
     let response
@@ -447,7 +491,9 @@ async function main() {
       if (!token || !orgSlug) throw new Error('Socket audit credentials are unavailable')
       const paceMinutes = Number(args['pace-quota-minutes'] ?? process.env.SOCKET_PACE_QUOTA_MINUTES ?? 0)
       if (!Number.isFinite(paceMinutes) || paceMinutes < 0) throw new Error('--pace-quota-minutes must be a non-negative number')
-      artifacts = await fetchArtifacts({ components, token, orgSlug, paceQuotaMs: paceMinutes * 60_000 })
+      const batchSize = Number(args['batch-size'] ?? process.env.SOCKET_PURL_BATCH_SIZE ?? SOCKET_PURL_BATCH_SIZE)
+      if (!Number.isSafeInteger(batchSize) || batchSize < 1) throw new Error('--batch-size must be a positive integer')
+      artifacts = await fetchArtifacts({ components, token, orgSlug, paceQuotaMs: paceMinutes * 60_000, batchSize })
     }
   } catch (error) {
     fetchError = error instanceof Error ? error.message : String(error)

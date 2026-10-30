@@ -30,8 +30,14 @@ export function createServeIsolation(baseEnv = process.env, overrides = {}) {
     : null;
   const configDir = explicitConfig ?? mkdtempSync(join(tmpdir(), 'aiwg-serve-config-'));
   const owned = explicitConfig === null;
+  // Serve keeps executor identities in ~/.config/aiwg by default. Point the
+  // store into the isolated config dir so serve tests never read or write the
+  // real user's identities, and repeat runs re-register fixed executor ids as
+  // first registrations (#3439 requires the token for existing ids).
+  const identityStore = overrides.AIWG_EXECUTOR_IDENTITY_STORE
+    ?? join(configDir, 'executor-identities.json');
   return {
-    env: { ...baseEnv, ...overrides, AIWG_CONFIG: configDir },
+    env: { ...baseEnv, ...overrides, AIWG_CONFIG: configDir, AIWG_EXECUTOR_IDENTITY_STORE: identityStore },
     configDir,
     owned,
     cleanup() {

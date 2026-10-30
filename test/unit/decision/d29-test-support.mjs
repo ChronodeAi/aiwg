@@ -10,6 +10,11 @@
  * working. A test that installs its own fake timers adds ADMISSION_CLOCK to its
  * toFake list.
  */
+import { generateKeyPairSync } from 'node:crypto';
+import { LedgerSigningKey } from '../../../src/effects/keys.js';
+import { createGenesisKeyring } from '../../../src/effects/keyring.js';
+import { signHeldoutAccess } from '../../../src/decision/heldout/access.js';
+import { heldoutDigest } from '../../../src/decision/heldout/contract.js';
 import { afterAll, beforeAll, beforeEach, vi } from 'vitest';
 
 export const ADMISSION_CLOCK = Object.freeze(['performance']);
@@ -46,3 +51,16 @@ export function preparedOnceMissCount() { return preparedMisses; }
 /** Timeouts sized from CI under load (a v7 prepare hook took over 30 s, V8-06 over 120 s). */
 export const PREPARE_HOOK_TIMEOUT = 300_000;
 export const MULTI_AUDIT_TIMEOUT = 180_000;
+
+/** Explicit synthetic host records for offline report probes; never used by production scoring. */
+export function offlineD29GateInputs(prepared, analysis, firstTestAccessAt, anchoredAt = analysis.native.frozenAt) {
+  const analysisDigest = heldoutDigest(analysis);
+  const preregistration = { ...prepared.preregistration, studyAnalysisDigest: analysisDigest };
+  const bundle = { corpus: prepared.corpus, preregistration, approval: { ...prepared.approval, runId: prepared.approval.runId ?? 'synthetic-offline-fixture' } };
+  const signingKey = new LedgerSigningKey(generateKeyPairSync('ed25519').privateKey);
+  const keyring = createGenesisKeyring({ tenant: 'test', project: 'd29', subsystem: 'delivery' }, signingKey, '2026-01-01T00:00:00.000Z');
+  const access = signHeldoutAccess({ schemaVersion: 'decision-d29-access/v2', analysisDigest,
+    frozenBundleDigest: heldoutDigest(bundle), runId: bundle.approval.runId,
+    anchoredAt, firstTestAccessAt, reference: 'synthetic-offline-fixture' }, { signingKey, keyring });
+  return { frozen: { bundle, digest: heldoutDigest(bundle) }, access, keyring, trustedAccessDigest: heldoutDigest(access) };
+}

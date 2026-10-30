@@ -1,9 +1,10 @@
+import { canonicalFuturePath, inside, readInstalledFile, installationStorePath, assertTrustedStore, readInstallationStore, withWorkerInstallationStore, writeWorkerInstallationStore, retainWorkerApprovals } from './worker-installation-store.mjs';
+export { prepareWorkerInstallationStore } from './worker-installation-store.mjs';
 /** Shared installed-worker qualification owner, also used by the Ralph compatibility facade. */
 import { spawn } from 'node:child_process';
-import { constants } from 'node:fs';
-import { open, realpath, lstat, mkdir, rename, writeFile } from 'node:fs/promises';
+import { buildInstalledWorkerTransport } from './worker-artifact-binding.mjs';
+import { open, realpath, lstat } from 'node:fs/promises';
 import path from 'node:path';
-import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
@@ -163,7 +164,7 @@ export async function qualifyWorkerInstallation(instance, options) {
 }
 
 export async function prepareInstalledWorkerInvocation(instance, invocation, qualification) {
-  const { prepareWorkerInvocation, WorkerPathScopeError } = await import('../serve/worker-invocation.js');
+  const { prepareWorkerInvocation, WorkerPathScopeError, WorkerInvocationCheckError } = await import('../serve/worker-invocation.js');
   const { requiredWorkerControls, WorkerPolicyError, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
   if (!isOperatorQualifiedWorkerAdapter(qualification.adapter)) qualification = { ...qualification, requiredControls: requiredWorkerControls({
     ...qualification, effort: invocation.selected.effort.value }) };
@@ -187,7 +188,7 @@ export async function prepareInstalledWorkerInvocation(instance, invocation, qua
       throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker installation qualification changed');
     }
     if (await realpath(result.cwd) !== scope.cwd) {
-      throw new WorkerPolicyError('OG_CONFIG_REFERENCE', 'Worker cwd differs from the qualified workspace');
+      throw new WorkerInvocationCheckError('OG_CONFIG_REFERENCE', 'qualified_workspace_mismatch');
     }
     for (const key of ['briefPath', 'stdoutPath', 'stderrPath', 'finalPath']) {
       const target = await canonicalFuturePath(result[key]);
@@ -207,11 +208,11 @@ export async function prepareInstalledWorkerInvocation(instance, invocation, qua
         || result.stdin !== qualification.adapter.invocation.stdin) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker argv/stdin differs from the authorized driver mapping');
       }
-      // Shell plans contain names, never credential values. Recheck the named
-      // launch environment now; the conductor must repeat preparation if it
-      // changes before copying the command into its shell.
+      // Shell plans contain names, never values. PATH is host plumbing; its
+      // allowlisted name stays bound, while the executable is pinned separately.
+      // Other launch values must still match qualification.
       if (JSON.stringify([...result.envNames].sort()) !== JSON.stringify(Object.keys(installation.environment ?? {}).sort())
-        || result.envNames.some(name => process.env[name] !== installation.environment[name])) {
+        || result.envNames.some(name => name !== 'PATH' && process.env[name] !== installation.environment[name])) {
         throw new WorkerPolicyError('OG_PIN_MISMATCH', 'Worker launch environment differs from qualification');
       }
     }
@@ -224,7 +225,6 @@ const providerRegistry = new Map();
 const installedModules = new Map();
 let installedLoad = Promise.resolve();
 // Same default byte ceiling as workerAdapter.catalogAdapter.maxBytes.
-const installedModuleMaxBytes = 5 * 1024 * 1024;
 
 async function binaryIdentity(filename, workerWritableRoots) {
   if (typeof filename !== 'string' || !path.isAbsolute(filename) || filename.includes('\0')) throw new Error('Absolute installed binary required');
@@ -251,20 +251,6 @@ async function binaryIdentity(filename, workerWritableRoots) {
     }
     return { realpath: canonical, sha256: `sha256:${hash.digest('hex')}` };
   } finally { await handle.close(); }
-}
-
-// Resolve existing ancestors too: a not-yet-created output can traverse a symlink.
-async function canonicalFuturePath(filename) {
-  try { return await realpath(filename); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    // A dangling link is not a new output: following it may leave the scope.
-    try { if ((await lstat(filename)).isSymbolicLink()) throw new Error('Dangling worker path'); }
-    catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
-    const parent = path.dirname(filename);
-    if (parent === filename) throw error;
-    return path.join(await canonicalFuturePath(parent), path.basename(filename));
-  }
 }
 
 export async function inspectWorkerInstallation(instance, request) {
@@ -345,13 +331,13 @@ export async function inspectWorkerInstallation(instance, request) {
   return { binary, cwd: canonicalCwd, inputRoots, outputRoots, scopeDigest: qualificationDigest({ metadata, profileId, cliVersion, platform, binary, modules, runtimeFiles,
     permissionRequirements, controlArgv, fixtureDigest: await workerNegativeFixtureDigest(),
     requiredControls: [...requiredControls].sort(), effectiveConfigDigest, accountScope, boundary, cwd: canonicalCwd,
-    workerWritableRoots: canonicalWritableRoots, inputRoots, outputRoots, environmentDigest: qualificationDigest(environment), endpoints, mcp: request.mcp ?? null,
+    workerWritableRoots: canonicalWritableRoots, inputRoots, outputRoots, environmentDigest: qualificationDigest(Object.fromEntries(Object.entries(environment).filter(([name]) => name !== 'PATH'))), endpoints, mcp: request.mcp ?? null,
     mcpServerDigest: request.mcpServerDigest ?? null }) };
 }
 
 /** Restricted whole-banner regex: one capture, no branching, assertions,
  * backreferences, wildcards, unbounded repetition or repeated groups. Bounded
- * at most two atom repetitions, each capped at 128; banners are capped at 4096 bytes. */
+ * at most two atom repetitions capped at 128, or a final [\s\S] banner tail capped at 4096 bytes. */
 export function compileWorkerVersionPattern(pattern) {
   if (typeof pattern !== 'string' || pattern.length > 256 || !pattern.startsWith('^') || !pattern.endsWith('$')) throw new Error('Invalid worker version pattern');
   let captures = 0, depth = 0, repetitions = 0, atom = false;
@@ -376,7 +362,7 @@ export function compileWorkerVersionPattern(pattern) {
       depth--; atom = false; // groups cannot be repeated
     } else if (c === '{') {
       const match = /^\{([0-9]+),([0-9]+)\}/.exec(pattern.slice(i));
-      if (++repetitions > 2 || !atom || !match || +match[1] < 1 || +match[2] < +match[1] || +match[2] > 128) throw new Error('Unsafe worker version repetition');
+      if (++repetitions > 2 || !atom || !match || +match[1] < 1 || +match[2] < +match[1] || +match[2] > (captures === 1 && depth === 0 && pattern.slice(i - 6) === '[\\s\\S]{1,4096}$' ? 4096 : 128)) throw new Error('Unsafe worker version repetition');
       i += match[0].length - 1; atom = false;
     } else {
       if ('.*+?|^$}'.includes(c)) throw new Error('Unsafe worker version pattern');
@@ -443,6 +429,19 @@ export function boundedVersionProbe(executable, argv, environment, cwd, timeoutM
     || !Array.isArray(argv) || argv.some(arg => typeof arg !== 'string' || arg.includes('\0'))) {
     throw new Error('Invalid probe bounds');
   }
+  // ETXTBSY: the executable still has a writer somewhere, typically a sibling
+  // process forked while the file was being written or a CLI mid-update. It
+  // clears in milliseconds, so retry the spawn within the same overall bound.
+  const deadline = Date.now() + timeoutMs;
+  const attempt = delayMs => runBoundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes, versionPattern)
+    .catch(error => {
+      if (error?.code !== 'ETXTBSY' || Date.now() + delayMs >= deadline) throw error;
+      return new Promise(resolveDelay => setTimeout(resolveDelay, delayMs)).then(() => attempt(Math.min(delayMs * 2, 200)));
+    });
+  return attempt(10);
+}
+
+function runBoundedVersionProbe(executable, argv, environment, cwd, timeoutMs, maxBytes, versionPattern) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, argv, { cwd, env: environment, stdio: 'pipe', detached: true, shell: false });
     let output = Buffer.alloc(0);
@@ -488,11 +487,6 @@ export function boundedVersionProbe(executable, argv, environment, cwd, timeoutM
       }
     });
   });
-}
-
-function inside(root, target) {
-  const relative = path.relative(root, target);
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
 // Inspect syntax without executing module bodies (including top-level effects).
@@ -543,27 +537,6 @@ function checkInstalledExports(source) {
     }
   }
   inspect(ast);
-}
-
-async function readInstalledFile(filename) {
-  const file = await open(filename, 'r');
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile()) throw new Error('Installed module inputs must be regular files');
-    if (stat.size > installedModuleMaxBytes) throw new Error('Installed module input exceeds maxBytes (5 MiB)');
-    // Bound the actual read too: an fstat size check alone allows concurrent growth.
-    const bytes = Buffer.alloc(installedModuleMaxBytes + 1);
-    let length = 0;
-    while (length < bytes.length) {
-      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
-      if (!bytesRead) break;
-      length += bytesRead;
-    }
-    if (length > installedModuleMaxBytes) throw new Error('Installed module input exceeds maxBytes (5 MiB)');
-    return bytes.subarray(0, length);
-  } finally {
-    await file.close();
-  }
 }
 
 async function inspectInstalledModule(entry, workerWritableRoots, platform) {
@@ -663,7 +636,9 @@ async function loadQualifiedModules({ registry, modules, workerWritableRoots, pl
     for (const id of entry.adapterIds) {
       const builtinConflict = canonicalIds.has(id) ? false : providerRegistry.has(id);
       if (ids.has(id) || ((builtinConflict || installedModules.has(inspectedModule.key))
-        && installedModules.get(id) !== inspectedModule.key)) throw new Error(`Duplicate worker adapter ID: ${id}`);
+        && installedModules.get(id) !== inspectedModule.key)) {
+        throw Object.assign(new Error(`Duplicate worker adapter ID: ${id}`), { code: 'WORKER_ADAPTER_CONFLICT' });
+      }
       ids.add(id);
     }
     inspected.push(inspectedModule);
@@ -741,88 +716,70 @@ export function hasProvider(name) {
 
 // This host-owned record extends the installation owner. It is not project
 // configuration and never accepts module locations from models.json/aiwg.config.
-function installationStorePath() {
-  const root = process.env.AIWG_CONFIG || path.join(homedir(), '.config/aiwg');
-  if (!path.isAbsolute(root)) throw new Error('Installation store must be absolute');
-  return path.join(root, 'worker-installations.json');
+// Use the existing delivery ledger's host-selected keyring, never public keys
+// supplied by a registration. PAE separates this authority from effect records.
+const qualificationPayloadType = 'application/vnd.aiwg.worker-installation-qualification+json';
+const requalifyMessage = 'Re-run aiwg doctor --probe-workers --qualify. Existing unsigned approvals require deliberate one-time requalification.';
+const keyRecoveryMessage = 'Worker qualification signing trust is unavailable. Check effects.keyProvider in aiwg.config, unlock or restore the existing effect-ledger key, and run aiwg effect keys init if its keyring is not initialized; then re-run aiwg doctor --probe-workers --qualify.';
+
+async function qualificationTrust(cwd, scope) {
+  const { effectSession, openLedger } = await import('../effects/host.js');
+  const { openEffectLedger, readLedgerKeyring } = await import('../effects/ledger.js');
+  const ledger = scope ? openEffectLedger({ projectDir: cwd, scope, writer: 'cli' }) : openLedger(await effectSession(cwd));
+  const keyring = await readLedgerKeyring(ledger);
+  if (!keyring) throw new Error(keyRecoveryMessage);
+  return { ledger, keyring };
 }
 
-// HOME is the operator's trust boundary; custom stores outside it are checked
-// back to /. O_NOFOLLOW on the store itself does not protect its ancestors.
-async function assertTrustedStoreAncestors(directory) {
-  const home = path.resolve(homedir());
-  const boundary = inside(home, directory) ? home : path.parse(directory).root;
-  // The store directory itself is checked by the caller.
-  if (directory === boundary) return;
-  const ancestors = [];
-  for (let target = path.dirname(directory); ; target = path.dirname(target)) {
-    ancestors.push(target);
-    if (target === boundary) break;
-  }
-  for (const target of ancestors.reverse()) {
-    const stat = await lstat(target);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.mode & 0o022
-      || process.getuid && stat.uid !== 0 && stat.uid !== process.getuid()) {
-      throw new Error(`Untrusted installation store ancestor: ${target}`);
-    }
-  }
+async function qualificationPayload(record, signedAt, projectDir, scope) {
+  const { canonicalJson } = await import('../security/artifact-trust.js');
+  const { signature: _signature, ...body } = record;
+  return Buffer.from(canonicalJson({ record: JSON.parse(JSON.stringify(body)), signedAt, projectDir, scope }), 'utf8');
 }
 
-async function assertTrustedStore(filename, writableRoots, repairDirectory = false, apply = false) {
-  const changes = [];
-  const canonical = await canonicalFuturePath(filename);
-  if (canonical !== filename) throw new Error('Symlinked installation store');
-  for (const root of writableRoots) {
-    if (inside(await realpath(root), canonical)) throw new Error('Worker-writable installation store');
-  }
-  for (const target of [path.dirname(filename), filename]) {
+async function qualificationSignatureFailure(record, trust) {
+  if (!record.signature) return 'signature-missing';
+  const { keyid, sig, signedAt, projectDir, scope } = record.signature;
+  if (typeof keyid !== 'string' || typeof sig !== 'string' || typeof signedAt !== 'string'
+    || typeof projectDir !== 'string' || !path.isAbsolute(projectDir) || !scope) return 'signature-invalid';
+  let keyring;
+  try { ({ keyring } = await trust(projectDir, scope)); } catch { return 'signature-trust-unavailable'; }
+  const { checkSignature } = await import('../effects/keyring.js');
+  const result = checkSignature(keyring, keyid, sig, qualificationPayloadType,
+    await qualificationPayload(record, signedAt, projectDir, scope), signedAt);
+  return result === 'ok' ? null : result === 'signature-invalid' ? result : `signature-${result}`;
+}
+
+/** Offline projection of recorded approvals only. Never imports drivers, reads auth, or probes CLIs.
+ * This is historical evidence, not current launch authority; loadRecordedWorkerInstallations
+ * performs binary/version/scope checks when dispatch actually requests a binding.
+ */
+export async function inspectRecordedWorkerQualifications({ cwd, policy, parallelism }) {
+  const filename = installationStorePath();
+  await assertTrustedStore(filename, [cwd]);
+  const { stored } = await readInstallationStore(filename);
+  const workspace = await realpath(cwd);
+  const results = [];
+  const { qualificationDigest } = await import('./qualification-digest.mjs');
+  for (const record of stored.registrations) {
     try {
-      const stat = await lstat(target);
-      if (process.getuid && stat.uid !== process.getuid()) throw new Error(`Installation store path is owned by another user: ${target}`);
-      if (stat.isSymbolicLink() || stat.isFile() && stat.nlink !== 1
-        || target === path.dirname(filename) && !stat.isDirectory()
-        || target === filename && !stat.isFile()) throw new Error(`Untrusted installation store permissions: ${target}`);
-      if (stat.mode & 0o022) {
-        if (!repairDirectory || target !== path.dirname(filename) || !process.getuid) {
-          throw new Error(`Untrusted installation store permissions: ${target}`);
-        }
-        await assertTrustedStoreAncestors(target);
-        changes.push({ path: target, action: 'chmod go-w' });
-        if (apply) {
-          const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
-          try {
-            const current = await handle.stat();
-            if (current.uid !== process.getuid() || current.ino !== stat.ino || current.dev !== stat.dev) {
-              throw new Error(`Installation store directory changed: ${target}`);
-            }
-            await handle.chmod(current.mode & ~0o022);
-          } finally { await handle.close(); }
-        }
-      }
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const { cli, installation, adapter, binding } = record;
+      const configured = parallelism?.clis?.[cli];
+      if (!configured || configured.enabled === false || !/^[a-z][a-z0-9-]{0,62}$/.test(cli)
+        || await realpath(installation.cwd) !== workspace
+        || qualificationDigest(policy) !== installation.effectiveConfigDigest
+        || configured.adapter !== `providers:${adapter.provider}` && configured.adapter !== adapter.id
+        || configured.accountScope !== binding.accountScope
+        || binding.profile !== installation.profile || binding.cliVersion !== installation.cliVersion
+        || (configured.executable && await realpath(configured.executable) !== await realpath(installation.executable))) continue;
+      const proof = adapter.invocationProfiles?.[binding.profile]?.installationQualification;
+      if (!proof || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key => proof[key] !== installation.evidence?.[key])) continue;
+      if (await qualificationSignatureFailure(record, () => qualificationTrust(cwd))) continue;
+      await assertWorkerInstallationEvidence({ ...installation, adapter, now: Date.now(), policy }, proof.scopeDigest);
+      results.push({ cli, provider: adapter.provider });
+    } catch { /* Malformed, expired or unbound evidence is not qualification. */ }
   }
-  return changes;
-}
-
-/** Qualification's confirmed write may secure its own directory; ordinary readers never repair. */
-export async function prepareWorkerInstallationStore({ workerWritableRoots, apply = false }) {
-  return assertTrustedStore(installationStorePath(), workerWritableRoots, true, apply);
-}
-
-async function readInstallationStore(filename, expectedDigest) {
-  try {
-    const bytes = await readInstalledFile(filename);
-    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-    if (expectedDigest !== undefined && digest !== expectedDigest) throw new Error('Installation store binding changed');
-    const stored = JSON.parse(bytes.toString('utf8'));
-    if (stored.version !== 1 || !Array.isArray(stored.registrations) || stored.registrations.length > 128) {
-      throw new Error('Unsupported installation record');
-    }
-    return { stored, digest };
-  } catch (error) {
-    if (error.code === 'ENOENT' && expectedDigest === undefined) return { stored: { version: 1, registrations: [] }, digest: null };
-    throw error;
-  }
+  return results.filter(row => results.filter(other => row.cli === other.cli).length === 1);
 }
 
 /** Explicit host operation: successful bounded qualification is required before
@@ -833,6 +790,15 @@ export async function recordWorkerInstallation(instance, options) {
   const installation = structuredClone(options.installation);
   const result = await qualifyWorkerInstallation(instance, { ...installation, now: Date.now() });
   if (result.status !== 'ENABLED') return result;
+  let signingKey, keyring, signingProjectDir;
+  try {
+    signingProjectDir = await realpath(options.projectDir ?? installation.cwd);
+    const trust = await qualificationTrust(signingProjectDir);
+    keyring = trust.keyring;
+    signingKey = await trust.ledger.signingKey();
+    const { activeKey } = await import('../effects/keyring.js');
+    if (activeKey(keyring).keyid !== signingKey.keyid) throw new Error('inactive key');
+  } catch { return { status: 'DISABLED', reason: keyRecoveryMessage }; }
   const adapter = structuredClone(installation.adapter);
   adapter.invocationProfiles[installation.profile].installationQualification = {
     scopeDigest: result.scopeDigest, fixtureDigest: result.fixtureDigest,
@@ -842,79 +808,139 @@ export async function recordWorkerInstallation(instance, options) {
     || binding.accountScope !== installation.accountScope) throw new Error('Installation binding differs from qualification');
   const filename = installationStorePath();
   await assertTrustedStore(filename, installation.workerWritableRoots);
-  const { stored } = await readInstallationStore(filename);
-  const environmentNames = Object.keys(installation.environment ?? {});
-  delete installation.environment;
-  delete installation.adapter;
-  delete installation.now;
-  const record = { cli, ...(options.modelObservations ? { modelObservations: structuredClone(options.modelObservations) } : {}), binding: { ...structuredClone(binding), boundary: installation.boundary }, adapter,
-    installation: { ...installation, environmentNames, versionProbe: { rawBanner: result.rawVersionBanner, version: result.cliVersion } },
-    ...(options.mcpSchemas ? { mcpSchemas: structuredClone(options.mcpSchemas) } : {}),
-    ...(options.mcpProfile ? { mcpProfile: structuredClone(options.mcpProfile) } : {}) };
-  stored.registrations = stored.registrations.filter(entry => entry.cli !== cli);
-  stored.registrations.push(record);
-  await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
-  await assertTrustedStore(filename, installation.workerWritableRoots);
-  const temporary = `${filename}.${process.pid}.${createHash('sha256').update(String(Math.random())).digest('hex')}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-  await rename(temporary, filename);
-  return result;
+  // Canonical workspace identity is an exact approval key, never a prefix.
+  installation.cwd = await realpath(installation.cwd);
+  return withWorkerInstallationStore(installation.workerWritableRoots, async ({ stored }) => {
+    const environmentNames = Object.keys(installation.environment ?? {});
+    delete installation.environment;
+    delete installation.adapter;
+    delete installation.now;
+    const record = { cli, ...(options.modelObservations ? { modelObservations: structuredClone(options.modelObservations) } : {}), binding: { ...structuredClone(binding), boundary: installation.boundary }, adapter,
+      installation: { ...installation, environmentNames, versionProbe: { rawBanner: result.rawVersionBanner, version: result.cliVersion } },
+      ...(options.mcpSchemas ? { mcpSchemas: structuredClone(options.mcpSchemas) } : {}),
+      ...(options.mcpProfile ? { mcpProfile: structuredClone(options.mcpProfile) } : {}) };
+    const signedAt = new Date().toISOString();
+    try {
+      const payload = await qualificationPayload(record, signedAt, signingProjectDir, keyring.scope);
+      const sig = signingKey.signPae(qualificationPayloadType, payload);
+      const { checkSignature } = await import('../effects/keyring.js');
+      if (checkSignature(keyring, signingKey.keyid, sig, qualificationPayloadType, payload, signedAt) !== 'ok') throw new Error('invalid signature');
+      record.signature = { keyid: signingKey.keyid, sig, signedAt, projectDir: signingProjectDir, scope: keyring.scope };
+    } catch { return { status: 'DISABLED', reason: keyRecoveryMessage }; }
+    stored.registrations = await retainWorkerApprovals(stored.registrations, record);
+    await writeWorkerInstallationStore(filename, stored, installation.workerWritableRoots);
+    return result;
+  });
 }
 
 /** Read recorded host authority, validate installation bytes and the current CLI
  * version, then load the same approved factory used by Ralph. */
-export async function loadRecordedWorkerInstallations({ registry, cwd, policy, parallelism, storePath, storeDigest }) {
+export async function loadRecordedWorkerInstallations({ registry, cwd, policy, parallelism, storePath, storeDigest, precheckPolicy }) {
   const { WorkerPolicyError, parseProviderModelCapabilities } = await import('./provider-policy.js');
   const { qualificationDigest } = await import('./qualification-digest.mjs');
-  const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED', 'Trusted installation qualification is required');
-  const filename = storePath ?? installationStorePath();
+  // Only fixed stage codes and bounded record indexes may leave this boundary.
+  // Underlying errors can contain probe output, environment values or paths.
+  const rejections = [];
+  const fail = () => new WorkerPolicyError('OG_ADAPTER_UNQUALIFIED',
+    `Trusted installation qualification is required (${[...new Set(rejections.map(row => row.reason))].join(', ')})${rejections.some(row => row.reason.startsWith('signature-'))
+      ? `. ${rejections.some(row => row.reason === 'signature-trust-unavailable') ? keyRecoveryMessage : requalifyMessage}` : ''}`,
+    { rejections });
+  let reason = 'store-binding';
+  let filename;
   let stored, digest;
   try {
+    filename = storePath ?? installationStorePath();
     if (!path.isAbsolute(filename) || (storePath !== undefined && !/^sha256:[a-f0-9]{64}$/.test(storeDigest ?? ''))) throw fail();
+    reason = 'store-untrusted';
     await assertTrustedStore(filename, [cwd]);
+    reason = 'store-record';
     ({ stored, digest } = await readInstallationStore(filename, storeDigest));
   }
-  catch { throw fail(); }
+  catch { rejections.push({ registration: null, reason }); throw fail(); }
+  if (!stored.registrations.length) {
+    rejections.push({ registration: null, reason: 'no-records' });
+    throw fail();
+  }
+  // Request policy errors remain actionable before digest/adapter checks,
+  // while an absent approval retains the qualification contract (#3070).
+  precheckPolicy?.();
   const installations = {};
   const drivers = {};
   const observations = {};
+  const qualificationFailures = Object.create(null);
   const resolvedRegistry = structuredClone(registry);
+  const requestedWorkspace = await realpath(cwd);
+  const workspaces = await Promise.all(stored.registrations.map(async record => {
+    try { return await realpath(record?.installation?.cwd); } catch { return null; }
+  }));
   const counts = new Map();
-  for (const record of stored.registrations) counts.set(record?.cli, (counts.get(record?.cli) ?? 0) + 1);
-  for (const record of stored.registrations) {
+  const selected = new Map();
+  for (const [index, record] of stored.registrations.entries()) {
+    const key = JSON.stringify([record?.cli, workspaces[index]]);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    // Prefer an exact approval. Retain the latest other-workspace record only
+    // to preserve the typed workspace-mismatch diagnostic for unapproved dirs.
+    const prior = selected.get(record?.cli);
+    if (prior === undefined || workspaces[prior] !== requestedWorkspace) selected.set(record?.cli, index);
+  }
+  for (const [registration, record] of stored.registrations.entries()) {
+    reason = 'record-identity';
     try {
       const { cli, binding, adapter } = record;
-      if (!/^[a-z][a-z0-9-]{0,62}$/.test(cli) || counts.get(cli) !== 1) throw fail();
+      if (!/^[a-z][a-z0-9-]{0,62}$/.test(cli)) throw fail();
+      if (counts.get(JSON.stringify([cli, workspaces[registration]])) !== 1) throw fail();
+      if (selected.get(cli) !== registration) continue;
+      // A conductor-pinned store digest also binds the original config source.
+      // Framing from a worker cwd must never read that cwd's configuration.
+      reason = await qualificationSignatureFailure(record, (projectDir, scope) => storePath === undefined
+        ? qualificationTrust(cwd) : qualificationTrust(projectDir, scope));
+      if (reason) throw fail();
       const installation = { ...record.installation, adapter, now: Date.now(), environment: {} };
+      reason = 'environment-name';
       if (record.installation.environment && Object.keys(record.installation.environment).length) throw fail();
       for (const name of installation.environmentNames ?? []) {
         if (typeof name !== 'string' || process.env[name] === undefined) throw fail();
         installation.environment[name] = process.env[name];
       }
+      reason = 'binding-mismatch';
       if (binding.profile !== installation.profile || binding.cliVersion !== installation.cliVersion
         || binding.accountScope !== installation.accountScope
-        || qualificationDigest(binding.boundary) !== qualificationDigest(installation.boundary)
-        || qualificationDigest(policy) !== installation.effectiveConfigDigest) throw fail();
+        || qualificationDigest(binding.boundary) !== qualificationDigest(installation.boundary)) throw fail();
+      reason = 'effective-config-digest';
+      if (qualificationDigest(policy) !== installation.effectiveConfigDigest) throw fail();
+      reason = 'evidence';
       const proof = adapter.invocationProfiles?.[binding.profile]?.installationQualification;
       if (!proof || ['scopeDigest', 'fixtureDigest', 'verifiedAt', 'evidenceRef'].some(key => proof[key] !== installation.evidence?.[key])) throw fail();
       // Reject expired/unbound negative observations before any factory import.
       const { requiredWorkerControls, isOperatorQualifiedWorkerAdapter } = await import('./provider-policy.js');
       if (!isOperatorQualifiedWorkerAdapter(adapter)) installation.requiredControls = requiredWorkerControls(installation);
       await assertWorkerInstallationEvidence(installation, proof.scopeDigest);
+      reason = 'store-untrusted';
       await assertTrustedStore(filename, installation.workerWritableRoots);
+      reason = 'adapter-metadata';
       const candidateRegistry = structuredClone(resolvedRegistry);
       if (candidateRegistry.providers[adapter.id]) candidateRegistry.providers[adapter.id].workerAdapter = adapter;
       else { candidateRegistry.workerAdapters ??= {}; candidateRegistry.workerAdapters[adapter.id] = adapter; }
       parseProviderModelCapabilities(candidateRegistry);
       // The loader validates package identity, bytes and static exports BEFORE import.
       // Only this installation's metadata is needed; unrelated absent modules do not block it.
-      const loadingRegistry = structuredClone(registry);
-      for (const provider of Object.values(loadingRegistry.providers)) delete provider.workerAdapter;
-      loadingRegistry.workerAdapters = { [adapter.id]: adapter };
+      // Preserve the canonical provider slot used to distinguish upgrades from ID conflicts.
+      const loadingRegistry = structuredClone(candidateRegistry);
+      const canonical = loadingRegistry.providers[adapter.id]?.workerAdapter?.id === adapter.id;
+      for (const [name, provider] of Object.entries(loadingRegistry.providers)) {
+        if (canonical && name === adapter.id) provider.workerAdapter = adapter;
+        else delete provider.workerAdapter;
+      }
+      loadingRegistry.workerAdapters = canonical ? {} : { [adapter.id]: adapter };
+      reason = 'module-registration';
       await loadInstalledWorkerAdapters({ registry: loadingRegistry, modules: installation.modules,
         workerWritableRoots: installation.workerWritableRoots, platform: process.platform });
+      reason = 'binary-identity';
       const instance = createProvider(adapter.id);
-      const { scope } = await recheckWorkerInstallation(instance, installation);
+      const scope = await inspectWorkerInstallation(instance, installation);
+      reason = 'scope-digest';
+      await assertWorkerInstallationEvidence(installation, scope.scopeDigest);
+      reason = 'binary-identity';
       if (parallelism && isOperatorQualifiedWorkerAdapter(adapter)) {
         const { resolveWorkerGroupInstallation } = await import('../config/aiwg-config.js');
         const configured = resolveWorkerGroupInstallation(parallelism, cli, candidateRegistry);
@@ -931,15 +957,19 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
         }
         if (!executable || await realpath(executable) !== scope.binary.realpath) throw fail();
       }
+      reason = 'scope-digest';
       if (scope.scopeDigest !== proof.scopeDigest) throw fail();
       // A launcher can keep the same bytes while its CLI payload is updated.
       // Reuse the bounded, credential-free doctor probe before granting authority.
+      reason = 'version';
       const { version } = await boundedVersionProbe(scope.binary.realpath,
         adapter.invocation.versionArgv, workerVersionProbeEnvironment(), cwd,
         workerVersionProbeDefaults.timeoutMs, workerVersionProbeDefaults.maxBytes,
         adapter.invocation.versionPattern);
-      if (version !== binding.cliVersion
-        || (await inspectWorkerInstallation(instance, installation)).scopeDigest !== scope.scopeDigest) throw fail();
+      if (version !== binding.cliVersion) throw fail();
+      reason = 'scope-digest';
+      if ((await inspectWorkerInstallation(instance, installation)).scopeDigest !== scope.scopeDigest) throw fail();
+      reason = 'driver';
       const profile = adapter.invocationProfiles[binding.profile];
       let mcpRegistry;
       if (profile.transport === 'mcp') {
@@ -957,13 +987,10 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
           platform: process.platform, installation, stdinFramerBinding: { storePath: filename, storeDigest: digest },
           ...(profile.transport === 'mcp' ? { mcp: binding.mcp, mcpSchemas: record.mcpSchemas } : {}) },
         ...(typeof instance.buildWorkerStdinFrame === 'function'
-          ? { buildWorkerStdinFrame: brief => instance.buildWorkerStdinFrame(brief) } : {}),
-        buildInvocation: async input => profile.transport === 'shell' ? {
-          argv: [scope.binary.realpath, ...instance.buildWorkerArgs(input, profile, input.permissions)],
-          stdin: adapter.invocation.stdin, envNames: Object.keys(installation.environment),
-          ...(typeof instance.buildWorkerArtifacts === 'function'
-            ? { artifacts: instance.buildWorkerArtifacts(input) } : {}),
-        } : instance.buildInvocation(input),
+          ? { buildWorkerStdinFrame: (brief, invocation) => instance.buildWorkerStdinFrame(brief, invocation) } : {}),
+        buildInvocation: async input => profile.transport === 'shell'
+          ? buildInstalledWorkerTransport(instance, input, profile, adapter.invocation, scope.binary.realpath, installation.environment)
+          : instance.buildInvocation(input),
         prepareWorkerInvocation: (invocation, qualification) => prepareInstalledWorkerInvocation(instance, invocation, qualification),
         ...(mcpRegistry ? { mcpRegistry, mcpProfile: record.mcpProfile } : {}),
       };
@@ -979,8 +1006,17 @@ export async function loadRecordedWorkerInstallations({ registry, cwd, policy, p
       installations[cli] = structuredClone(binding);
       if (record.modelObservations) observations[cli] = structuredClone(record.modelObservations);
       Object.assign(resolvedRegistry, candidateRegistry);
-    } catch { /* One missing/changed installation cannot grant authority or hide qualified peers. */ }
+    } catch (error) {
+      // One rejected installation cannot grant authority or hide qualified peers.
+      const failureReason = reason === 'module-registration' && error?.code === 'WORKER_ADAPTER_CONFLICT'
+        ? 'adapter-conflict' : reason;
+      rejections.push({ registration, reason: failureReason });
+      if (typeof record?.cli === 'string' && /^[a-z][a-z0-9-]{0,62}$/.test(record.cli)) qualificationFailures[record.cli] = failureReason;
+    }
   }
-  if (!Object.keys(installations).length) throw fail();
-  return { registry: resolvedRegistry, installations, drivers, observations };
+  if (!Object.keys(installations).length) {
+    if (!rejections.length) rejections.push({ registration: null, reason: 'no-records' });
+    throw fail();
+  }
+  return { registry: resolvedRegistry, installations, drivers, observations, qualificationFailures };
 }

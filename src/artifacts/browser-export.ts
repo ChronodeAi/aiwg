@@ -725,6 +725,7 @@ function recordForEntry(
             phase: entry.phase,
             type: entry.type,
             frontmatter: {
+              ...(entry.memoryRecord ? { aiwg_memory_record: entry.memoryRecord } : {}),
               ...(entry.kernel === undefined ? {} : { kernel: entry.kernel }),
               ...(entry.kind ? { aiwg_kind: entry.kind } : {}),
               ...(entry.sourceType ? { aiwg_source_type: entry.sourceType } : {}),
@@ -732,6 +733,12 @@ function recordForEntry(
                 ? { aiwg_search_terms: uniqueSorted(entry.searchTerms) }
                 : {}),
               ...(entry.script ? { aiwg_script: entry.script } : {}),
+              ...(entry.activation ? { activation: entry.activation } : {}),
+              ...(entry.bound_to ? { bound_to: entry.bound_to } : {}),
+              ...(entry.ruleEnforcement ? { enforcement: entry.ruleEnforcement } : {}),
+              ...(entry.rulePaths ? { paths: entry.rulePaths } : {}),
+              ...(entry.governedPaths ? { aiwg_governed_paths: entry.governedPaths } : {}),
+              ...(entry.ruleSummary !== undefined ? { summary: entry.ruleSummary } : {}),
             },
           },
         }

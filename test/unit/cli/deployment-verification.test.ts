@@ -332,9 +332,9 @@ describe.sequential('deployment verification contract (#2069)', () => {
       ]));
 
     const missingContext = await readyCodexFixture();
-    await rm(path.join(missingContext.projectRoot, '.aiwg', 'AIWG.md'));
+    await rm(path.join(missingContext.projectRoot, 'AIWG.md'));
     expect((await verifyFixture(missingContext.projectRoot, missingContext.frameworkRoot)).findings)
-      .toEqual(expect.arrayContaining([expect.objectContaining({ id: 'context-missing:.aiwg/AIWG.md', severity: 'blocking' })]));
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: 'context-missing:AIWG.md', severity: 'blocking' })]));
 
     const invalidRegistry = await readyCodexFixture();
     const configPath = path.join(invalidRegistry.projectRoot, '.aiwg', 'aiwg.config');

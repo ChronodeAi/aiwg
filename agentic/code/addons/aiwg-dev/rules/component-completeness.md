@@ -1,5 +1,34 @@
 ---
 enforcement: medium
+activation: paths
+summary: Complete every required file, metadata field, and registration for an AIWG component before declaring it done.
+bound_to:
+  skills:
+    - devkit-create-addon
+    - devkit-create-extension
+    - devkit-create-framework
+    - devkit-create-agent
+    - devkit-create-command
+    - devkit-create-skill
+    - scaffold-addon
+    - scaffold-extension
+    - scaffold-framework
+    - new-bundle
+    - add-agent
+    - add-skill
+    - add-command
+    - add-behavior
+    - add-template
+    - validate-addon
+    - validate-component
+    - devkit-validate
+    - dev-doctor
+  agents:
+    - aiwg-developer
+paths:
+  - agentic/code/**
+  - src/extensions/**
+  - src/cli/handlers/**
 ---
 
 # Component Completeness Rules

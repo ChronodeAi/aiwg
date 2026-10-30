@@ -54,6 +54,7 @@ describe('generated plugin copies', () => {
       fs.mkdirSync(path.dirname(path.join(fixture, file)), { recursive: true });
       fs.copyFileSync(path.join(root, file), path.join(fixture, file));
     }
+    fs.cpSync(path.join(root, 'tools/security/threat-assessment'), path.join(fixture, 'tools/security/threat-assessment'), { recursive: true });
     const run = () => {
       // File descriptors also retain diagnostics in sandboxes that restrict
       // child-process pipes. Keep every subprocess bounded.
@@ -84,6 +85,7 @@ describe('generated plugin copies', () => {
   it.each([
     'utils/skills/aiwg-language-map/SKILL.md',
     'sdlc/tools/security/threat-assessment.mjs',
+    'sdlc/tools/security/threat-assessment/negation.mjs',
     'line-memory/commands/line-memory.mjs',
     'rlm/schemas/rlm-trajectory.yaml',
     'sdlc/.claude-plugin/plugin.json',

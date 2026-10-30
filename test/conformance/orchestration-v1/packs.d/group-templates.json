@@ -1,0 +1,18 @@
+{
+  "T-OG-13": {
+    "mechanismOwners": [
+      "B-OG-21"
+    ],
+    "testFiles": [
+      "test/unit/config/worker-templates.test.ts",
+      "test/unit/models/worker-rubrics.test.ts",
+      "test/unit/smiths/parallelism-templates.test.ts"
+    ]
+  },
+  "T-OG-15": [
+    "test/unit/models/worker-rubrics.test.ts"
+  ],
+  "T-OG-19": [
+    "test/unit/models/worker-rubrics.test.ts"
+  ]
+}

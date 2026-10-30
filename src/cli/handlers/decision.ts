@@ -1,12 +1,15 @@
+import { resolveSensitiveInput, sensitiveInputOptions } from '../../auth/sensitive-input.js';
+import { decisionPricing } from '../../decision/pricing.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import {
   ATTRIBUTION_FIELD_PATTERN,
-  askDecision,
   DecisionAskUsageError,
   decisionCapabilities,
   DecisionLedgerSinceError,
   decisionLedgerHistory,
   decisionLedgerStats,
+  rotateDecisionLedger,
+  parseDecisionLedgerRetention,
   evaluateRequestPath,
   listPatterns,
   livePlan,
@@ -14,7 +17,7 @@ import {
   materializeSyntheticClassificationSetup,
   parseDecisionLedgerSince,
   readDecisionContextFile,
-  recordDecisionAsk,
+  runDecisionOffloadCheckpoint,
   runOfflinePattern,
   setupJev,
   showPattern,
@@ -31,7 +34,7 @@ function jsonResult(value: unknown, exitCode = 0): HandlerResult {
 
 function usage(): string {
   return [
-    'Usage: aiwg decision <capabilities|status|patterns|validate|evaluate|setup|history|stats> [options]',
+    'Usage: aiwg decision <capabilities|status|patterns|validate|evaluate|setup|history|stats|rotate|pricing> [options]',
     '       aiwg decision ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--context <text> | --context-file <path> | --context-stdin] [--threshold 0.8] [--timeout-ms 15000] [--passes N] [--escalation-passes N] [--provider <id>] [--session <id>] [--caller <tag>] [--record-text] [--json]',
     '',
     'Commands:',
@@ -43,10 +46,12 @@ function usage(): string {
     '  validate <request|definition|ruleset|binding> <path>',
     '  evaluate --request <path> [--host-policy-module <path>]',
     '  setup synthetic-classification [--output-dir <dir>]',
-    '  setup jev [--token-stdin] [--region <r>] [--endpoint <url>] [--verify] [--remove]',
+    '  setup jev [--token-interactive | --token-stdin | --token-file <path> | --token-store <name> | --token-env <name>] [--region <r>] [--endpoint <url>] [--verify] [--remove]',
     '  ask --question "<q>" (--yes-no | --choices a,b,c | --scale 1-5) [--provider <id>] [--session <id>] [--caller <tag>] [--record-text]',
-    '  history [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--json]',
-    '  stats [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--group-by provider|session|kind|caller|passes|escalation] [--json]',
+    '  history [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--include-archives] [--json]',
+    '  pricing [--refresh --model jev-X.Y.Z] [--dry-run] [--offline | --allow-snapshot] [--json]',
+    '  stats [--since <date>] [--provider <id>] [--session <id>] [--kind yes-no|choices|scale] [--status answered|fallback] [--caller <tag>|<prefix>* | --no-caller] [--group-by provider|session|kind|caller|passes|escalation] [--include-archives] [--json]',
+    '  rotate [--keep-last <Nd|N> | --all] [--to <path>] [--json]',
     '',
     'Notes:',
     '  Every COMPLETED `ask` call (CLI and MCP) appends one record to the decision',
@@ -66,9 +71,13 @@ function usage(): string {
     `  --session and --caller must match ${ATTRIBUTION_FIELD_PATTERN.source} (<= ${MAX_ATTRIBUTION_FIELD_LENGTH} characters).`,
     '  `history`/`stats` accept `--caller <tag>` (exact), `--caller \'<prefix>*\'` (prefix; the only wildcard), or `--no-caller` (records with no tag; not combinable with `--caller`).',
     '  `history`/`stats` reject unknown flags and positional arguments with exit 2.',
-    '  The ledger has no built-in retention: it grows without bound and the',
-    '  operator may truncate or delete it at any time; readers tolerate a missing',
-    '  file. The ledger trusts only the local filesystem under the project',
+    '  `rotate` keeps the last 90 days by default; --keep-last accepts days or a',
+    '  positive count. Rotating everything requires --all. Malformed lines stay',
+    '  inline unless --all is used. Archives are private .jsonl files beneath',
+    '  archive/decision/ in the resolved artifact root; --to must stay there.',
+    '  `history`/`stats` optionally read archives with --include-archives, offline.',
+    '  Appenders, rotation and readers share one cross-process lock.',
+    '  The ledger trusts only the local filesystem under the project',
     '  artifact root, owned by the same user running aiwg — it is not a defense',
     '  against a hostile process already running as that user.',
   ].join('\n');
@@ -126,7 +135,7 @@ function takeAttributionOption(args: string[], name: '--session' | '--caller', r
 }
 
 async function decisionSetupJev(rest: string[]): Promise<HandlerResult> {
-  const token = rest.includes('--token-stdin') ? (await readStdin()).trim() : undefined;
+  const token = rest.includes('--remove') ? undefined : await resolveSensitiveInput(sensitiveInputOptions(rest, 'token'));
   const result = await setupJev({
     token,
     region: takeOption(rest, '--region'),
@@ -169,19 +178,19 @@ async function decisionAsk(ctx: HandlerContext): Promise<HandlerResult> {
     ...(args.includes('--threshold') ? { threshold: parseNumber(takeOption(args, '--threshold'), '--threshold') } : {}),
     ...(args.includes('--timeout-ms') ? { timeoutMs: parseNumber(takeOption(args, '--timeout-ms'), '--timeout-ms') } : {}),
   };
-  const result = await askDecision(input, { cwd: ctx.cwd, env: process.env });
-  // Best-effort and bounded (recordDecisionAsk never throws and never hangs past its own
-  // deadline): a ledger failure, timeout, or attribution-detection error can never change
-  // `result` or the exit code decided below (review r1 findings 3 and 4).
-  await recordDecisionAsk(input, result, {
+  const invocation = await runDecisionOffloadCheckpoint(input, {
     transport: 'cli',
     projectRoot: ctx.cwd,
     env: process.env,
     explicitProvider: takeOption(args, '--provider'),
     explicitSessionId,
-    caller: caller ?? null,
+    caller: caller ?? 'decision-cli:ask',
+    ledgerCaller: caller ?? null,
+    category: caller ? undefined : 'unattributed',
     recordText: args.includes('--record-text'),
   });
+  if (!invocation.result) throw invocation.outcome === 'unknown' ? invocation.error : new Error('Decision ask was skipped');
+  const result = invocation.result;
   if (args.includes('--json')) return jsonResult(result);
   if (result.status === 'fallback') return { exitCode: 0, message: `FALLBACK to LLM: ${result.reason}`, rawOutput: true };
   return { exitCode: 0, message: `${String(result.answer)} (confidence ${result.confidence?.toFixed(2) ?? 'unknown'}, ${result.model ?? 'unknown-model'})`, rawOutput: true };
@@ -226,7 +235,7 @@ function parseGroupBy(value: string | undefined): DecisionLedgerGroupBy | undefi
 }
 
 const HISTORY_VALUE_FLAGS = ['--since', '--provider', '--session', '--kind', '--status', '--caller'] as const;
-const HISTORY_BOOL_FLAGS = ['--json', '--no-caller'] as const;
+const HISTORY_BOOL_FLAGS = ['--json', '--no-caller', '--include-archives'] as const;
 const STATS_VALUE_FLAGS = [...HISTORY_VALUE_FLAGS, '--group-by'] as const;
 const STATS_BOOL_FLAGS = HISTORY_BOOL_FLAGS;
 
@@ -287,6 +296,7 @@ function parseLedgerFilters(args: string[]) {
     kind: parseKindFilter(takeOption(args, '--kind')),
     status: parseStatusFilter(takeOption(args, '--status')),
     ...parseCallerFilter(args),
+    ...(args.includes('--include-archives') ? { includeArchives: true } : {}),
   };
 }
 
@@ -327,9 +337,30 @@ async function decisionStats(ctx: HandlerContext): Promise<HandlerResult> {
     `  confidence: mean=${group.confidence.mean?.toFixed(2) ?? '-'} min=${group.confidence.min?.toFixed(2) ?? '-'} max=${group.confidence.max?.toFixed(2) ?? '-'} (n=${group.confidence.count})`,
     `  agreement: mean=${group.agreement.mean?.toFixed(2) ?? '-'} escalated=${group.escalatedCalls} passes run=${group.passesRun}`,
     `  jev usage: input=${group.jevUsage.inputTokens} output=${group.jevUsage.outputTokens}`,
-    `  estimated LLM tokens avoided=${group.estimatedLlmTokensAvoidedTotal} net savings=${group.netSavingsTokens}`,
+    `  tokens per answered decision=${group.tokensPerAnsweredDecision?.toFixed(2) ?? '-'}`,
+    `  llm_tokens_avoided=${group.llm_tokens_avoided} jev_tokens=${group.jev_tokens} cost_weighted_net_usd=${group.cost_weighted_net_usd.toFixed(6)}`,
+    ...group.ratesUsed.map(rate => `  rates used (${rate.calls} calls): ${JSON.stringify(rate.method)} source=${rate.method.source ?? 'manual'} checked_at=${rate.method.checked_at ?? 'unknown'}`),
+    `  v1 comparison only: estimated LLM tokens avoided=${group.estimatedLlmTokensAvoidedTotal} net savings=${group.netSavingsTokens}`,
+    ...(group.legacyReestimatedCalls ? [`  v1 records re-estimated=${group.legacyReestimatedCalls} weights=${JSON.stringify(result.legacyEstimationWeights)}`] : []),
   ]);
   return { exitCode: 0, message: [...header, ...lines].join('\n'), rawOutput: true };
+}
+
+async function decisionRotate(ctx: HandlerContext): Promise<HandlerResult> {
+  const args = ctx.args.slice(1);
+  assertLedgerArgs(args, ['--keep-last', '--to'], ['--all', '--json']);
+  const keepLast = args.includes('--keep-last') ? takeRequiredOption(args, '--keep-last') : undefined;
+  const all = args.includes('--all');
+  try {
+    parseDecisionLedgerRetention(keepLast, all);
+  } catch (error) {
+    throw new DecisionAskUsageError('invalid-retention', error instanceof Error ? error.message : String(error));
+  }
+  const result = await rotateDecisionLedger({ projectRoot: ctx.cwd, keepLast, all,
+    to: args.includes('--to') ? takeRequiredOption(args, '--to') : undefined });
+  if (args.includes('--json')) return jsonResult(result);
+  return { exitCode: 0, rawOutput: true, message:
+    `Archived ${result.archived} line(s)${result.archivePath ? ` to ${result.archivePath}` : ''}; retained ${result.retained} line(s) inline (${result.malformed} malformed).` };
 }
 
 async function executeDecision(ctx: HandlerContext): Promise<HandlerResult> {
@@ -340,6 +371,21 @@ async function executeDecision(ctx: HandlerContext): Promise<HandlerResult> {
     if (command === 'capabilities' || command === 'status') return jsonResult(decisionCapabilities(options));
     if (command === 'ask') return await decisionAsk(ctx);
     if (command === 'history') return await decisionHistory(ctx);
+    if (command === 'rotate') return await decisionRotate(ctx);
+    if (command === 'pricing') {
+      const args = ctx.args.slice(1);
+      assertLedgerArgs(args, ['--model'], ['--refresh', '--dry-run', '--offline', '--allow-snapshot', '--json']);
+      const result = await decisionPricing({ cwd: ctx.cwd, refresh: args.includes('--refresh'), dryRun: args.includes('--dry-run'),
+        offline: args.includes('--offline'), allowSnapshot: args.includes('--allow-snapshot'), model: args.includes('--model') ? takeRequiredOption(args, '--model') : undefined });
+      if (args.includes('--json')) return jsonResult(result);
+      return { exitCode: 0, rawOutput: true, message: [
+        `decision.ask.cost: ${JSON.stringify(result.current)}`,
+        `Source URL: ${result.sourceUrl}`,
+        ...('snapshotDate' in result && result.snapshotDate ? [`Bundled snapshot dated ${result.snapshotDate}`] : []),
+        ...('warning' in result && result.warning ? [`Warning: ${result.warning}`] : []),
+        ...('diff' in result ? [`${result.written ? 'Written' : 'Dry run; config unchanged'}: ${JSON.stringify(result.diff)}`] : []),
+      ].join('\n') };
+    }
     if (command === 'stats') return await decisionStats(ctx);
     if (command === 'patterns') {
       if (subcommand === 'list') return jsonResult(listPatterns());

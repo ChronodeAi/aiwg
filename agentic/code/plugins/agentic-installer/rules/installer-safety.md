@@ -1,4 +1,14 @@
 ---
+activation: bound
+summary: "Validate setup manifests and collect parameters before execution; show planned steps, confirm destructive actions, and keep secrets out of manifests and scripts."
+bound_to:
+  skills:
+    - setup-generate
+    - setup-run
+    - setup-validate
+    - cockpit-headless-deploy
+  agents:
+    - installer-agent
 enforcement: high
 name: installer-safety
 description: Mandatory safety behaviors for the installer-agent and setup-run skill. Prevents destructive actions, enforces user authorization, and protects against script injection.

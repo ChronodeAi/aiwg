@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/memory/maintenance-receipt.v1.schema.json",
+  "title": "AIWG memory maintenance receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "planDigest",
+    "ownerReceipts"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "aiwg.maintenance-receipt.v1"
+    },
+    "planDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ownerReceipts": {
+      "type": "array",
+      "items": {}
+    },
+    "partial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completed",
+        "pending"
+      ],
+      "properties": {
+        "completed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "pending": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "resumedFrom": {
+      "type": "string",
+      "minLength": 1
+    },
+    "providerCopies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "regenerate"],
+      "properties": {
+        "status": { "enum": ["current", "stale", "not-applicable"] },
+        "regenerate": { "const": "aiwg regenerate --workspace --provider generic" }
+      }
+    }
+  }
+}

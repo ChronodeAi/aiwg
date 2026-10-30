@@ -5,20 +5,19 @@
  * @implements #1085
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   AIWG_GITIGNORE_SENTINEL,
   detectAiwgBlanketIgnore,
   appendAiwgSourceTrackBlock,
+  checkBundleManifestIgnored,
 } from '../../../src/extensions/project-local-gitignore.js';
 
 function makeTmpDir(): string {
-  const dir = join(tmpdir(), `aiwg-gitignore-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  return mkdtempSync(join(tmpdir(), 'aiwg-gitignore-test-'));
 }
 
 describe('project-local-gitignore', () => {
@@ -29,7 +28,21 @@ describe('project-local-gitignore', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.platform === 'win32')('omits unrelated shell values from the Git ignore helper', async () => {
+    mkdirSync(join(tmpDir, '.git'));
+    const observed = join(tmpDir, 'git-environment.json');
+    writeFileSync(join(tmpDir, 'git'), `#!${process.execPath}\n` +
+      `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({env:{SYNTHETIC_GIT_SECRET:process.env.SYNTHETIC_GIT_SECRET},argv:process.argv.slice(2)}));\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', tmpDir);
+    vi.stubEnv('SYNTHETIC_GIT_SECRET', 'synthetic-git-private-value');
+    expect(await checkBundleManifestIgnored(tmpDir, '.aiwg/addons/example/manifest.json')).toBe(true);
+    const child = JSON.parse(readFileSync(observed, 'utf8'));
+    expect(child.env.SYNTHETIC_GIT_SECRET).toBeUndefined();
+    expect(child.argv).toEqual(['check-ignore', '-q', '.aiwg/addons/example/manifest.json']);
   });
 
   describe('detectAiwgBlanketIgnore', () => {

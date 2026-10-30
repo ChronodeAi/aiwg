@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -30,6 +30,34 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('canonical compound-memory context', () => {
+  it('uses the resolved artifact store and preserves workspace identity outside the workspace', () => {
+    const workspace = join(root, 'workspace'); const corpus = join(root, 'corpus');
+    mkdirSync(workspace); mkdirSync(corpus);
+    const local = new CanonicalContextRepository(workspace);
+    local.confirm({ preview: local.previewUpsert(proposal), proposal });
+    writeFileSync(join(workspace, '.aiwg-location'), '../corpus\n');
+    // A repository-local store is never silently hidden behind an empty external store.
+    expect(() => new CanonicalContextRepository(workspace)).toThrow(/repository-local path .*Move that directory/);
+    mkdirSync(join(corpus, 'context'), { recursive: true });
+    renameSync(join(workspace, '.aiwg/context/compound-memory'), join(corpus, 'context/compound-memory'));
+    const resolved = new CanonicalContextRepository(workspace);
+    expect(resolved.workspaceId).toBe(local.workspaceId);
+    expect(resolved.residentEntries().map(entry => entry.value)).toEqual([proposal.value]);
+    const external = { ...proposal, key: `${proposal.key}-external`, value: 'Reviewed fact in the resolved corpus.' };
+    resolved.confirm({ preview: resolved.previewUpsert(external), proposal: external });
+    expect(resolved.residentEntries().map(entry => entry.value)).toContain(external.value);
+    expect(existsSync(join(workspace, '.aiwg/context/compound-memory'))).toBe(false);
+    expect(readFileSync(join(corpus, 'context/compound-memory/context.json'), 'utf8')).toContain(external.value);
+  });
+
+  it('refuses payload writes when the configured external corpus is unavailable', () => {
+    writeFileSync(join(root, '.aiwg-location'), './missing-corpus\n');
+    const repository = new CanonicalContextRepository(root);
+    expect(() => repository.confirm({ preview: repository.previewUpsert(proposal), proposal })).toThrow(/external AIWG artifact root is unavailable/);
+    expect(existsSync(join(root, 'missing-corpus'))).toBe(false);
+    expect(existsSync(join(root, '.aiwg'))).toBe(false);
+  });
+
   it.each(['value', 'reviewer', 'stale', 'operation', 'revoke', 'import'] as const)(
     'rejects a mismatched %s confirmation without changing state or receipts', (kind) => {
       const repository = new CanonicalContextRepository(root);

@@ -7,17 +7,21 @@
  * transport a headless `aiwg session --prompt`/`--prompt-file` launch
  * actually used: a stdin-transport provider's prompt never appears in the
  * recorded argv.
+ *
+ * When the caller strips the environment (helper children get an allowlist,
+ * #3079), the logs default to argv.log / stdin.log next to the stub itself.
  */
 import { appendFileSync, mkdirSync, writeFileSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 
-const argvLog = process.env.UAT_ARGV_LOG;
+const stubDir = dirname(process.argv[1]);
+const argvLog = process.env.UAT_ARGV_LOG ?? join(stubDir, 'argv.log');
 if (argvLog) {
   mkdirSync(dirname(argvLog), { recursive: true });
   appendFileSync(argvLog, JSON.stringify(process.argv.slice(2)) + '\n');
 }
 
-const stdinLog = process.env.UAT_STDIN_LOG;
+const stdinLog = process.env.UAT_STDIN_LOG ?? join(stubDir, 'stdin.log');
 const chunks = [];
 process.stdin.on('data', (chunk) => chunks.push(chunk));
 process.stdin.on('end', () => {

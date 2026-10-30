@@ -57,6 +57,7 @@ export class CheckpointManager extends EventEmitter {
     this.interval = options.interval || DEFAULT_INTERVAL;
     this.onCheckpoint = options.onCheckpoint;
     this.sessionId = options.sessionId || 'unknown';
+    this.attempt = options.attempt;
 
     this.timerId = null;
     this.checkpointNumber = 0;
@@ -288,6 +289,7 @@ export class CheckpointManager extends EventEmitter {
       aiwgState,
       filesModified,
       sessionId: this.sessionId,
+      ...(this.attempt ? { attempt: this.attempt } : {}),
       memory: {
         heapUsed: memory.heapUsed,
         rss: memory.rss,

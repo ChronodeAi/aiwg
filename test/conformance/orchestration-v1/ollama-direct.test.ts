@@ -1,110 +1,20 @@
-/**
- * roctinam/aiwg#2899 (B-OG-09) — local text-only HTTP transport, offline S1
- * profile work.
- *
- * Renders and executes the direct-profile adapter against a synthetic
- * Ollama HTTP server (`fake-ollama-server.mjs`) started and stopped by this
- * test on an ephemeral loopback port — never the real, shared titan
- * service. The real `curl` binary is spawned (a plain child process, no
- * systemd); nothing reaches a model, credential, cloud endpoint or MC
- * state.
- *
- * Two layers, per the #2899 follow-up authorization:
- *  - OL01-OL04, OL08-OL10: direct-unit calls against the adapter's own
- *    `buildWorkerArgs`/`parseOutput`/`parseWorkerFinal` surface, mirroring
- *    the OpenHuman profile's OD05 pattern.
- *  - T-OG-15 describe block: through the PRODUCTION `resolveWorkerInvocation`
- *    resolver and the real `loadInstalledWorkerAdapters` installed-module
- *    loader, test-locally promoting the registry's pre-seeded
- *    `workerHealthAdapters.local-http` descriptive placeholder into an
- *    active `workerAdapters.local-http` copy — the same test-local
- *    activation pattern every other unqualified direct profile uses
- *    (OpenHuman's `loadingRegistry()`), never written to the bundled file by
- *    this test.
- *
- * Fixture qualification here is synthetic and never live qualification: the
- * bundled local-http/Ollama profile stays unqualified.
- */
+/** Offline Ollama transport, installed module, resolver and attached-launcher coverage (#2899). */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { createServer as createTcpServer } from 'node:net';
-import os from 'node:os';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { OLLAMA_MAX_BRIEF_BYTES, OllamaAdapter, assertLocalOllamaEndpoint, assertOllamaModelName, buildOllamaGenerateBody, register } from '../../../tools/ralph-external/lib/ollama-adapter.mjs';
-import { loadProviderModelCapabilities, qualifyWorkerInvocationProfile, resolveWorkerAdapter } from '../../../src/models/provider-policy.js';
-import { resolveWorkerInvocation, type WorkerInvocationDriver } from '../../../src/serve/worker-invocation.js';
-import { createProvider, loadInstalledWorkerAdapters } from '../../../src/models/worker-installation.mjs';
-import { workerResolutionFixture } from '../../fixtures/worker-resolution.js';
-
-const MODULE = 'tools/ralph-external/lib/ollama-adapter.mjs';
-const APPROVED = JSON.parse(readFileSync('test/fixtures/providers/ollama/approved-module.json', 'utf8'));
-const FAKE_SERVER = path.resolve('test/fixtures/providers/ollama/fake-ollama-server.mjs');
+import { DEFAULT_WORKER_SELECTION, loadProviderModelCapabilities, qualifyWorkerInvocationProfile, resolveWorkerAdapter } from '../../../src/models/provider-policy.js';
+import { resolveWorkerInvocation } from '../../../src/serve/worker-invocation.js';
+import { createProvider, loadInstalledWorkerAdapters, normalizeWorkerVersionBanner, compileWorkerVersionPattern } from '../../../src/models/worker-installation.mjs';
+import { workerStdinBytes } from '../../../src/serve/worker-stdin-frame.mjs';
+import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
+import { launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
+import { APPROVED, MODULE, MODEL, FAKE_SERVER, children, scratch, run, startFakeServer,
+  startRefusingEndpoint, installPackage, loadingRegistry, resolverFixture } from '../../fixtures/providers/ollama/harness.js';
 const sha256 = (bytes: Buffer) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-const MODEL = 'qwen3:8b';
-
-const roots: string[] = [];
-const installRoots: string[] = [];
-const children = new Set<ReturnType<typeof spawn>>();
-afterEach(async () => {
-  for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-  children.clear();
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
-  vi.unstubAllEnvs();
-});
-
-async function scratch() {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'aiwg-ollama-')); roots.push(root);
-  return root;
-}
-
-interface Run { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; error?: NodeJS.ErrnoException }
-
-function run(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdinData?: string; timeoutMs?: number }): Promise<Run> {
-  return new Promise(resolve => {
-    const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
-    children.add(child);
-    let stdout = '', stderr = '';
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    child.stdin.on('error', () => {});
-    child.stdin.end(options.stdinData);
-    const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 10_000);
-    child.on('error', error => { clearTimeout(timer); resolve({ code: null, signal: null, stdout, stderr, error }); });
-    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ code, signal, stdout, stderr }); });
-  });
-}
-
-/** A listener on an ephemeral loopback port that destroys every connection: a
- * deterministically unreachable endpoint owned by this test, with no fixed-port assumption. */
-async function startRefusingEndpoint() {
-  const server = createTcpServer(socket => socket.destroy());
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve());
-  });
-  const { port } = server.address() as { port: number };
-  return { endpoint: `127.0.0.1:${port}`, stop: () => server.close() };
-}
-
-/** Starts the fake Ollama HTTP server on an ephemeral loopback port, returns its `host:port` and a stop function. */
-async function startFakeServer(root: string, scenario: string) {
-  const configFile = path.join(root, `fake-${scenario}.json`);
-  const recordPath = path.join(root, `record-${scenario}.json`);
-  const portFile = path.join(root, `port-${scenario}.txt`);
-  await writeFile(configFile, JSON.stringify({ scenario, recordPath }));
-  const child = spawn(process.execPath, [FAKE_SERVER, portFile], { env: { ...process.env, AIWG_FAKE_WORKER_CONFIG: configFile }, stdio: ['ignore', 'ignore', 'pipe'] });
-  children.add(child);
-  const deadline = Date.now() + 5000;
-  while (!existsSync(portFile)) {
-    if (Date.now() > deadline) throw new Error('fake ollama server did not start in time');
-    await new Promise(r => setTimeout(r, 25));
-  }
-  const port = readFileSync(portFile, 'utf8').trim();
-  return { endpoint: `127.0.0.1:${port}`, recordPath, stop: () => { child.kill('SIGTERM'); children.delete(child); } };
-}
 
 describe('Local-http (Ollama backend) text-only HTTP profile (roctinam/aiwg#2899)', () => {
   it('OL01 the approved module digest matches the adapter file and registers exactly "local-http"', async () => {
@@ -195,6 +105,45 @@ describe('Local-http (Ollama backend) text-only HTTP profile (roctinam/aiwg#2899
     expect(() => buildOllamaGenerateBody({ model: MODEL, brief: 'hi', role: 'coding' })).toThrow(/text-only transport.*refuses the 'coding' role/);
     // keep_alive is omitted: server residency defaults apply.
     expect(JSON.parse(buildOllamaGenerateBody({ model: MODEL, brief: 'hi' }))).toEqual({ model: MODEL, prompt: 'hi', stream: false });
+  });
+
+  it('the installed stdin frame binds each selection independently and keeps strict role/body limits', () => {
+    const adapter = new OllamaAdapter();
+    const invocation = { stdin: 'adapter-frame' as const, selected: { model: MODEL } };
+    const other = { ...invocation, selected: { model: 'smollm2:135m' } };
+    const frame = (brief: string | Buffer, input = invocation) => workerStdinBytes(input, brief, adapter)!;
+    expect(JSON.parse(frame(Buffer.from('雪\n"quoted"')).toString())).toEqual({ model: MODEL, prompt: '雪\n"quoted"', stream: false });
+    expect(JSON.parse(frame('second', other).toString()).model).toBe('smollm2:135m');
+    expect(JSON.parse(frame('first', invocation).toString()).model).toBe(MODEL);
+    expect(() => workerStdinBytes({ stdin: 'adapter-frame' }, 'hi', adapter)).toThrow(/model/);
+    expect(() => frame(Buffer.from([0xff]))).toThrow(/encoded data|UTF-8/);
+    expect(() => frame('\ud800')).toThrow(/well-formed/);
+    expect(() => frame('')).toThrow(/non-empty/);
+    expect(() => frame('hi\0')).toThrow(/non-empty/);
+    expect(() => frame('x'.repeat(OLLAMA_MAX_BRIEF_BYTES + 1))).toThrow(/bound/);
+    expect(() => frame('雪'.repeat(OLLAMA_MAX_BRIEF_BYTES / 3 + 1))).toThrow(/bound/);
+    expect(() => frame('\u0001'.repeat(OLLAMA_MAX_BRIEF_BYTES))).toThrow(/frame exceeds byte bound/);
+    expect(() => adapter.buildWorkerStdinFrame('hi', { ...invocation, role: 'coding' })).toThrow(/coding/);
+    expect(() => adapter.buildWorkerStdinFrame('hi', { selected: { model: MODEL, effort: { value: 'high' } } })).toThrow(/effort/);
+  });
+
+  it('the fake server port file is complete the moment it appears (CI 89131 race)', async () => {
+    // Regression: the reader used to treat existence as readiness, so an
+    // empty, still-being-written file produced the endpoint "127.0.0.1:".
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const root = await scratch();
+      const portFile = path.join(root, `port-race-${attempt}.txt`);
+      const child = spawn(process.execPath, [FAKE_SERVER, portFile], { stdio: ['ignore', 'ignore', 'pipe'] });
+      children.add(child);
+      try {
+        const deadline = Date.now() + 5000;
+        while (!existsSync(portFile)) {
+          if (Date.now() > deadline) throw new Error('fake ollama server did not start in time');
+          await new Promise(r => setImmediate(r));
+        }
+        expect(readFileSync(portFile, 'utf8')).toMatch(/^[1-9][0-9]{0,4}$/);
+      } finally { child.kill('SIGTERM'); children.delete(child); }
+    }
   });
 
   describe('T-OG-15/20 render and execute against a synthetic Ollama HTTP server', () => {
@@ -338,72 +287,6 @@ describe('Local-http (Ollama backend) text-only HTTP profile (roctinam/aiwg#2899
 });
 
 describe('T-OG-15 local-http through the production resolver and installed-module loader', () => {
-  /** Host-side install of the one approved module into a fresh, read-only package root.
-   * OllamaAdapter extends ProviderAdapter (#2890 strict claims); its static
-   * import of provider-adapter.mjs (and that file's own worker-health.mjs/
-   * _resolve-impl.mjs imports) must resolve inside the copied package too,
-   * exactly like the Hermes profile test's installPackage. */
-  async function installPackage(bytes: Buffer) {
-    const base = await mkdtemp(path.join(os.tmpdir(), 'aiwg-local-http-install-')); installRoots.push(base);
-    await writeFile(path.join(base, 'package.json'), JSON.stringify({ name: 'aiwg', version: '0.0.0-test-root', type: 'module' }));
-    const packageRoot = path.join(base, 'package');
-    const writable = path.join(base, 'worker-writable');
-    await mkdir(path.join(packageRoot, 'lib'), { recursive: true, mode: 0o755 }); await mkdir(writable);
-    await chmod(base, 0o755); await chmod(packageRoot, 0o755); await chmod(path.join(packageRoot, 'lib'), 0o755);
-    await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
-      version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
-    await writeFile(path.join(packageRoot, APPROVED.entry.modulePath), bytes, { mode: 0o644 });
-    for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-      const dest = path.join(packageRoot, 'lib', name);
-      await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-      await chmod(dest, 0o644);
-    }
-    const resolveImpl = path.join(base, '_resolve-impl.mjs');
-    await copyFile(path.resolve('tools/_resolve-impl.mjs'), resolveImpl);
-    await chmod(resolveImpl, 0o644);
-    // provider-adapter.mjs's top-level `await importImpl(..., 'models/worker-installation.mjs')`
-    // runs at import time; bridge it back to the real file under test.
-    await mkdir(path.join(base, 'src', 'models'), { recursive: true, mode: 0o755 });
-    const target = path.resolve('src/models/worker-installation.mjs');
-    const relative = path.relative(path.join(base, 'src', 'models'), target);
-    await writeFile(path.join(base, 'src', 'models', 'worker-installation.mjs'),
-      `export * from ${JSON.stringify(relative)};\n`);
-    return { packageRoot, writable };
-  }
-
-  /** The registry already carries a descriptive-only `workerHealthAdapters.local-http`
-   * placeholder for this exact issue (B-OG-09). This test-local copy promotes it into
-   * an active `workerAdapters.local-http`, exactly like every other unqualified
-   * direct profile's own test does (e.g. OpenHuman's `loadingRegistry()`); nothing
-   * here is written back to the bundled file. */
-  /** Test-local-only promotion of the registry's pre-seeded, descriptive-only
-   * `workerHealthAdapters.local-http` placeholder into an active
-   * `workerAdapters.local-http`, exactly like every other unqualified direct
-   * profile's own test does (e.g. OpenHuman's `loadingRegistry()`). This
-   * returns a fresh clone each call; nothing is written back to the bundled
-   * file or shared with other test files' registry loads (an earlier attempt
-   * to promote it in the BUNDLED file broke every other provider's
-   * `loadInstalledWorkerAdapters` call, which iterates every active
-   * `workerAdapters` entry regardless of its own `modules` allowlist — do
-   * not repeat that). `invocation` is overridden from the placeholder's
-   * declarative `kind: 'http'` (no `executable`/`argv`/`stdin` — nothing
-   * implements a native HTTP fetch) to the `kind: 'process'` shape this
-   * adapter actually dispatches through (`curl`), since the installed-
-   * module loader and the parallelism-policy validator both require a
-   * schema-valid, launchable invocation to proceed. */
-  function loadingRegistry() {
-    const registry = structuredClone(loadProviderModelCapabilities());
-    const active = structuredClone(registry.workerHealthAdapters!['local-http']);
-    active.runtimeDriver = 'installed:local-http';
-    active.invocation = { kind: 'process', executable: 'curl',
-      argv: ['-q', '-sS', '--max-redirs', '0', '--proto', '=http', '--noproxy', '*', '--connect-timeout', '10',
-        '--max-time', '300', '--max-filesize', '10485760', '--fail-with-body', '-H', 'Content-Type: application/json',
-        '-X', 'POST', 'http://${endpoint}/api/generate', '--data-binary', '@-'],
-      stdin: 'closed', cwd: '${workspace}', envAllowlist: [], versionArgv: ['--version'], maxOutputBytes: 10485760 };
-    registry.workerAdapters = { 'local-http': active };
-    return registry;
-  }
-
   let installed: { owner: any; ids: string[] };
   beforeAll(async () => {
     const { packageRoot, writable } = await installPackage(readFileSync(MODULE));
@@ -411,7 +294,6 @@ describe('T-OG-15 local-http through the production resolver and installed-modul
       modules: [{ ...APPROVED.entry, packageRoot }], workerWritableRoots: [writable], platform: 'linux' });
     installed = { owner: createProvider('local-http'), ids };
   });
-  afterAll(async () => { for (const root of installRoots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
   it('LH01 pins the one approved module digest and loads it through the production installed loader', () => {
     expect(installed.ids).toEqual(['local-http']);
@@ -419,100 +301,93 @@ describe('T-OG-15 local-http through the production resolver and installed-modul
     expect(installed.owner.constructor.name).toBe('OllamaAdapter');
   });
 
-  it('LH02 the bundled registry has no active local-http entry: it stays undispatchable until test-locally promoted', () => {
-    const bundled = structuredClone(loadProviderModelCapabilities());
-    expect(bundled.workerAdapters?.['local-http']).toBeUndefined();
-    expect(() => resolveWorkerAdapter(bundled, 'workerAdapters:local-http')).toThrow();
-    const promoted = loadingRegistry();
-    const adapter = resolveWorkerAdapter(promoted, 'workerAdapters:local-http');
-    expect(adapter.runtimeDriver).toBe('installed:local-http');
-    expect(adapter.qualification.status).toBe('unqualified');
-    expect(() => qualifyWorkerInvocationProfile(adapter, { profile: 'direct-http', transport: 'shell', cliVersion: '0.33.3' }))
+  it('LH02 the bundled process/curl adapter-frame profile remains unqualified until host approval', () => {
+    const adapter = resolveWorkerAdapter(loadProviderModelCapabilities(), 'workerAdapters:local-http');
+    expect(adapter).toMatchObject({ runtimeDriver: 'installed:local-http', supportedVersions: '8.18.0',
+      invocation: { kind: 'process', executable: 'curl', stdin: 'adapter-frame' }, qualification: { status: 'unqualified' } });
+    expect(adapter.invocationProfiles!['direct-http'].health).toMatchObject({ coverage: 'degraded', progressEvidence: [], outputFraming: 'final-json' });
+    expect(() => qualifyWorkerInvocationProfile(adapter, { profile: 'direct-http', transport: 'shell', cliVersion: '8.18.0' }))
       .toThrow('Worker transport/profile is unqualified');
+    const host = structuredClone(adapter);
+    host.qualification = { status: 'qualified', fixtureDigest: 'sha256:' + 'a'.repeat(64),
+      verifiedAt: '2026-10-26T00:00:00Z', evidenceRef: 'fixture:synthetic-only' };
+    expect(() => qualifyWorkerInvocationProfile(host, { profile: 'direct-http', transport: 'shell', cliVersion: '8.18.0' }))
+      .toThrow(/external enforcing boundary/);
+    expect(() => qualifyWorkerInvocationProfile(host, { profile: 'direct-http', transport: 'shell', cliVersion: '8.18.0',
+      policy: DEFAULT_WORKER_SELECTION, permissions: { sandbox: 'external' }, effort: null,
+      boundary: { kind: 'executor', identity: 'fixture:boundary', digest: 'sha256:' + 'b'.repeat(64), controls: ['sandbox'] } }))
+      .toThrow(/matching installation qualification/);
   });
 
-  it('LH03 resolveWorkerInvocation renders a launchable plan whose argv the real curl executes against the fake server', async () => {
-    const f = workerResolutionFixture();
+  it('normalizes the complete bounded curl version banner without widening other version patterns', () => {
+    const adapter = resolveWorkerAdapter(loadProviderModelCapabilities(), 'workerAdapters:local-http');
+    const pattern = adapter.invocation.kind === 'process' ? adapter.invocation.versionPattern : undefined;
+    const banner = 'curl 8.18.0 (synthetic-linux) libcurl/8.18.0\nRelease-Date: 2026-01-07\nProtocols: http\nFeatures: ' + 'x'.repeat(512);
+    expect(normalizeWorkerVersionBanner(banner, pattern)).toBe('8.18.0');
+    expect(() => normalizeWorkerVersionBanner('curl default fake', pattern)).toThrow();
+    expect(() => normalizeWorkerVersionBanner('curl 8.18.0 ' + 'x'.repeat(4096), pattern)).toThrow(/bound/);
+    expect(() => compileWorkerVersionPattern('^x ([0-9.]{1,129})$')).toThrow(/Unsafe/);
+    expect(() => compileWorkerVersionPattern('^x ([0-9.]{1,128}) [a-z]{1,4096}$')).toThrow(/Unsafe/);
+  });
+
+  it('LH03 the production resolver and attached launcher deliver the selected model and brief through adapter-frame stdin', async () => {
     const root = await scratch();
-    const brief = path.join(root, 'brief.txt');
+    await mkdir(path.join(root, 'work'));
     const MARKER = 'LOCAL-HTTP-BRIEF-MARKER-4e71b0';
-    const claimsText = JSON.stringify({ version: 1, status: 'completed', summary: MARKER, claims: [], artifacts: [], checks: [], limitations: [] });
-    await writeFile(brief, claimsText);
-
-    const server = await startFakeServer(root, 'success');
+    const claimsText = JSON.stringify({ version: 1, status: 'completed', summary: MARKER,
+      claims: [], artifacts: [], checks: [], limitations: [] });
+    const payload = `--leading 'quotes" 雪\n$(touch injected) ${MARKER}`;
+    const { snapshot, drivers, request, now } = resolverFixture(root, installed.owner);
+    await writeFile(request.brief, payload, { mode: 0o600 });
+    const server = await startFakeServer(root, 'success', claimsText);
     vi.stubEnv('OLLAMA_HOST', server.endpoint);
+    vi.stubEnv('AIWG_RESOLVE_IMPL_FROM', 'src');
     try {
-      const registry = f.snapshot.registry;
-      delete registry.providers.codex.workerAdapter;
-      const adapter: any = loadingRegistry().workerAdapters['local-http'];
-      // Synthetic fixture qualification only: models a host that proved every
-      // required control for this test. Never written to the bundled registry.
-      adapter.qualification = { status: 'qualified', fixtureDigest: 'sha256:' + createHash('sha256').update('synthetic-local-http-fixture').digest('hex'),
-        verifiedAt: f.observation.verifiedAt, evidenceRef: 'fixture:synthetic-only' };
-      for (const [name, control] of Object.entries(adapter.invocationProfiles['direct-http'].controls) as Array<[string, any]>) {
-        if (name === 'effort' || name === 'stepCap' || name === 'stdin') continue; // stay honest: effort stays not-applicable, stdin stays unqualified (#2998/#3002)
-        Object.assign(control, { support: 'native', evidence: 'fixture:synthetic-local-http-host (not live evidence)' });
+      const plan = await resolveWorkerInvocation(snapshot, request, drivers, now);
+      expect(plan.invocation, JSON.stringify(plan)).toBeDefined();
+      const invocation = plan.invocation!;
+      expect(invocation.stdin).toBe('adapter-frame');
+      expect(invocation.selected.effort.value).toBeNull();
+      expect(JSON.stringify(plan)).not.toContain(MARKER);
+      expect(invocation.shellCommand).toContain(`'${MODEL}'`);
+      const invocationPath = path.join(root, 'plan.json');
+      await writeFile(invocationPath, JSON.stringify(plan), { mode: 0o600 });
+      const launches: any[] = [];
+      const runDir = path.join(root, 'run');
+      const result: any = await new SessionLauncher().launchWorker({ invocationPath, runDir, inputs: { snapshot, drivers }, now,
+        checkDispatch: () => ({ enabled: true, ok: true, failures: [] }),
+        isolation: { mode: 'degraded', reason: 'synthetic: no systemd user manager' }, allowDegraded: true,
+        launchIsolated: (options: any) => { launches.push(options); return launchIsolatedWorker(options); } });
+      expect(result.exitCode ?? result.exit?.exitCode, JSON.stringify(result)).toBe(0);
+      expect(launches).toHaveLength(1);
+      expect(launches[0]).toMatchObject({ stdin: 'adapter-frame', args: invocation.argv.slice(1) });
+      expect(JSON.stringify(launches[0].args)).not.toContain(MARKER);
+      const record = JSON.parse(await readFile(server.recordPath, 'utf8'));
+      expect(record).toMatchObject({ method: 'POST', path: '/api/generate',
+        body: { model: MODEL, prompt: payload, stream: false } });
+      expect(Object.keys(record.body).sort()).toEqual(['model', 'prompt', 'stream']);
+      const final = await installed.owner.parseWorkerFinal(await readFile(invocation.stdoutPath), {
+        format: 'json', observation: { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: 0 } });
+      expect(final).toMatchObject({ status: 'completed', summary: MARKER });
+      for (const name of (await readdir(runDir)).filter(name => name.endsWith('.json'))) {
+        expect(await readFile(path.join(runDir, name), 'utf8'), name).not.toContain(MARKER);
       }
-      adapter.invocationProfiles['direct-http'].envAllowlist = [];
-      adapter.invocation.envAllowlist = [];
-      Object.assign(adapter.capabilities, { modelPin: 'requested', nestedAgentsControllable: true,
-        nativeFallbackControllable: true, sandboxModes: ['read-only', 'workspace-write', 'external'] });
-      registry.workerAdapters = { 'local-http': adapter };
-      f.snapshot.config.parallelism!.groups!.workers.members.forEach(member => { member.cli = 'local-http'; member.model = MODEL; });
-      f.snapshot.config.parallelism!.groups!.workers.members.splice(1);
-      f.snapshot.config.parallelism!.groups!.workers.fallback = [];
-      (f.snapshot.config.parallelism as any).clis = { 'local-http': { adapter: 'workerAdapters:local-http',
-        accountScope: 'local-runtime', quotaScope: 'synthetic', executable: 'curl', enabled: true } };
-      const binding = { ...f.snapshot.installations.codex, profile: 'direct-http', cliVersion: '0.33.3' };
-      f.snapshot.installations = { 'local-http': binding };
-      const discovery = f.snapshot.catalog.discovery!.instances!.codex;
-      discovery.provider = 'local-http'; discovery.runtimeVersion = '0.33.3';
-      discovery.models = discovery.models.slice(0, 1);
-      for (const row of discovery.models) {
-        row.id = MODEL; row.apiModelId = MODEL;
-        row.worker!.cliId = 'local-http'; row.worker!.runtimeVersion = '0.33.3';
-        row.reasoningEfforts = []; Object.assign(row.worker!, { effortSupport: 'not-applicable', efforts: [] });
-      }
-      f.snapshot.catalog.discovery!.instances = { 'local-http': discovery };
-      Object.assign(f.snapshot.models.defaults.workerSelection!.roleGuidance!.coding!, { initialEffort: null, effortLadder: [], allowNotApplicableEffort: true });
-
-      const owner = new OllamaAdapter(); // functional calls use a plain instance; installed.owner (LH01) proves the digest/identity path only, matching the Hermes profile test's convention
-      const drivers: Record<string, WorkerInvocationDriver> = { 'local-http': {
-        qualification: { adapter, adapterId: 'local-http', cliVersion: binding.cliVersion },
-        buildInvocation: async input => ({ argv: ['curl', ...owner.buildWorkerArgs(input, adapter.invocationProfiles['direct-http'], input.permissions)],
-          stdin: 'closed', envNames: [] }),
-      } };
-      const request = { role: 'coding' as const, group: 'workers', task: 'implementation', brief, workdir: root,
-        final_output: path.join(root, 'final.json'), transport: 'shell' as const };
-      const plan = await resolveWorkerInvocation(f.snapshot, request as any, drivers, f.request.now);
-      // Honest, expected outcome: the production resolver REFUSES to dispatch
-      // because `stdin` stays `unqualified` (no adapter-pluggable envelope
-      // exists yet — #2998/#3002). This is the "dispatch is blocked" claim
-      // from the adapter docstring, proven through the real resolver rather
-      // than merely asserted in prose.
-      expect(plan.invocation).toBeUndefined();
-      const messages = [...(plan.diagnostics ?? []), ...((plan as any).exclusions ?? []).flatMap((row: any) => row.diagnostics)]
-        .map((d: any) => `${d.code} ${d.message}`);
-      expect(messages.join('\n')).toMatch(/Required worker control is unqualified: stdin/);
-
-      // Separately, prove the adapter's OWN render is launchable today: build
-      // the real curl argv directly (as OL04 does) and the request body with
-      // the adapter's pure function, then execute both against the fake
-      // server. This is what production dispatch will do once #2998/#3002
-      // land and wire buildOllamaGenerateBody's output onto this argv's stdin.
-      const directArgv = owner.buildWorkerArgs({ cwd: root, selected: { model: MODEL, effort: { value: null } } }, adapter.invocationProfiles['direct-http'], {});
-      expect(directArgv).toEqual(['-q', '-sS', '--max-redirs', '0', '--proto', '=http', '--noproxy', '*',
-        '--connect-timeout', '10', '--max-time', '300', '--max-filesize', '10485760',
-        '--fail-with-body', '-H', 'Content-Type: application/json', '-X', 'POST', `http://${server.endpoint}/api/generate`, '--data-binary', '@-']);
-      expect(JSON.stringify(directArgv)).not.toContain(MARKER); // the brief never reaches argv
-      const requestBody = buildOllamaGenerateBody({ model: MODEL, brief: claimsText });
-      const result = await run('curl', directArgv, { cwd: root, env: { PATH: process.env.PATH! }, stdinData: requestBody });
-      expect(result.code, result.stderr).toBe(0);
-      const final = owner.parseOutput(result.stdout);
-      expect(final).toMatchObject({ done: true, done_reason: 'stop' });
-      expect(final!.response).toContain(MARKER);
-      const claims = await owner.parseWorkerFinal(result.stdout, { format: 'json', observation: { transport: 'shell', status: 'completed', termination: 'confirmed', exitCode: result.code } });
-      expect(claims).toMatchObject({ status: 'completed', summary: MARKER });
     } finally { server.stop(); }
+  });
+
+  it('LH04 disabled members and coding requests cannot build a transport or start a service', async () => {
+    const root = await scratch(); await mkdir(path.join(root, 'work'));
+    await writeFile(path.join(root, 'brief.txt'), 'synthetic text', { mode: 0o600 });
+    const disabled = resolverFixture(root, installed.owner);
+    disabled.snapshot.config.parallelism!.clis!['local-http'].enabled = false;
+    const build = vi.spyOn(disabled.drivers['local-http'], 'buildInvocation');
+    const plan = await resolveWorkerInvocation(disabled.snapshot, disabled.request, disabled.drivers, disabled.now);
+    expect(plan.invocation).toBeUndefined();
+    expect(build).not.toHaveBeenCalled();
+    vi.stubEnv('OLLAMA_HOST', '127.0.0.1:1');
+    const coding = resolverFixture(root, installed.owner, 'coding');
+    const refused = await resolveWorkerInvocation(coding.snapshot, coding.request, coding.drivers, coding.now);
+    expect(refused.invocation).toBeUndefined();
+    expect(JSON.stringify(refused)).toContain('invocation_build_failed');
   });
 });

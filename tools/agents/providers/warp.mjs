@@ -1,3 +1,5 @@
+import { withModelWrapper } from './model-wrapper.mjs';
+import { importImpl } from '../../_resolve-impl.mjs';
 /**
  * Warp Terminal Provider
  *
@@ -10,7 +12,7 @@
  *   - Commands: WARP.md (aggregated only — Warp does not discover .warp/commands/)
  *   - Skills: .warp/skills/ (discrete — natively discovered by Warp)
  *   - Skills: .agents/skills/ (cross-agent compatibility path)
- *   - Rules: WARP.md (aggregated only — Warp does not discover .warp/rules/)
+ *   - Rules: .warp/rules/ (read through the mandatory WARP.md hook)
  *
  * Special features:
  *   - Aggregated WARP.md for agents, commands, and rules
@@ -19,7 +21,6 @@
  *   - Backup creation with timestamp
  *   - CLAUDE.md symlink support
  */
-
 import realFs from 'fs';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -29,10 +30,12 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { classifyModelRole, modelForRole } from './model-role.mjs';
 import {
+  withRuleDeployment,
   ensureDir,
   listMdFiles,
   listSkillDirs,
   deploySkillDir,
+  deployFiles,
   deploySkillsWithKernelRouting,
   isKernelSkill,
   pruneStaleAiwgSkills,
@@ -45,11 +48,10 @@ import {
   normalizeDeploymentMode,
   collectFrameworkArtifacts
 } from './base.mjs';
-
+import { writeContextFileSync } from './context-write.mjs';
 // ============================================================================
 // Provider Configuration
 // ============================================================================
-
 export const name = 'warp';
 export const aliases = [];
 
@@ -69,7 +71,7 @@ export const support = {
   agents: 'aggregated',      // WARP.md primary; files mirrored for portability
   commands: 'conventional',  // .warp/commands/ mirror for slash-command parity
   skills: 'native',          // .warp/skills/ — natively discovered by Warp
-  rules: 'aggregated'        // WARP.md primary; rule files mirrored for portability
+  rules: 'prose-hook'        // WARP.md requires reading the complete rule files
 };
 
 export const capabilities = {
@@ -136,7 +138,8 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 /**
  * Transform agent content for Warp
  */
-export function transformAgent(srcPath, content, opts) {
+export const transformAgent = withModelWrapper('warp', translateAgent);
+function translateAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
 
   // Only transform if model overrides specified
@@ -197,33 +200,15 @@ export function deploySkills(skillDirs, targetDir, opts) {
  * This generates the aggregated WARP.md file
  */
 export async function deployWarp(targetDir, srcRoot, opts) {
-  const scriptPath = path.join(srcRoot, 'tools', 'warp', 'setup-warp.mjs');
+  const { generateAIWGContent, mergeWarpMd } = await import('../../warp/warp-content.mjs');
+  const dest = path.join(targetDir, 'WARP.md');
+  const existing = fs.existsSync(dest) ? fs.readFileSync(dest, 'utf8') : '';
+  const content = generateAIWGContent(srcRoot, opts.mode, opts);
+  // Preserve operator sections even for a forced artifact refresh.
+  const output = mergeWarpMd(existing, content, false);
+  ensureDir(targetDir, opts.dryRun);
+  if (!opts.dryRun) writeContextFileSync(dest, output);
 
-  if (!fs.existsSync(scriptPath)) {
-    console.warn(`Warp setup script not found at ${scriptPath}`);
-    return;
-  }
-
-  console.log('\nGenerating aggregated WARP.md...');
-
-  return new Promise((resolve, reject) => {
-    const args = ['--target', targetDir, '--source', srcRoot];
-    if (opts.dryRun) args.push('--dry-run');
-    if (opts.force) args.push('--force');
-    if (opts.mode) args.push('--mode', opts.mode);
-
-    const child = spawn('node', [scriptPath, ...args], {
-      stdio: 'inherit',
-      cwd: srcRoot
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`setup-warp.mjs exited with code ${code}`));
-    });
-
-    child.on('error', reject);
-  });
 }
 
 // ============================================================================
@@ -259,6 +244,10 @@ export function getFileExtension(type) {
  * Deploys discrete files for all artifact types, then generates aggregated WARP.md
  */
 export async function deploy(opts) {
+  return withRuleDeployment(opts, { name, paths, kernelSkillsPath }, deploySelected);
+}
+
+async function deploySelected(opts) {
   const {
     srcRoot,
     target,
@@ -380,6 +369,12 @@ export async function deploy(opts) {
   if (shouldDeployRules || rulesOnly) {
     console.log(`\nSkipping discrete rule deployment (Warp uses WARP.md)`);
   }
+
+  // Bound definitions must live outside the startup routing table.
+  ensureDir(path.join(target, paths.agents));
+  ensureDir(path.join(target, paths.commands));
+  deployFiles(agentFiles, path.join(target, paths.agents), opts, transformAgent);
+  deployFiles(commandFiles, path.join(target, paths.commands), opts, transformCommand);
 
   // Generate aggregated WARP.md (existing behavior)
   console.log('\n--- Generating aggregated output ---');

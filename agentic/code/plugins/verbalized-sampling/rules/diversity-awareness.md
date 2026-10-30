@@ -1,4 +1,9 @@
 ---
+activation: summary
+summary: "Consider Verbalized Sampling for requested alternatives or creative variety; honor autoApply preferences and avoid it for single-answer or speed-focused tasks."
+bound_to:
+  skills:
+    - diversity-tuning
 enforcement: medium
 id: diversity-awareness
 name: Diversity Awareness

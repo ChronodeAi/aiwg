@@ -243,7 +243,7 @@ describe('Fortemi Core capability discovery over the real framework/addon corpus
     const original = console.log;
     console.log = (...args: unknown[]) => captured.push(args.map(String).join(' '));
     try {
-      await showArtifact(corpusRoot, {
+      await showArtifact(corpusRoot, { body: true,
         name,
         typeFilter,
         json: true,

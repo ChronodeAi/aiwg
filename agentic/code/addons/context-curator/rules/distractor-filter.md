@@ -1,4 +1,9 @@
 ---
+activation: summary
+summary: "Classify context against the task time, entity, and operation scope; use relevant sections first and exclude distractors."
+bound_to:
+  agents:
+    - context-curator
 enforcement: medium
 ---
 

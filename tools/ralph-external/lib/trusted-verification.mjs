@@ -95,12 +95,13 @@ const SCRIPT_TRIGGERING_ARGS = new Set([
 // controlled check code. This is a name-pattern guard, not a value scan.
 const SECRET_LOOKING_ENV_NAME = /TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL/i;
 
-// Conductor-owned budget, independent of worker-reported metadata.
+// Conductor-owned budget, independent of worker-reported metadata. Tree bounds
+// leave headroom over this repository (13k entries, 124 MB tracked in 2026-10).
 export const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
 const ARTIFACT_HASH_CHUNK_BYTES = 64 * 1024;
 export const MAX_TREE_FILE_BYTES = 10 * 1024 * 1024;
-export const MAX_TREE_BYTES = 100 * 1024 * 1024;
-export const MAX_TREE_ENTRIES = 10000;
+export const MAX_TREE_BYTES = 500 * 1024 * 1024;
+export const MAX_TREE_ENTRIES = 50000;
 const MAX_TREE_DEPTH = 128;
 
 /**

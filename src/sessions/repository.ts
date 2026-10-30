@@ -19,6 +19,12 @@ import {
   type SessionCoverageReport,
 } from './batch-contracts.js';
 import { redactSessionText, redactSessionValue, sanitizeSessionEvent, sanitizeNativeExtensions } from './policy.js';
+import {
+  extractBatchEventImages,
+  isImageDigest,
+  type ExtractedSessionImage,
+  type ResolvedSessionImage,
+} from './image-blobs.js';
 import type { TimelineInput } from './timeline.js';
 import { effectiveSessionLifecycle } from './lifecycle.js';
 import {
@@ -27,6 +33,17 @@ import {
   type SessionAnalyticsFact,
   type SessionAnalyticsStatus,
 } from './analytics.js';
+import {
+  HOST_REFERENCE_TABLE_DDL,
+  type HostSessionReference,
+  type SessionIdentity,
+} from './host-catalog.js';
+
+/** Visible-session aggregate identity plus the internal ids references need. */
+export interface SessionIdentityRow extends SessionIdentity {
+  sessionId: string;
+  sourceId: string;
+}
 
 const POLICY_PROVIDER_MIGRATION = 'policy-provider-identity:v2';
 const EVENT_ORIGIN_INTENT_MIGRATION = 'event-origin-intent:v1';
@@ -55,6 +72,13 @@ export interface NormalizedImportBatch {
   sessions: Session[];
   events: SessionEvent[];
   batchRunId?: string;
+  /**
+   * Image bytes extracted from inline payloads during normalization
+   * (#3265). Carried beside the events because event JSON itself must only
+   * hold the content-hash reference; the store persists these with
+   * INSERT OR IGNORE so identical images share one row per catalog.
+   */
+  imageBlobs?: ExtractedSessionImage[];
 }
 export interface ImportReceipt {
   operationId: string;
@@ -267,10 +291,10 @@ export interface SessionAnalyticsSummary {
 export class SessionRepository {
   private readonly db: SqliteDatabase;
 
-  constructor(path = ':memory:') {
-    let Database: new (path: string) => SqliteDatabase;
+  constructor(path = ':memory:', options: { readonly?: boolean } = {}) {
+    let Database: new (path: string, options?: { readonly: boolean; fileMustExist: boolean }) => SqliteDatabase;
     try {
-      Database = requireFeaturePackage('better-sqlite3') as new (path: string) => SqliteDatabase;
+      Database = requireFeaturePackage('better-sqlite3') as new (path: string, options?: { readonly: boolean; fileMustExist: boolean }) => SqliteDatabase;
     } catch (cause) {
       throw new Error(
         'session SQLite catalog is unavailable because better-sqlite3 could not be loaded; ' +
@@ -279,7 +303,8 @@ export class SessionRepository {
         { cause },
       );
     }
-    this.db = new Database(path);
+    this.db = new Database(path, options.readonly ? { readonly: true, fileMustExist: true } : undefined);
+    if (options.readonly) return;
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
@@ -369,6 +394,17 @@ export class SessionRepository {
       CREATE TABLE IF NOT EXISTS session_catalog_meta (
         key TEXT PRIMARY KEY, value TEXT NOT NULL
       );
+      -- Content-addressed tool-output image bytes (#3265). One row per
+      -- content hash per catalog: repeat imports of identical images share
+      -- the row (INSERT OR IGNORE). Events reference blobs by digest and
+      -- keep only a bracketed image placeholder (sha256, type, size) in
+      -- searchableText, so image bytes never reach FTS. Pre-#3265 rows with
+      -- inline bytes are left untouched (no destructive migration).
+      CREATE TABLE IF NOT EXISTS session_image_blobs (
+        digest TEXT PRIMARY KEY, media_type TEXT NOT NULL,
+        byte_length INTEGER NOT NULL, source_locator TEXT,
+        source_offset INTEGER, bytes BLOB NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS session_analytics_facts (
         fact_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
         session_id TEXT NOT NULL, event_id TEXT NOT NULL,
@@ -399,6 +435,9 @@ export class SessionRepository {
       -- alignment without reading searchable text or event JSON.
       CREATE INDEX IF NOT EXISTS idx_fts_event_id ON session_event_fts_content(c0);
     `);
+    // Workspace pointers at account-scoped sessions stored in the host
+    // catalog (#3232). References, never copies; legacy copied rows stay.
+    this.db.exec(HOST_REFERENCE_TABLE_DDL);
     const deletionReceiptColumns = this.db.prepare(
       'PRAGMA table_info(deletion_receipts)',
     ).all().map((row) => String(row.name));
@@ -852,6 +891,18 @@ export class SessionRepository {
     checkpoint: ImportCheckpoint,
     publish = true,
   ): ImportReceipt {
+    // Lift inline image payloads out of event text before redaction (#3265):
+    // base64 data URLs in text survive redaction and would otherwise be
+    // stored inline. Provider image blocks in extensions keep their existing
+    // redaction to markers; their bytes are not retained.
+    // Idempotent -- placeholder text from an earlier pass matches no image
+    // pattern, so importer-extracted batches and direct writers converge.
+    // Bytes are parked beside the batch: the redaction pass below walks
+    // every value and would flatten Uint8Array into plain objects.
+    const extracted = extractBatchEventImages(batch);
+    const imageBlobs = extracted.imageBlobs;
+    batch = { ...batch, events: extracted.events };
+    delete batch.imageBlobs;
     // Guard callers that submit normalized batches directly as well as adapters.
     batch = redactSessionValue({
       ...batch,
@@ -927,6 +978,25 @@ export class SessionRepository {
           merged.lifecycle,
           JSON.stringify(merged),
           merged.sessionId,
+        );
+      }
+      // Persist image bytes once per content hash per catalog (#3265).
+      // INSERT OR IGNORE keeps the first-seen row when identical images
+      // arrive in later batches or replayed records.
+      const insertImageBlob = this.db.prepare(
+        `INSERT OR IGNORE INTO session_image_blobs
+         (digest, media_type, byte_length, source_locator, source_offset, bytes)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+      for (const image of imageBlobs) {
+        if (!isImageDigest(image.digest)) continue;
+        insertImageBlob.run(
+          image.digest,
+          image.mediaType,
+          image.byteLength,
+          image.locatorClass ?? null,
+          image.offset ?? null,
+          Buffer.from(image.bytes),
         );
       }
       const insertEvent = this.db.prepare(
@@ -1209,6 +1279,61 @@ export class SessionRepository {
     ).all().map((row) => String(row.workspace_id));
   }
 
+  /**
+   * Record a workspace pointer at an account-scoped session stored in the
+   * host catalog (#3232). Non-destructive: existing copied rows are left
+   * untouched and remain readable.
+   */
+  recordHostSessionReference(reference: HostSessionReference): void {
+    this.db.prepare(
+      `INSERT INTO session_host_refs
+         (provider, native_session_id, session_id, source_id, host_catalog)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(provider, native_session_id) DO UPDATE SET
+         session_id=excluded.session_id, source_id=excluded.source_id,
+         host_catalog=excluded.host_catalog`,
+    ).run(
+      reference.provider, reference.nativeSessionId, reference.sessionId,
+      reference.sourceId, reference.hostCatalog,
+    );
+  }
+
+  listHostSessionReferences(): HostSessionReference[] {
+    return this.db.prepare(
+      `SELECT provider, native_session_id, session_id, source_id, host_catalog
+       FROM session_host_refs ORDER BY provider, native_session_id`,
+    ).all().map((row) => ({
+      provider: String(row.provider),
+      nativeSessionId: String(row.native_session_id),
+      sessionId: String(row.session_id),
+      sourceId: String(row.source_id),
+      hostCatalog: String(row.host_catalog),
+    }));
+  }
+
+  /**
+   * Visible sessions reduced to aggregate identities (plus the internal ids
+   * reference recording needs). Aggregate search/analytics over several
+   * catalogs dedupe on provider + native session so legacy copied rows
+   * count once (#3232).
+   */
+  listSessionIdentities(workspaceId?: string): SessionIdentityRow[] {
+    const where = workspaceId
+      ? `s.workspace_id=? AND ${VISIBLE_SESSION_PREDICATE}`
+      : VISIBLE_SESSION_PREDICATE;
+    const params: unknown[] = workspaceId ? [workspaceId] : [];
+    return this.db.prepare(
+      `SELECT json_extract(s.data, '$.provider') AS provider, s.native_session_id,
+              s.session_id, s.source_id
+       FROM sessions s WHERE ${where} ORDER BY s.session_id`,
+    ).all(...params).map((row) => ({
+      provider: String(row.provider),
+      nativeSessionId: String(row.native_session_id),
+      sessionId: String(row.session_id),
+      sourceId: String(row.source_id),
+    }));
+  }
+
   saveBatchImportRun(run: BatchImportRun): void {
     run = redactSessionValue(run).value;
     const save = this.db.transaction(() => {
@@ -1397,6 +1522,73 @@ export class SessionRepository {
        ORDER BY e.sequence_no, e.event_id`,
     ).all(...(workspaceId ? [sessionId, workspaceId] : [sessionId]))
       .map((row) => JSON.parse(String(row.data)) as SessionEvent);
+  }
+
+  /**
+   * Distinct image blobs in this catalog. Identical images share one row
+   * per content hash, so this counts unique images, not references (#3265).
+   */
+  countImageBlobs(): number {
+    return Number(this.db.prepare(
+      'SELECT COUNT(*) AS count FROM session_image_blobs',
+    ).get()?.count ?? 0);
+  }
+
+  /**
+   * Fetch one image blob by content digest. Returns null when the blob is
+   * unknown or the digest is malformed -- callers report that as an
+   * "unavailable" reference rather than failing the whole read (#3265).
+   * Pre-#3265 rows carry inline bytes instead of references and never reach
+   * this lookup; they load verbatim through `listEvents`.
+   */
+  getImageBlob(digest: string): {
+    digest: string;
+    mediaType: string;
+    byteLength: number;
+    sourceLocator: string | null;
+    sourceOffset: number | null;
+    bytes: Uint8Array;
+  } | null {
+    if (!isImageDigest(digest)) return null;
+    const row = this.db.prepare(
+      `SELECT digest, media_type, byte_length, source_locator, source_offset, bytes
+       FROM session_image_blobs WHERE digest=?`,
+    ).get(digest);
+    if (!row) return null;
+    return {
+      digest: String(row.digest),
+      mediaType: String(row.media_type),
+      byteLength: Number(row.byte_length),
+      sourceLocator: row.source_locator === null ? null : String(row.source_locator),
+      sourceOffset: row.source_offset === null ? null : Number(row.source_offset),
+      bytes: Uint8Array.from(row.bytes as Uint8Array),
+    };
+  }
+
+  /**
+   * Resolve an event's image references against the blob store. Entries
+   * whose bytes are present resolve `available`; entries whose blob is
+   * missing (pruned catalog, legacy reference) resolve `unavailable` with
+   * the reference metadata intact so callers can report it (#3265). Events
+   * without references -- including pre-#3265 inline rows -- resolve to [].
+   */
+  resolveEventImages(event: Pick<SessionEvent, 'imageRefs'>): ResolvedSessionImage[] {
+    return (event.imageRefs ?? []).map((ref) => {
+      const stored = this.getImageBlob(ref.digest);
+      if (!stored) return { ...ref, status: 'unavailable' as const };
+      return {
+        digest: ref.digest,
+        mediaType: stored.mediaType,
+        byteLength: stored.byteLength,
+        ...(ref.locatorClass !== undefined
+          ? { locatorClass: ref.locatorClass }
+          : stored.sourceLocator !== null ? { locatorClass: stored.sourceLocator } : {}),
+        ...(ref.offset !== undefined
+          ? { offset: ref.offset }
+          : stored.sourceOffset !== null ? { offset: stored.sourceOffset } : {}),
+        status: 'available' as const,
+      };
+    });
   }
 
   listTimelineInputs(workspaceId: string): TimelineInput[] {
@@ -1720,34 +1912,7 @@ export class SessionRepository {
 
   analyticsSummary(options: SessionAnalyticsQuery): SessionAnalyticsSummary {
     const facts = this.listAnalyticsFacts({ ...options, limit: options.limit ?? 5_000 });
-    const byCategory = countBy(facts, (fact) => fact.category);
-    const byStatus = countBy(facts, (fact) => fact.status);
-    const byProvider = countBy(facts, (fact) => fact.provider);
-    const byTool = countBy(
-      facts.filter((fact) => fact.toolName),
-      (fact) => fact.toolName!,
-    );
-    return {
-      analyticsVersion: '1.0.0',
-      workspaceId: options.workspaceId,
-      totals: {
-        facts: facts.length,
-        sessions: new Set(facts.map((fact) => fact.sessionId)).size,
-        toolCalls: facts.filter((fact) => fact.category === 'tool-call').length,
-        toolFailures: facts.filter((fact) =>
-          fact.category === 'tool-result' && fact.status === 'failed').length,
-        escalations: facts.filter((fact) => fact.category === 'escalation').length,
-        hitlDecisions: facts.filter((fact) => fact.category === 'hitl').length,
-        indicators: facts.filter((fact) => fact.category === 'indicator').length,
-        retryGroups: new Set(
-          facts.map((fact) => fact.retryGroupId).filter(Boolean),
-        ).size,
-      },
-      byCategory,
-      byStatus,
-      byProvider,
-      byTool,
-    };
+    return summarizeSessionAnalyticsFacts(facts, options.workspaceId);
   }
 
   getAnalyticsEvidence(
@@ -2652,6 +2817,41 @@ function canonicalDevinLocator(value: string): string {
   return value.startsWith('windsurf-')
     ? `devin-desktop-${value.slice('windsurf-'.length)}`
     : value;
+}
+
+/**
+ * Summarize analytics facts without touching a catalog, so cross-catalog
+ * merges (workspace facts plus referenced host facts, #3232) report the
+ * same shape as a single-catalog summary.
+ */
+export function summarizeSessionAnalyticsFacts(
+  facts: readonly SessionAnalyticsFact[],
+  workspaceId: string,
+): SessionAnalyticsSummary {
+  return {
+    analyticsVersion: '1.0.0',
+    workspaceId,
+    totals: {
+      facts: facts.length,
+      sessions: new Set(facts.map((fact) => fact.sessionId)).size,
+      toolCalls: facts.filter((fact) => fact.category === 'tool-call').length,
+      toolFailures: facts.filter((fact) =>
+        fact.category === 'tool-result' && fact.status === 'failed').length,
+      escalations: facts.filter((fact) => fact.category === 'escalation').length,
+      hitlDecisions: facts.filter((fact) => fact.category === 'hitl').length,
+      indicators: facts.filter((fact) => fact.category === 'indicator').length,
+      retryGroups: new Set(
+        facts.map((fact) => fact.retryGroupId).filter(Boolean),
+      ).size,
+    },
+    byCategory: countBy(facts, (fact) => fact.category),
+    byStatus: countBy(facts, (fact) => fact.status),
+    byProvider: countBy(facts, (fact) => fact.provider),
+    byTool: countBy(
+      facts.filter((fact) => fact.toolName),
+      (fact) => fact.toolName!,
+    ),
+  };
 }
 
 function countBy<T>(

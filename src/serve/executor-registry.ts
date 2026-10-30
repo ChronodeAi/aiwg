@@ -16,13 +16,15 @@
  */
 
 import { randomBytes } from 'crypto';
+import { executorTokensEqual } from './executor-token.mjs';
 import { EventEmitter } from 'events';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'fs';
+import { constants, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, lstatSync, realpathSync, openSync, closeSync, fstatSync, fsyncSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, isAbsolute, join, resolve as resolvePath } from 'path';
+import { dirname, isAbsolute, join, relative, resolve as resolvePath } from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { projectAiwgPath } from '../config/project-artifacts.js';
+import { FileAdmissionStore, hostProjectAdmissionPolicy, type AdmissionStore, type SharedHostPolicy } from './shared-host-scheduler.js';
 import type { MissionA2ABinding } from './mission-hitl.js';
 import type {
   A2AProtocolPolicy,
@@ -263,8 +265,10 @@ export interface ExecutorRegisterResponse {
 /** Persistent token record saved across server restarts (#969 pattern). */
 interface ExecutorIdentityRecord {
   executorId: string;
-  token: string;
+  token?: string;
   lastSeenAt: string;
+  /** Trusted bootstrap data; never copied from the executor wire payload. */
+  hostAdmission?: { authorityRef: string; path: string; version: string; workerWritableRoots: string[]; revisionSupport: 1 };
 }
 
 /** Filter criteria for executor selection (mirrors ExecutorFilter schema). */
@@ -314,31 +318,69 @@ export function resolveExecutorIdentityStorePath(projectRootOverride?: string): 
   return DEFAULT_EXECUTOR_IDENTITY_STORE_PATH;
 }
 
-function loadExecutorIdentityStore(): Map<string, ExecutorIdentityRecord> {
-  const path = resolveExecutorIdentityStorePath();
+function loadExecutorIdentityStore(path = resolveExecutorIdentityStorePath(), strict = false): Map<string, ExecutorIdentityRecord> {
   try {
     if (existsSync(path)) {
-      const data = JSON.parse(readFileSync(path, 'utf-8')) as ExecutorIdentityRecord[];
-      return new Map(data.map((r) => [r.executorId, r]));
+      let contents: string;
+      if (strict) {
+        const file = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          const stat = fstatSync(file);
+          if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 1024 * 1024) throw new Error('host registration must be a private bounded regular file');
+          contents = readFileSync(file, 'utf-8');
+        } finally { closeSync(file); }
+      } else contents = readFileSync(path, 'utf-8');
+      const data = JSON.parse(contents) as ExecutorIdentityRecord[];
+      if (strict && (!Array.isArray(data) || data.some(record => !record || typeof record.executorId !== 'string' || !record.executorId)
+        || new Set(data.map(record => record.executorId)).size !== data.length)) throw new Error('invalid trusted executor identity store');
+      return new Map(data.map((r) => {
+        if (strict) return [r.executorId, r];
+        const { hostAdmission: _hostAdmission, ...identity } = r;
+        return [r.executorId, identity];
+      }));
     }
-  } catch { /* ignore */ }
+  } catch (error) { if (strict) throw error; /* legacy best effort */ }
   return new Map();
 }
 
-function saveExecutorIdentityStore(store: Map<string, ExecutorIdentityRecord>): void {
-  const path = resolveExecutorIdentityStorePath();
+function saveExecutorIdentityStore(store: Map<string, ExecutorIdentityRecord>, path = resolveExecutorIdentityStorePath(), strict = false): void {
   try {
     const dir = dirname(path);
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, ...(strict ? { mode: 0o700 } : {}) });
+    if (strict) assertHostRegistrationPath(path, []);
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync(tmp, JSON.stringify([...store.values()], null, 2), 'utf-8');
+    if (strict) {
+      const file = openSync(tmp, 'wx', 0o600);
+      try { writeFileSync(file, JSON.stringify([...store.values()], null, 2)); fsyncSync(file); } finally { closeSync(file); }
+    } else writeFileSync(tmp, JSON.stringify([...store.values()], null, 2), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
     try {
       renameSync(tmp, path);
+      if (strict) {
+        const directory = openSync(dir, 'r');
+        try { fsyncSync(directory); } finally { closeSync(directory); }
+      }
     } catch (err) {
       try { unlinkSync(tmp); } catch { /* ignore */ }
       throw err;
     }
-  } catch { /* non-fatal — best effort */ }
+  } catch (error) { if (strict) throw error; /* legacy best effort */ }
+}
+
+/** Host registration has a fixed user authority location, independent of project
+ * storage redirects. A trusted embedding may provide an explicit location. */
+function assertHostRegistrationPath(path: string, workerWritableRoots: string[]): void {
+  const parent = dirname(path);
+  if (!isAbsolute(path) || realpathSync(parent) !== resolvePath(parent)) throw new Error('host registration requires a canonical absolute path');
+  const directory = lstatSync(parent);
+  if ((directory.mode & 0o077) !== 0 || directory.uid !== process.getuid?.()) throw new Error('host registration directory must be private');
+  if (existsSync(path)) {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.uid !== process.getuid?.() || stat.size > 1024 * 1024) throw new Error('host registration must be a private bounded regular file');
+  }
+  for (const root of workerWritableRoots) {
+    const within = relative(realpathSync(root), path);
+    if (!within || (!within.startsWith('../') && within !== '..' && !isAbsolute(within))) throw new Error('worker writable mount includes the host registration');
+  }
 }
 
 // ============================================================
@@ -363,23 +405,145 @@ const MAX_MISSION_EVENTS = 50;
  */
 export class ExecutorRegistry extends EventEmitter {
   private executors = new Map<string, ExecutorRegistration>();
+  private admissionAuthorities = new Map<string, { executorId: string; version: string; store: AdmissionStore; restored?: boolean }>();
   private missions  = new Map<string, MissionRecord>();
   /** Persistent token store — executorId → identity record */
   private identityStore: Map<string, ExecutorIdentityRecord>;
 
-  constructor() {
+  constructor(private readonly hostIdentityStorePath = DEFAULT_EXECUTOR_IDENTITY_STORE_PATH) {
     super();
     this.identityStore = loadExecutorIdentityStore();
+  }
+
+  /** Trusted service bootstrap only. This is deliberately absent from the public
+   * executor registration payload: an executor cannot grant itself host authority.
+   * The owner supplies the protected existing AdmissionStore, never a project path. */
+  installHostAdmissionAuthority(executorId: string, version: string, store: AdmissionStore, workerWritableRoots: string[]): void {
+    const executor = this.executors.get(executorId);
+    const binding = store.read().hostBinding;
+    if (!executor || executor.version !== version || !executor.capabilities.includes('x-admission-policy-revision:1') || !binding) {
+      throw new Error('qualified executor and revision-aware host admission binding are required');
+    }
+    if (store instanceof FileAdmissionStore) store.protectHostAuthority(workerWritableRoots);
+    else if (!Array.isArray(workerWritableRoots)) throw new Error('worker writable roots are required');
+    const previous = this.admissionAuthorities.get(binding.authorityRef);
+    if (previous && (previous.executorId !== executorId || previous.store !== store || previous.version !== version)) throw new Error('host admission authority is already installed');
+    if (store instanceof FileAdmissionStore) {
+      mkdirSync(dirname(this.hostIdentityStorePath), { recursive: true, mode: 0o700 });
+      assertHostRegistrationPath(this.hostIdentityStorePath, workerWritableRoots);
+      const identities = loadExecutorIdentityStore(this.hostIdentityStorePath, true);
+      const identity = identities.get(executorId) ?? { executorId, lastSeenAt: new Date().toISOString() };
+      identities.set(executorId, { ...identity, token: executor.token, hostAdmission: { authorityRef: binding.authorityRef,
+        path: store.hostAuthorityPath(), version, workerWritableRoots: [...workerWritableRoots], revisionSupport: 1 } });
+      saveExecutorIdentityStore(identities, this.hostIdentityStorePath, true);
+    }
+    if (store.read().hostRegistrationRevoked) store.transact(snapshot => { snapshot.hostRegistrationRevoked = false; });
+    this.admissionAuthorities.set(binding.authorityRef, { executorId, version, store });
+  }
+
+  resolveHostAdmissionAuthority(authorityRef: string, projectPolicy: SharedHostPolicy): { store: AdmissionStore; policy: SharedHostPolicy } {
+    if (!this.admissionAuthorities.has(authorityRef) && existsSync(this.hostIdentityStorePath)) {
+      assertHostRegistrationPath(this.hostIdentityStorePath, []);
+      const identities = loadExecutorIdentityStore(this.hostIdentityStorePath, true);
+      for (const identity of identities.values()) {
+        const installed = identity.hostAdmission;
+        if (installed?.authorityRef !== authorityRef) continue;
+        if (installed.revisionSupport !== 1 || !Array.isArray(installed.workerWritableRoots)) throw new Error('host registration lacks policy revision support');
+        assertHostRegistrationPath(this.hostIdentityStorePath, installed.workerWritableRoots);
+        const store = new FileAdmissionStore(installed.path);
+        store.protectHostAuthority(installed.workerWritableRoots);
+        if (store.read().hostBinding?.authorityRef !== authorityRef) throw new Error('host registration authority reference mismatch');
+        this.admissionAuthorities.set(authorityRef, { executorId: identity.executorId, version: installed.version, store, restored: true });
+      }
+    }
+    const installed = this.admissionAuthorities.get(authorityRef);
+    if (installed?.store instanceof FileAdmissionStore) {
+      assertHostRegistrationPath(this.hostIdentityStorePath, []);
+      const current = loadExecutorIdentityStore(this.hostIdentityStorePath, true).get(installed.executorId)?.hostAdmission;
+      if (!current || current.authorityRef !== authorityRef || current.version !== installed.version
+        || current.path !== installed.store.hostAuthorityPath()) throw new Error('trusted host executor registration has been revoked or changed');
+    }
+    const executor = installed && this.executors.get(installed.executorId);
+    if (!installed || (!executor && !installed.restored) || (executor && (executor.version !== installed.version || !executor.capabilities.includes('x-admission-policy-revision:1')))) {
+      throw new Error('missing current revision-aware trusted host executor binding');
+    }
+    const snapshot = installed.store.read();
+    if (snapshot.hostRegistrationRevoked) throw new Error('trusted host executor registration is revoked');
+    const approved = snapshot.hostBinding?.projects[projectPolicy.managed!.projectId]?.policy;
+    // Compare complete approved input, including defaults, rather than trusting a
+    // caller's activation digest to cover its effective limits.
+    const normalize = (value: unknown): string => JSON.stringify(value, function (_key, node) {
+      return node && typeof node === 'object' && !Array.isArray(node)
+        ? Object.fromEntries(Object.keys(node).sort().filter(key => node[key] !== undefined).map(key => [key, node[key]])) : node;
+    });
+    if (snapshot.hostBinding?.authorityRef !== authorityRef || normalize(approved) !== normalize(projectPolicy)) throw new Error('project policy is not approved by the host authority');
+    return { store: installed.store, policy: hostProjectAdmissionPolicy(snapshot, projectPolicy.managed!.projectId) };
+  }
+
+  private revokeHostAdmissionAuthority(executorId: string): void {
+    const installed = [...this.admissionAuthorities.values()].filter(entry => entry.executorId === executorId);
+    const view = this.hostView();
+    if (!view.trusted && view.untrustedHostBound.has(executorId)) throw new Error('host registration store is not protected');
+    const stored = view.identities.get(executorId)?.hostAdmission;
+    if (stored && !installed.length) {
+      const store = new FileAdmissionStore(stored.path);
+      store.protectHostAuthority(stored.workerWritableRoots);
+      installed.push({ executorId, version: stored.version, store });
+    }
+    if (!installed.length) return;
+    // Fence first. A failed registration write can leave a discoverable binding,
+    // but cannot make an old scheduler's policy current again.
+    for (const entry of installed) entry.store.transact(snapshot => {
+      if (snapshot.hostBinding) { snapshot.hostBinding.revision++; snapshot.hostRegistrationRevoked = true; }
+    });
+    if (installed.some(entry => entry.store instanceof FileAdmissionStore)) {
+      assertHostRegistrationPath(this.hostIdentityStorePath, []);
+      const identities = loadExecutorIdentityStore(this.hostIdentityStorePath, true);
+      const identity = identities.get(executorId);
+      if (identity) { delete identity.hostAdmission; saveExecutorIdentityStore(identities, this.hostIdentityStorePath, true); }
+    }
+    for (const [ref, entry] of this.admissionAuthorities) if (entry.executorId === executorId) this.admissionAuthorities.delete(ref);
+  }
+
+  private loadHostIdentities(): Map<string, ExecutorIdentityRecord> {
+    if (!existsSync(this.hostIdentityStorePath)) return new Map();
+    assertHostRegistrationPath(this.hostIdentityStorePath, []);
+    return loadExecutorIdentityStore(this.hostIdentityStorePath, true);
+  }
+
+  /**
+   * Host view for ordinary registry operations. When the shared identity file is
+   * not a protected host store (e.g. a 0755 ~/.config/aiwg holding only ordinary
+   * executors), ordinary IDs keep working; IDs that claim host admission in it
+   * are reported as untrusted so callers fail closed for them only. Untrusted
+   * content is never used for tokens, paths or metadata.
+   */
+  private hostView(): { trusted: boolean; identities: Map<string, ExecutorIdentityRecord>; untrustedHostBound: Set<string> } {
+    try { return { trusted: true, identities: this.loadHostIdentities(), untrustedHostBound: new Set() }; } catch {
+      const untrustedHostBound = new Set<string>();
+      try {
+        const data = JSON.parse(readFileSync(this.hostIdentityStorePath, 'utf-8'));
+        if (Array.isArray(data)) for (const record of data) {
+          if (record && typeof record.executorId === 'string' && record.hostAdmission) untrustedHostBound.add(record.executorId);
+        }
+      } catch { untrustedHostBound.add('*'); }
+      return { trusted: false, identities: new Map(), untrustedHostBound };
+    }
+  }
+
+  private isUntrustedHostBound(view: { untrustedHostBound: Set<string> }, executorId: string): boolean {
+    return view.untrustedHostBound.has(executorId) || view.untrustedHostBound.has('*');
   }
 
   // ---- Registration ----
 
   /**
    * Register an executor. Validates payload against `register_payload` schema.
-   * Returns 400-level error string on invalid payload.
-   * On re-register with same executor_id: reclaims prior token (per ADR §9).
+   * Returns a 400 error on invalid payload or 401 for unauthorized re-registration.
+   * Every existing identity requires its current bearer token before any update.
+   * Authenticated re-registration preserves the prior token (per ADR §9; #3439).
    */
-  register(req: ExecutorRegisterRequest): ExecutorRegisterResponse | { error: string; status: 400 } {
+  register(req: ExecutorRegisterRequest, bearerToken = ''): ExecutorRegisterResponse | { error: string; status: 400 | 401 } {
     // Validate against JSON Schema
     const { valid, errors } = validateRegisterPayload(req);
     if (!valid) {
@@ -392,7 +556,24 @@ export class ExecutorRegistry extends EventEmitter {
     // Check for existing token in identity store (re-register reclaims it)
     const existing = this.executors.get(executorId);
     const storedIdentity = this.identityStore.get(executorId);
-    const token = existing?.token ?? storedIdentity?.token ?? issueToken();
+    const view = this.hostView();
+    const hostRecord = view.identities.get(executorId);
+    const hostAdmission = hostRecord?.hostAdmission;
+    const installedAuthority = [...this.admissionAuthorities.values()].find(binding => binding.executorId === executorId);
+    if (!view.trusted && (installedAuthority || this.isUntrustedHostBound(view, executorId))) return { error: 'Unauthorized', status: 401 };
+    // Host-bound IDs authenticate only against the live executor or the protected
+    // host record, never the environment/project-selectable identity store.
+    const priorToken = (hostAdmission || installedAuthority)
+      ? existing?.token ?? hostRecord?.token
+      : existing?.token ?? storedIdentity?.token;
+    if (((hostAdmission || installedAuthority) || priorToken !== undefined) && !executorTokensEqual(priorToken, bearerToken)) {
+      return { error: 'Unauthorized', status: 401 };
+    }
+    const token = priorToken ?? issueToken();
+    if ((hostAdmission && (hostAdmission.version !== req.version || !req.capabilities.includes('x-admission-policy-revision:1')))
+      || (installedAuthority && (installedAuthority.version !== req.version || !req.capabilities.includes('x-admission-policy-revision:1')))) {
+      this.revokeHostAdmissionAuthority(executorId);
+    }
 
     // Update or create in-memory registration
     if (existing) {
@@ -428,7 +609,24 @@ export class ExecutorRegistry extends EventEmitter {
       token,
       lastSeenAt: now,
     });
-    saveExecutorIdentityStore(this.identityStore);
+    const identityPath = resolveExecutorIdentityStorePath();
+    if (identityPath === this.hostIdentityStorePath) {
+      mkdirSync(dirname(this.hostIdentityStorePath), { recursive: true, mode: 0o700 });
+      const persisted = this.hostView();
+      if (persisted.trusted) {
+        const identities = persisted.identities;
+        for (const [id, identity] of this.identityStore) identities.set(id, { ...identities.get(id), ...identity });
+        try { saveExecutorIdentityStore(identities, this.hostIdentityStorePath, true); } catch (error) {
+          // A pre-existing non-private directory may still hold ordinary identities;
+          // only a store that carries host admission must be protected.
+          if ([...identities.values()].some(record => record.hostAdmission)) throw error;
+          saveExecutorIdentityStore(this.identityStore, identityPath);
+        }
+      } else if (!persisted.untrustedHostBound.size) {
+        // No host admission lives here: keep the legacy ordinary identity store.
+        saveExecutorIdentityStore(this.identityStore, identityPath);
+      } else throw new Error('host registration store is not protected');
+    } else saveExecutorIdentityStore(this.identityStore, identityPath);
 
     // Emit event (for dashboard SSE, etc.)
     this.emit('executor:registered', { executorId, name: req.name });
@@ -447,6 +645,7 @@ export class ExecutorRegistry extends EventEmitter {
   deregister(executorId: string, reason: 'graceful_shutdown' | 'operator_deleted' | 'timeout' = 'operator_deleted'): boolean {
     const executor = this.executors.get(executorId);
     if (!executor) return false;
+    this.revokeHostAdmissionAuthority(executorId);
 
     // Close WS if open
     if (executor.wsConn && executor.wsConn.readyState <= 1) {
@@ -463,10 +662,19 @@ export class ExecutorRegistry extends EventEmitter {
    */
   authenticate(executorId: string, token: string): boolean {
     const executor = this.executors.get(executorId);
-    if (executor) return executor.token === token;
+    if (executor) return executorTokensEqual(executor.token, token);
+    // A host-bound ID authenticates only against the protected host record,
+    // never the environment/project-selectable identity store (#2923 review).
+    const view = this.hostView();
+    if (!view.trusted && this.isUntrustedHostBound(view, executorId)) return false; // unverifiable host-bound id fails closed
+    if (!view.trusted && [...this.admissionAuthorities.values()].some(entry => entry.executorId === executorId)) return false;
+    const hostRecord = view.identities.get(executorId);
+    if (hostRecord?.hostAdmission || [...this.admissionAuthorities.values()].some(entry => entry.executorId === executorId)) {
+      return executorTokensEqual(hostRecord?.token, token);
+    }
     // Fall back to identity store for executors that registered in a prior server run
     const stored = this.identityStore.get(executorId);
-    return stored !== undefined && stored.token === token;
+    return executorTokensEqual(stored?.token, token);
   }
 
   /**
@@ -877,6 +1085,7 @@ export class ExecutorRegistry extends EventEmitter {
         try { executor.wsConn.close(1000, 'server shutdown'); } catch { /* ignore */ }
       }
     }
+    this.admissionAuthorities.clear();
     this.executors.clear();
     this.missions.clear();
     this.removeAllListeners();

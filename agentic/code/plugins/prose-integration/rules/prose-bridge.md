@@ -1,4 +1,15 @@
 ---
+activation: bound
+summary: "Use Prose only for suitable declarative contracts; map inputs and outputs explicitly, select a capable model, and preserve formal outputs in AIWG artifact paths."
+bound_to:
+  skills:
+    - forme-manifest
+    - prose-detect
+    - prose-install
+    - prose-reader
+    - prose-run
+    - prose-setup
+    - prose-validate
 enforcement: medium
 name: prose-bridge
 level: MEDIUM

@@ -30,6 +30,7 @@ import type {
   AiwgFortemiRelationship,
 } from '@fortemi/core';
 import type { Session, SessionEvent } from './contracts.js';
+import type { ResolvedSessionImage } from './image-blobs.js';
 
 /**
  * `record.v1`/`export.v1` forbid exactly the fields this mapping needs
@@ -119,9 +120,19 @@ export function sessionToAiwgFortemiRecord(
   };
 }
 
+/**
+ * Map one catalog event. `images` carries the event's image references
+ * resolved against the blob store when the caller can provide them
+ * (export build passes `repository.resolveEventImages`); omitted means
+ * "not resolved", never "no images" -- the placeholder text in `text` is
+ * always present regardless (#3265). Bytes are never embedded here, only
+ * the reference plus its availability, so a consumer knows whether the
+ * digest is fetchable from the catalog or gone.
+ */
 export function sessionEventToAiwgFortemiRecord(
   session: Pick<Session, 'provider' | 'sessionId'>,
   event: SessionEvent,
+  images: readonly ResolvedSessionImage[] = [],
 ): AiwgFortemiRecord {
   const locator = sessionEventRecordLocator(session, event);
   const parentLocator = sessionRecordLocator(session);
@@ -157,6 +168,16 @@ export function sessionEventToAiwgFortemiRecord(
       nativeId: event.nativeId,
       sequence: event.sequence,
       toolCallId: event.toolCallId,
+      ...(images.length > 0
+        ? {
+            images: images.map((image) => ({
+              digest: image.digest,
+              mediaType: image.mediaType,
+              byteLength: image.byteLength,
+              status: image.status,
+            })),
+          }
+        : {}),
     },
   }];
   const tags = [
@@ -164,6 +185,10 @@ export function sessionEventToAiwgFortemiRecord(
     ...(event.role ? [tag('role', event.role)] : []),
     ...(event.toolName ? [tag('tool', event.toolName)] : []),
     ...(event.entities ?? []).map((entity) => tag('entity', entity)),
+    ...images.map((image) => tag('image', image.digest)),
+    ...images
+      .filter((image) => image.status === 'unavailable')
+      .map((image) => tag('image-unavailable', image.digest)),
   ];
   return {
     schema_version: SESSION_EXPORT_RECORD_SCHEMA_VERSION,
@@ -345,13 +370,20 @@ export function buildSessionAiwgFortemiIndexExport(
   eventsBySessionId: ReadonlyMap<string, SessionEvent[]>,
   outputs: readonly SessionOutputRecordInput[] = [],
   catalogTagsBySessionId: ReadonlyMap<string, readonly string[]> = new Map(),
+  /**
+   * Resolve image references per event when the caller's catalog is at
+   * hand (`(event) => repository.resolveEventImages(event)`). Absent means
+   * references stay unresolved in the records, never that images are
+   * missing -- availability is only asserted when actually resolved (#3265).
+   */
+  imageResolution?: (event: SessionEvent) => readonly ResolvedSessionImage[],
 ): AiwgFortemiIndexExport {
   const generatedAt = new Date().toISOString();
   const items: AiwgFortemiRecord[] = [exportManifestRecord(repoRef, generatedAt)];
   for (const session of sessions) {
     items.push(sessionToAiwgFortemiRecord(session, catalogTagsBySessionId.get(session.sessionId) ?? []));
     for (const event of eventsBySessionId.get(session.sessionId) ?? []) {
-      items.push(sessionEventToAiwgFortemiRecord(session, event));
+      items.push(sessionEventToAiwgFortemiRecord(session, event, imageResolution?.(event) ?? []));
     }
     for (const output of outputs.filter((entry) => entry.sessionId === session.sessionId)) {
       items.push(sessionOutputToAiwgFortemiRecord(session, output));

@@ -15,12 +15,10 @@ import {
   sanitizeTag,
   sanitizeTags,
   checkPathAllowed,
-  buildAgentsMd,
   generate,
   buildNormalizedAiwgMd,
   renderEntry,
 } from '../../../src/smiths/context-pipeline/index.js';
-import type { ContextPipelineOptions } from '../../../src/smiths/context-pipeline/index.js';
 
 describe('sanitizeDescription', () => {
   it('accepts a plain ASCII description', async () => {
@@ -243,175 +241,6 @@ describe('renderEntry', () => {
   });
 });
 
-describe('buildAgentsMd', () => {
-  const baseOpts: ContextPipelineOptions = {
-    provider: 'codex',
-    projectPath: '/tmp/test-project',
-    sections: [
-      {
-        type: 'agents',
-        entries: [
-          {
-            id: 'api-designer',
-            description: 'Designs API contracts',
-            path: '.codex/agents/api-designer.md',
-          },
-        ],
-      },
-    ],
-  };
-
-  it('emits Framework Context section with AIWG.md link', async () => {
-    const { content } = await buildAgentsMd(baseOpts);
-    expect(content).toContain('## Framework Context');
-    expect(content).toContain('[AIWG.md](./AIWG.md)');
-  });
-
-  it('emits the AIWG signature comment', async () => {
-    const { content } = await buildAgentsMd(baseOpts);
-    expect(content).toContain('<!-- aiwg-managed -->');
-  });
-
-  it('does not inline a link-index of deployed artifacts (#1239)', async () => {
-    const { content, splitOccurred, spilloverContent } = await buildAgentsMd(baseOpts);
-    expect(content).not.toContain('Path: `.codex/agents/api-designer.md`');
-    expect(content).not.toContain('**api-designer**');
-    expect(content).not.toContain('.codex/agents/api-designer.md');
-    expect(splitOccurred).toBe(false);
-    expect(spilloverContent).toBe('');
-  });
-
-  it('emits a minimal canonical graph bootstrap instead of duplicating quickref detail', async () => {
-    const { content } = await buildAgentsMd(baseOpts);
-    expect(content.indexOf('WORKSPACE.md')).toBeLessThan(content.indexOf('AIWG.md'));
-    expect(content).not.toContain('## Tier 2 Capability Map');
-    expect(content).not.toContain('api-designer');
-  });
-
-  it('keeps the startup adapter constant-size for a large deployed corpus', async () => {
-    const huge: ContextPipelineOptions = {
-      ...baseOpts,
-      sections: [
-        {
-          type: 'agents',
-          entries: Array.from({ length: 500 }, (_, i) => ({
-            id: `agent-${i}`,
-            description: `Agent number ${i} with some descriptive text`,
-            path: `.codex/agents/agent-${i}.md`,
-          })),
-        },
-        {
-          type: 'skills',
-          entries: Array.from({ length: 500 }, (_, i) => ({
-            id: `skill-${i}`,
-            description: `Skill number ${i} with some descriptive text`,
-            path: `.codex/skills/skill-${i}/SKILL.md`,
-          })),
-        },
-      ],
-    };
-    const { content } = await buildAgentsMd(huge);
-    expect(content).not.toContain('agent-0');
-    expect(content).not.toContain('skill-0');
-    expect(content).not.toContain('agent-499');
-    expect(content).not.toContain('skill-499');
-    expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(2 * 1024);
-  });
-
-  it('does not inspect or inline deployed artifact IDs', async () => {
-    const opts: ContextPipelineOptions = {
-      ...baseOpts,
-      sections: [
-        {
-          type: 'agents',
-          entries: [
-            {
-              id: 'bad`id',
-              description: 'Plain description',
-              path: '.codex/agents/bad-id.md',
-            },
-          ],
-        },
-      ],
-    };
-    const { content } = await buildAgentsMd(opts);
-    expect(content).not.toContain('bad`id');
-  });
-
-  it('points readers at aiwg discover / aiwg show', async () => {
-    const { content } = await buildAgentsMd(baseOpts);
-    expect(content).toContain('aiwg discover');
-    expect(content).toContain('aiwg show');
-    expect(content).not.toContain('## Context Finalization');
-  });
-
-  it('stays well under the 30KB soft threshold', async () => {
-    const huge: ContextPipelineOptions = {
-      ...baseOpts,
-      sections: [
-        {
-          type: 'agents',
-          entries: Array.from({ length: 500 }, (_, i) => ({
-            id: `agent-${i}`,
-            description: `Agent number ${i} with some descriptive text`,
-            path: `.codex/agents/agent-${i}.md`,
-          })),
-        },
-      ],
-    };
-    const { content } = await buildAgentsMd(huge);
-    expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(2 * 1024);
-  });
-
-  it('routes project context to WORKSPACE.md instead of inlining it', async () => {
-    const opts: ContextPipelineOptions = {
-      ...baseOpts,
-      projectContext: 'A short project description.',
-    };
-    const { content, warnings } = await buildAgentsMd(opts);
-    expect(content).not.toContain('A short project description.');
-    expect(warnings.some((warning) => warning.includes('WORKSPACE.md'))).toBe(true);
-  });
-
-  it('routes even legacy projectContext input to WORKSPACE.md', async () => {
-    const opts: ContextPipelineOptions = {
-      ...baseOpts,
-      projectContext: 'Has `backticks` everywhere',
-    };
-    const { content, warnings } = await buildAgentsMd(opts);
-    expect(content).not.toContain('## Project Context');
-    expect(warnings.some((w) => w.includes('WORKSPACE.md'))).toBe(true);
-  });
-
-  it('emits the AGENTS.override.md trailer', async () => {
-    const { content } = await buildAgentsMd(baseOpts);
-    expect(content).toContain('AGENTS.override.md');
-  });
-
-  it('emits no warnings for a deploy with backtick-bearing artifact descriptions (#1239)', async () => {
-    // Pre-#1239 the link-index ran every description through the sanitizer
-    // and rejected backtick-bearing entries with a warning. The thin-pointer
-    // body never sees `opts.sections`, so those warnings stop firing.
-    const opts: ContextPipelineOptions = {
-      ...baseOpts,
-      sections: [
-        {
-          type: 'agents',
-          entries: [
-            {
-              id: 'aiwg-finder',
-              description: 'Runs the `aiwg discover` + `aiwg show` pipeline',
-              path: '.codex/agents/aiwg-finder.md',
-            },
-          ],
-        },
-      ],
-    };
-    const { warnings } = await buildAgentsMd(opts);
-    expect(warnings).toEqual([]);
-  });
-});
-
 describe('context finalization emission', () => {
   function makeTmpDir(): string {
     const dir = join(tmpdir(), `aiwg-context-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
@@ -419,13 +248,13 @@ describe('context finalization emission', () => {
     return dir;
   }
 
-  it('builds normalized .aiwg/AIWG.md without erasing operator-authored content', async () => {
+  it('builds canonical root AIWG.md without erasing operator-authored content', async () => {
     const content = await buildNormalizedAiwgMd('/tmp/test-project', '# Local AIWG Notes\n\nOperator note.\n');
 
     expect(content).toContain('Operator note.');
     expect(content).toContain('<!-- aiwg-managed -->');
     expect(content).toContain('## Context Finalization');
-    expect(content).toContain('`.aiwg/AIWG.md` is the normalized project-local context entry point.');
+    expect(content).toContain('Root `AIWG.md` is the single generated framework context');
   });
 
   it('refreshes the managed finalization block idempotently', async () => {
@@ -438,7 +267,7 @@ describe('context finalization emission', () => {
     expect(second.match(/## Context Finalization/g)).toHaveLength(1);
   });
 
-  it('emits root, normalized, and provider twin context files with discover-first guidance', async () => {
+  it('emits one root context and provider twin context files with discovery authority pointers', async () => {
     const dir = makeTmpDir();
     try {
       mkdirSync(join(dir, '.aiwg'), { recursive: true });
@@ -477,18 +306,16 @@ describe('context finalization emission', () => {
 
       expect(result.aiwgMdPath).toBe(join(dir, 'AIWG.md'));
       expect(result.agentsMdPath).toBe(join(dir, 'AGENTS.md'));
-      expect(result.normalizedAiwgMdPath).toBe(join(dir, '.aiwg', 'AIWG.md'));
+      expect(result.normalizedAiwgMdPath).toBe(result.aiwgMdPath);
+      expect(existsSync(join(dir, '.aiwg', 'AIWG.md'))).toBe(false);
       expect(result.twinPaths).toContain(join(dir, '.github', 'copilot-instructions.md'));
 
-      for (const file of [result.aiwgMdPath, result.normalizedAiwgMdPath]) {
+      for (const file of [result.aiwgMdPath]) {
         const content = readFileSync(file, 'utf8');
-        expect(content).toContain('aiwg discover');
+        expect(content).toContain('aiwg show rule skill-discovery');
         expect(content).toContain('aiwg show');
-        expect(content).toContain('decline-without-search');
-        // #1542: directive classification + act-don't-ask + command discovery hint
-        expect(content).toContain('new directive');
-        expect(content).toContain('address-issues');
-        expect(content).toContain('show command');
+        expect(content).not.toContain('Classify every user turn FIRST');
+        expect(content).toContain('aiwg show skill aiwg-utils-quickref');
         expect(content).toContain('.aiwg/aiwg.config');
         expect(content).toContain('Tracker Authority Protocol');
         expect(content).toContain('Internal/canonical tracker: `origin` (gitea;');
@@ -498,7 +325,6 @@ describe('context finalization emission', () => {
       }
       const sourceLinks = [
         [result.aiwgMdPath, './.aiwg/aiwg.config'],
-        [result.normalizedAiwgMdPath, './aiwg.config'],
       ] as const;
       for (const [file, href] of sourceLinks) {
         const content = readFileSync(file, 'utf8');
@@ -508,8 +334,8 @@ describe('context finalization emission', () => {
       for (const file of [result.agentsMdPath, ...result.twinPaths]) {
         const content = readFileSync(file, 'utf8');
         expect(content.indexOf('WORKSPACE.md')).toBeLessThan(content.indexOf('AIWG.md'));
-        expect(content).toContain('aiwg discover');
-        expect(content).toContain('.aiwg/aiwg.config');
+        expect(content).toContain('AIWG.md');
+        expect(content).toContain('AIWG rules deployed to this project are binding');
         expect(content).not.toContain('Tracker Authority Protocol');
       }
     } finally {
@@ -561,7 +387,7 @@ describe('context finalization emission', () => {
       await generate({ provider: 'codex', projectPath: dir, sections: [], detectExistingFiles: true });
 
       expect(readFileSync(overridePath, 'utf8')).toBe('# AGENTS.override.md\n\nOperator tracker notes stay here.\n');
-      const normalized = readFileSync(join(dir, '.aiwg', 'AIWG.md'), 'utf8');
+      const normalized = readFileSync(join(dir, 'AIWG.md'), 'utf8');
       expect(normalized).toContain('Tracker Authority Protocol');
       expect(normalized).toContain('Internal/canonical tracker: `github` (github;');
       expect(normalized).toContain('Issue storage mode: github-only');

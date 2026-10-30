@@ -1,6 +1,48 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
+// Like worker dispatch, helper processes receive only explicitly named state.
+// Keep provider credentials, NODE_OPTIONS and unrelated shell variables out of
+// process launch diagnostics as well as the child's own environment.
+export const HELPER_ENV_ALLOWLIST = Object.freeze([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+  'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM',
+  // Platform and network plumbing a child may need to reach anything at all
+  // (corporate proxies and CA bundles, Windows per-user data, git global config).
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM',
+]);
+
+export const DESKTOP_HELPER_ENV_ALLOWLIST = Object.freeze([
+  'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR',
+  'DBUS_SESSION_BUS_ADDRESS', 'XDG_CURRENT_DESKTOP',
+]);
+
+// Deployment helpers read project/configuration locations and policy switches;
+// none consumes provider authentication or the caller's complete shell state.
+export const DEPLOYMENT_HELPER_ENV_ALLOWLIST = Object.freeze([
+  ...HELPER_ENV_ALLOWLIST, 'AIWG_ROOT', 'AIWG_HOME', 'AIWG_CONFIG', 'AIWG_PROJECT_DIR',
+  'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LOCALAPPDATA',
+  'AIWG_ARTIFACTS_PATH', 'AIWG_PROJECT_ARTIFACTS_PATH', 'AIWG_PROJECT_AIWG_DIR',
+  'AIWG_PROJECT_MEMORY_HOME', 'AIWG_USER_REGISTRY_PATH', 'AIWG_RULE_BINDING_INDEX_CACHE',
+  'AIWG_DEPLOY_SUBPROCESS', 'AIWG_REPORT_DEPLOY_COLLISIONS', 'CODEX_HOME', 'HERMES_HOME',
+  'OPENCLAW_PROFILE', 'OMP_PROFILE', 'PI_PROFILE', 'PI_CONFIG_DIR', 'PI_CODING_AGENT_DIR',
+  'AIWG_RESOLVE_IMPL_FROM', 'NODE_ENV', 'VITEST', 'NO_UPDATE_NOTIFIER', 'NO_COLOR', 'CI',
+]);
+
+/** Copy only the helper's declared variable names; never merge the parent. */
+export function helperEnvironment(source = process.env, names = HELPER_ENV_ALLOWLIST) {
+  const environment = {};
+  for (const name of names) {
+    const value = source?.[name];
+    if (typeof value === 'string' && !value.includes('\0')) environment[name] = value;
+  }
+  return environment;
+}
+
 // Share PATH/PATHEXT lookup with callers that can launch arbitrary batch files.
 function* executableCandidates(command, searchPath, pathExt, preferNative = false, cwd = process.cwd()) {
   const candidates = path.isAbsolute(command)

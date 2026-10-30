@@ -78,7 +78,7 @@ export async function buildInventory() {
   const entries = [];
   for (const file of trackedFiles()) {
     const text = await readFile(path.join(root, file), 'utf8');
-    if (marker.test(text) || requiredSurfaces.has(file)) entries.push(classify(file, text));
+    if (file.startsWith('src/mission-protocol/') || file.startsWith('test/conformance/mission-v1/') || marker.test(text) || requiredSurfaces.has(file)) entries.push(classify(file, text));
   }
   return { schemaVersion: 'mission-inventory.aiwg.io/v1', generatedBy: 'tools/mission-protocol/inventory.mjs', entries };
 }

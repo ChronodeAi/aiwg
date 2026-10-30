@@ -1,5 +1,15 @@
 ---
 enforcement: high
+activation: "bound"
+summary: "Give feedback with an exact location, concrete change, rationale, severity and score; align the verdict with findings and track improvement."
+bound_to:
+  agents: ["code-reviewer", "documentation-synthesizer", "quality-assessor", "requirements-reviewer", "security-auditor", "test-engineer"]
+  skills: ["agent-loop", "artifact-orchestration", "execute-feedback", "flow-architecture-evolution", "flow-guided-implementation", "flow-requirements-evolution", "pr-review", "ralph", "ralph-external"]
+  flows: ["flow-architecture-evolution", "flow-guided-implementation", "flow-requirements-evolution"]
+triggers:
+  - "how to give actionable review feedback"
+  - "feedback needs a location and rationale"
+  - "score refinement feedback"
 ---
 
 # Actionable Feedback Rules

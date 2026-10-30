@@ -1,5 +1,7 @@
 # Agent Loop
 
+Evidence status: design intent.
+
 Classify work with the [autonomy and human operating roles framework](../../../../docs/autonomy-and-human-roles.md). A loop cannot override human-owned actions, checkpoints, or failed verification.
 
 Iterative AI task execution with automatic recovery - **iteration beats perfection**.
@@ -144,10 +146,10 @@ Al stores state in `.aiwg/ralph/`:
 ## Examples
 
 See `docs/examples/` for detailed walkthroughs:
-- [Test Fixes](docs/examples/test-fix.md)
+- [Test Fixes](docs/examples/test-fix-loop.md)
 - [Migrations](docs/examples/migration.md)
 - [Coverage](docs/examples/coverage.md)
-- [Greenfield](docs/examples/greenfield.md)
+- Greenfield
 
 ## Philosophy
 

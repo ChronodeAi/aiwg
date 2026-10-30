@@ -18,6 +18,7 @@ const { signalChild } = await importImpl(import.meta.url, 'process/signal-child.
  * @property {string} [agentCommand='claude'] - Command to spawn for AI processing
  * @property {string[]} [agentArgs=[]] - Additional args for the agent command
  * @property {string} [cwd] - Working directory for spawned processes
+ * @property {Object} [environment] - Recipient-filtered worker environment
  * @property {number} [maxContextMessages=10] - Max messages to include as context
  * @property {number} [timeoutMs=120000] - Timeout for AI response (2 minutes)
  * @property {number} [maxConcurrent=3] - Max concurrent AI processes
@@ -33,6 +34,7 @@ export class ChatHandler {
 
   /** @type {string} */
   #cwd;
+  #environment;
 
   /** @type {number} */
   #maxContextMessages;
@@ -62,6 +64,7 @@ export class ChatHandler {
     this.#agentCommand = options.agentCommand || 'claude';
     this.#agentArgs = options.agentArgs || [];
     this.#cwd = options.cwd || process.cwd();
+    this.#environment = options.environment;
     this.#maxContextMessages = options.maxContextMessages || 10;
     this.#timeoutMs = options.timeoutMs || 120_000;
     this.#maxConcurrent = options.maxConcurrent || 3;
@@ -241,7 +244,7 @@ export class ChatHandler {
       const proc = spawn(this.#agentCommand, args, {
         cwd: this.#cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: { ...(this.#environment ?? process.env) },
       });
 
       const timeout = setTimeout(() => {

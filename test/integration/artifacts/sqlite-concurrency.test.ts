@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SqliteGraphBackend } from '../../../src/artifacts/backends/sqlite-backend.js';
 import { describeWithSqlite } from '../../helpers/sqlite.js';
@@ -26,6 +28,7 @@ function waitForLocker(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
       child.stderr?.off('data', onDiagnostic);
       child.off('error', onError);
       child.off('close', onClose);
+      child.off('exit', onClose);
       if (error) reject(error); else resolve();
     };
     const onData = (chunk: Buffer) => {
@@ -38,14 +41,26 @@ function waitForLocker(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
     };
     const onDiagnostic = (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString('utf8')).slice(-2_048); };
     const onError = (error: Error) => finish(new Error(`Locker spawn failed: ${error.message}`));
+    let exited = false;
     const onClose = (code: number | null, signal: string | null) => {
-      finish(new Error(`Locker closed before readiness (code=${code}, signal=${signal}): ${diagnostic}`));
+      if (exited) return;
+      exited = true;
+      const report = () => finish(new Error(`Locker closed before readiness (code=${code}, signal=${signal}): ${diagnostic}`));
+      // 'exit' can fire before stderr is drained. Wait for stderr to end, bounded,
+      // since inherited stdio can stay open after the locker exits.
+      const stderr = child.stderr;
+      if (!stderr || stderr.readableEnded || stderr.destroyed) { report(); return; }
+      const drained = setTimeout(done, 250);
+      function done() { clearTimeout(drained); stderr!.off('end', done); stderr!.off('close', done); report(); }
+      stderr.once('end', done);
+      stderr.once('close', done);
     };
     const timer = setTimeout(() => finish(new Error(`Locker readiness timed out: ${diagnostic}`)), timeoutMs);
     child.stdout?.on('data', onData);
     child.stderr?.on('data', onDiagnostic);
     child.on('error', onError);
     child.on('close', onClose);
+    child.on('exit', onClose);
     if (child.exitCode !== null || child.signalCode !== null) onClose(child.exitCode, child.signalCode);
   });
 }
@@ -141,7 +156,7 @@ describeWithSqlite('SQLite same-host concurrency and crash recovery (#2189)', ()
       '--eval', worker,
       dbPath,
       workerId,
-    ]);
+    ], { timeout: 20_000 });
 
     await Promise.all(['a', 'b', 'c', 'crash'].map(run));
 
@@ -158,7 +173,7 @@ describeWithSqlite('SQLite same-host concurrency and crash recovery (#2189)', ()
   }, 30_000);
 });
 
-describeWithSqlite('SQLite locker readiness protocol', () => {
+describe('SQLite locker readiness protocol', () => {
   it.each([
     ['early exit', 'process.stderr.write("synthetic startup failure"); process.exit(7)', /code=7.*synthetic startup failure/],
     ['wrong marker', 'process.stdout.write("not-locked\\n"); setInterval(() => {}, 1000)', /unexpected readiness marker/],
@@ -172,6 +187,47 @@ describeWithSqlite('SQLite locker readiness protocol', () => {
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
     expect(child.stdout?.listenerCount('data')).toBe(0);
     expect(child.stderr?.listenerCount('data')).toBe(0);
+    expect(child.listenerCount('error')).toBe(0);
+    expect(child.listenerCount('close')).toBe(0);
+    expect(child.listenerCount('exit')).toBe(0);
+  });
+
+  it('reports exit before readiness even while inherited stdio remains open', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null,
+    }) as unknown as ChildProcess;
+    const ready = waitForLocker(child, 1_000);
+    child.stderr!.emit('data', Buffer.from('synthetic early exit'));
+    child.emit('exit', 7, null);
+    await expect(ready).rejects.toThrow(/code=7.*synthetic early exit/);
+    for (const event of ['error', 'exit', 'close']) expect(child.listenerCount(event)).toBe(0);
+    expect(child.stdout?.listenerCount('data')).toBe(0);
+    expect(child.stderr?.listenerCount('data')).toBe(0);
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  });
+
+  it('keeps stderr that arrives after the exit event (exit can precede stdio drain)', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null,
+    }) as unknown as ChildProcess;
+    const ready = waitForLocker(child, 1_000);
+    child.emit('exit', 9, null);
+    child.stderr!.write('late-useful-tail');
+    child.stderr!.end();
+    await expect(ready).rejects.toThrow(/code=9.*late-useful-tail/);
+    child.stdout?.destroy();
+  });
+
+  it('retains only a bounded stderr tail when startup fails', async () => {
+    const child = spawn(process.execPath, ['--eval', 'process.stderr.write("discard-prefix" + "x".repeat(6000) + "useful-tail"); process.exitCode = 9'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let failure: Error | undefined;
+    try { await waitForLocker(child); }
+    catch (error) { failure = error as Error; }
+    finally { await stopLocker(child); }
+    expect(failure?.message).toMatch(/code=9.*useful-tail/);
+    expect(failure?.message).not.toContain('discard-prefix');
+    expect(failure!.message.length).toBeLessThan(2_200);
   });
 
   it('accumulates a split marker before accepting readiness', async () => {
@@ -188,6 +244,9 @@ describeWithSqlite('SQLite locker readiness protocol', () => {
     const child = spawn(join(root, 'missing-executable'), [], { stdio: ['ignore', 'pipe', 'pipe'] });
     try { await expect(waitForLocker(child)).rejects.toThrow(/Locker spawn failed:.*ENOENT/); }
     finally { await stopLocker(child); }
+    for (const event of ['error', 'exit', 'close']) expect(child.listenerCount(event)).toBe(0);
+    expect(child.stdout?.listenerCount('data')).toBe(0);
+    expect(child.stderr?.listenerCount('data')).toBe(0);
   });
 
   it('escalates cleanup when a ready child ignores SIGTERM', async () => {

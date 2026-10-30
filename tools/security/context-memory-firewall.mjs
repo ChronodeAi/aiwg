@@ -6,6 +6,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { assessThreat } from './threat-assessment.mjs';
+import { PROVIDERS, SUPPORTED_PROVIDERS } from './context-memory-providers.mjs';
+import { importImpl } from '../_resolve-impl.mjs';
+const { classifyContextMemory } = await importImpl(import.meta.url, 'memory/firewall-classification.mjs');
 
 export const CONTEXT_FIREWALL_SCHEMA = 'aiwg.context-memory-firewall/v1';
 export const CONTEXT_FIREWALL_BASELINE_SCHEMA = 'aiwg.context-memory-firewall-baseline/v1';
@@ -31,79 +34,7 @@ export const TRUST_LABELS = Object.freeze([
   'superseded',
 ]);
 
-const PROVIDERS = Object.freeze({
-  claude: {
-    agents: '.claude/agents', rules: '.claude/rules',
-    skills: ['.claude/skills', '.claude/.aiwg/skills'],
-    memory: ['CLAUDE.md'],
-  },
-  codex: {
-    agents: '.codex/agents', rules: '.codex/rules',
-    skills: ['.agents/skills', '.codex/.aiwg/skills'],
-    bridges: ['AGENTS.md'],
-  },
-  copilot: {
-    agents: '.github/agents', rules: '.github/instructions',
-    skills: ['.github/skills', '.github/.aiwg/skills'],
-    bridges: ['.github/copilot-instructions.md'],
-  },
-  cursor: {
-    agents: '.cursor/agents', rules: '.cursor/rules',
-    skills: ['.cursor/skills', '.cursor/.aiwg/skills'],
-  },
-  factory: {
-    agents: '.factory/droids', rules: '.factory/rules',
-    skills: ['.factory/skills', '.factory/.aiwg/skills'],
-  },
-  opencode: {
-    agents: '.opencode/agent', rules: '.opencode/rule',
-    skills: ['.opencode/skill', '.opencode/.aiwg/skill'],
-  },
-  warp: {
-    agents: '.warp/agents', rules: '.warp/rules',
-    skills: ['.warp/skills', '.warp/.aiwg/skills'],
-    bridges: ['WARP.md'],
-  },
-  windsurf: {
-    agents: '.windsurf/agents', rules: '.windsurf/rules',
-    skills: ['.windsurf/skills', '.windsurf/.aiwg/skills'],
-    bridges: ['AGENTS.md'],
-  },
-  hermes: {
-    bridges: ['.hermes.md'],
-  },
-  openhuman: {
-    agents: '.agents/agents', rules: '.agents/rules', skills: ['.agents/skills'],
-    bridges: ['AGENTS.md'],
-  },
-  // Bridge-only: never invent ~/.grokbot or skill trees. Shared AIWG.md /
-  // WORKSPACE.md are scanned via SHARED_CONTEXT.
-  grokbot: {
-    bridges: ['AGENTS.md'],
-  },
-  // Grok Build: project skills/agents under .grok/; rules stay indexed and
-  // are loaded natively (.grok/rules), so there is no AIWG-managed rules
-  // root to scan here.
-  'grok-build': {
-    agents: '.grok/agents',
-    skills: ['.grok/skills'],
-    bridges: ['AGENTS.md'],
-  },
-  // Muse Code: discover-first AGENTS.md bridge + project skill root. Never
-  // invent ~/.muse or ~/.agents/skills. .muse/ holds hooks that run outside
-  // Muse's sandbox, so it is audited via hook ownership, not session context.
-  muse: {
-    skills: ['.agents/skills'],
-    bridges: ['AGENTS.md'],
-  },
-});
-
-// Every provider this scanner can resolve a layout for. Callers that filter
-// a `providers` list before invoking `scanContextMemoryFirewall` (doctor.mjs
-// in particular, #2640) should check membership against this instead of
-// hand-maintaining a parallel literal list — a provider added here is
-// otherwise easy to add to one list and forget the other.
-export const SUPPORTED_PROVIDERS = Object.freeze(Object.keys(PROVIDERS));
+export { PROVIDERS, SUPPORTED_PROVIDERS };
 
 const SHARED_CONTEXT = Object.freeze([
   { path: 'AIWG.md', category: 'memory' },
@@ -299,7 +230,7 @@ async function collectCandidates(rootDir, providers, baselinePath) {
 
   for (const providerName of providers) {
     const provider = PROVIDERS[providerName];
-    if (!provider) throw new Error(`Unknown provider '${providerName}'`);
+    if (!Object.hasOwn(PROVIDERS, providerName)) continue;
     for (const relative of provider.memory ?? []) {
       const absolute = path.join(rootDir, relative);
       if (await exists(absolute)) add(absolute, 'memory', providerName);
@@ -420,39 +351,13 @@ async function inspectCandidate(candidate, context) {
   const managed = await isManaged(candidate, buffer, manifest);
   const packaged = choosePackagedSource(candidate, packageInventory);
   const packagedDigestMatch = Boolean(packaged?.digest && packaged.digest === digest);
-  const manifestDrift = Boolean(manifest?.hash && manifest.hash !== digest);
-  const baselineChanged = Boolean(baselineEntry?.digest && baselineEntry.digest !== digest);
   const threat = contentScan
     ? poisoningSummary(content, candidate, managed)
     : { poisoning: false, signals: [], severity: 'informational', action: 'proceed' };
 
-  let trust;
-  let reviewStatus;
-  const findings = [];
-  if (baselineEntry?.trust === 'superseded') {
-    trust = 'superseded';
-    reviewStatus = 'superseded';
-  } else if (threat.poisoning && !managed) {
-    trust = 'quarantined';
-    reviewStatus = 'quarantine-review-required';
-    findings.push('poisoning-signal');
-  } else if (manifestDrift) {
-    trust = 'stale';
-    reviewStatus = 'deployed-drift';
-    findings.push('stale-deployed-bytes');
-  } else if (baselineChanged) {
-    trust = 'quarantined';
-    reviewStatus = 'changed-review-required';
-    findings.push('changed-since-review');
-  } else if (baselineEntry?.trust && TRUST_LABELS.includes(baselineEntry.trust)) {
-    trust = baselineEntry.trust;
-    reviewStatus = 'reviewed';
-  } else {
-    trust = managed ? 'generated' : 'user-authored';
-    reviewStatus = 'unreviewed';
-  }
-
-  if (threat.signals.length > 0 && (!threat.poisoning || managed)) findings.push('content-review-signal');
+  const { trust, reviewStatus, findings, manifestDrift } = classifyContextMemory({
+    digest, managed, manifest, baselineEntry, threat,
+  });
 
   return {
     path: candidate.path,
@@ -527,9 +432,8 @@ export async function scanContextMemoryFirewall(options = {}) {
   const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const contentScan = options.contentScan !== false;
 
-  for (const provider of providers) {
-    if (!PROVIDERS[provider]) throw new Error(`Unknown provider '${provider}'`);
-  }
+  const unsupported = providers.filter(provider => !SUPPORTED_PROVIDERS.includes(provider));
+  providers = providers.filter(provider => SUPPORTED_PROVIDERS.includes(provider));
   if (!Number.isFinite(budgetTokens) || budgetTokens <= 0) throw new Error('budgetTokens must be a positive number');
   if (!Number.isFinite(warnRatio) || warnRatio <= 0 || warnRatio >= 1) throw new Error('warnRatio must be between 0 and 1');
 
@@ -553,7 +457,9 @@ export async function scanContextMemoryFirewall(options = {}) {
       violations.push({ code: record.findings[0] ?? `${record.trust}-context`, paths: [record.path] });
     }
   }
-  const warnings = [];
+  const warnings = unsupported.map(provider => ({ code: 'provider-not-supported', paths: [],
+    message: `${provider}: not yet supported; skipped`,
+  }));
   if (!baseline.exists) warnings.push({ code: 'review-baseline-missing', paths: [baseline.path] });
   if (totalTokens > warnTokens && totalTokens <= budgetTokens) warnings.push({ code: 'context-budget-tight', paths: [] });
   for (const record of records) {
@@ -612,6 +518,9 @@ export function formatContextMemoryFirewall(result, options = {}) {
     for (const violation of result.violations.slice(0, limit)) {
       lines.push(`  - ${violation.code}${violation.paths.length ? `: ${violation.paths.join(', ')}` : ''}`);
     }
+  }
+  for (const warning of result.warnings) {
+    if (warning.code === 'provider-not-supported') lines.push(`Provider ${warning.message}`);
   }
   if (!result.baseline.exists) {
     lines.push('', 'After reviewing every listed file, create a baseline with:');

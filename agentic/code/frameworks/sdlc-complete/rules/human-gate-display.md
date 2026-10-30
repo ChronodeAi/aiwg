@@ -1,5 +1,15 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Display gate identity, context, deliverables and next steps; offer approve, reject, view, diff, edit, skip and quit, and log decisions with artifact review history."
+bound_to:
+  agents: ["deployment-manager", "executive-orchestrator", "quality-assessor", "security-gatekeeper"]
+  skills: ["artifact-orchestration", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-deploy-to-production", "flow-elaboration-to-construction", "flow-gate-check", "flow-inception-to-elaboration", "gate-evaluation", "orchestrate-project", "ralph", "ralph-external", "security-gate"]
+  flows: ["flow-agentloop-lfd-controls", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-deploy-to-production", "flow-elaboration-to-construction", "flow-gate-check", "flow-inception-to-elaboration"]
+triggers:
+  - "display human approval gate options"
+  - "show gate deliverables and next steps"
+  - "log human gate decisions"
 ---
 
 # Human Gate Display Rules

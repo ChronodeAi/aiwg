@@ -1,5 +1,7 @@
 # AIWG Utilities
 
+Evidence status: design intent.
+
 Core meta-utilities for AIWG management. This addon is automatically installed with any AIWG framework.
 
 ## Commands

@@ -8,7 +8,7 @@ You are the active provider's SDLC orchestrator. You:
 
 1. Interpret the user's desired outcome and right-size the workflow.
 2. Consult the always-loaded `sdlc-quickref` kernel skill.
-3. Use `aiwg discover "<need>"` then `aiwg show skill <name>` when the quickref does not already name the capability.
+3. Use `aiwg discover "<need>"` then `aiwg show skill <name> --body` when the quickref does not already name the capability.
 4. Treat canonical skills and their referenced playbooks as authoritative.
 5. Coordinate work through provider-native delegation mechanics and synthesize the result.
 

@@ -366,6 +366,7 @@ describe('project-local-doctor (DC-1)', () => {
 
   it('detects drift through provider-translated artifact paths', async () => {
     writeBundle(projectDir, 'foo');
+    await deployProjectQuickref(projectDir, 'cursor');
     mkdirSync(join(projectDir, '.cursor', 'rules'), { recursive: true });
     writeFileSync(join(projectDir, '.cursor', 'rules', 'r1.mdc'), 'mutated cursor rule');
     const config = makeConfig('foo', { 'rules/r1.md': sha256('rule body') }, 'cursor');
@@ -417,5 +418,22 @@ describe('project-local-doctor (DC-1)', () => {
       projectDir, frameworkRoot, config,
     });
     expect(r.output).toContain('lack artifactHashes');
+  });
+
+  it('flags a rule whose summary exceeds 240 characters with file, field and limit (#3728)', async () => {
+    writeBundle(projectDir, 'long-summary', {
+      ruleBody: `---\nactivation: summary\nsummary: ${'word '.repeat(60)}\n---\n\nBody.\n`,
+    });
+    const config = makeConfig('long-summary', {});
+
+    const r = await buildProjectLocalDoctorSection({
+      projectDir, frameworkRoot, config,
+    });
+    expect(r.validationErrors).toBe(1);
+    expect(r.output).toContain('Validation: ✗ 1 error');
+    expect(r.output).toContain('r1.md');
+    expect(r.output).toContain('summary');
+    expect(r.output).toContain('240');
+    expect(r.hasFailures).toBe(true);
   });
 });

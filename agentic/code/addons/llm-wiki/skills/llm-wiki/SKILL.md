@@ -48,9 +48,9 @@ before activation. Do not invent profile names.
 After activation:
 
 1. Use `aiwg discover "ingest source into knowledge base"` and then
-   `aiwg show skill kb-ingest` to add source material.
+   `aiwg show skill kb-ingest --body` to add source material.
 2. Use `aiwg discover "knowledge base health"` and then
-   `aiwg show skill kb-health` to check links, schema conformance, and orphans.
+   `aiwg show skill kb-health --body` to check links, schema conformance, and orphans.
 3. Use the semantic-memory drivers (`memory-ingest`, `memory-lint`,
    `memory-query-capture`, and memory log operations) for storage primitives.
 

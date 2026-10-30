@@ -54,6 +54,7 @@ export function success(msg: string): void {
 }
 
 export function error(msg: string): void {
+  msg = msg.trimStart();
   console.error(isTTY ? chalk.red(`  ✗ ${msg}`) : `  ERROR ${msg}`);
 }
 

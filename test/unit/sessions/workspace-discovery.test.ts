@@ -26,6 +26,7 @@ import { claudeProjectKey } from '../../../src/sessions/workspace-discovery.js';
 import { resolveImportLimits } from '../../../src/sessions/import-limits.js';
 import * as readers from '../../../src/sessions/readers.js';
 import { IncrementalSessionImporter } from '../../../src/sessions/importer.js';
+import { refreshSessionCatalog } from '../../../src/sessions/refresh.js';
 
 const roots: string[] = [];
 
@@ -36,6 +37,116 @@ afterEach(async () => {
 });
 
 describe('workspace session discovery and batch import', () => {
+  it('maps Claude subfolder and worktree project keys through nearest workspace ownership', async () => {
+    const fixture = await providerFixture();
+    const subfolder = join(fixture.workspace, 'subfolder');
+    const nested = join(fixture.workspace, 'nested');
+    const worktree = join(fixture.root, 'linked-worktree');
+    await mkdir(subfolder);
+    await mkdir(join(nested, '.aiwg/sessions'), { recursive: true });
+    await createSessionWorktree(fixture.workspace, worktree);
+    const mappings = [subfolder, worktree, nested, join(fixture.root, 'unrelated')];
+    const locators = [];
+    for (const cwd of mappings) {
+      const project = join(fixture.providerHome, '.claude/projects', claudeProjectKey(cwd));
+      await mkdir(project, { recursive: true });
+      const locator = join(project, 'session.jsonl');
+      await writeFile(locator, JSON.stringify({ type: 'user', cwd, sessionId: cwd,
+        uuid: cwd, message: { role: 'user', content: 'safe fixture' } }) + '\n');
+      locators.push(locator);
+    }
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace,
+      providerHome: fixture.providerHome, expectedProviders: ['claude'] });
+    expect(manifest.sources.map(source => source.locator).sort())
+      .toEqual([join(fixture.providerHome, '.claude/projects', claudeProjectKey(fixture.workspace), 'claude.jsonl'),
+        ...locators.slice(0, 2)].sort());
+    expect(manifest.providers[0]).toMatchObject({ matchedBySubfolder: 1, matchedByWorktree: 1 });
+  });
+
+  itWithSqlite('rebuilds from a saved manifest and read-only catalog after a source disappears', async () => {
+    const fixture = await providerFixture();
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace,
+      providerHome: fixture.providerHome, expectedProviders: ['claude', 'codex'] });
+    const manifestPath = join(fixture.root, 'saved-manifest.json');
+    await writeDiscoveryManifest(manifestPath, manifest);
+    const oldPath = join(fixture.root, 'old.sqlite');
+    const newPath = join(fixture.root, 'new.sqlite');
+    const old = new SessionRepository(oldPath);
+    await importDiscoveryManifest({ repository: old, manifest });
+    const before = old.listSessions({ workspaceId: fixture.workspace, limit: 100 });
+    const checkpoints = new Map(manifest.sources.map(source => [source.sourceId, old.getCheckpoint(source.sourceId, '1.0.0')]));
+    old.close();
+    const claude = manifest.sources.find(source => source.provider === 'claude')!;
+    await rm(claude.locator);
+    const oldBytes = await readFile(oldPath);
+    const ctx = { cwd: fixture.workspace, rawArgs: [], frameworkRoot: fixture.root };
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    for (let iteration = 0; iteration < 2; iteration++) {
+      const result = await sessionsHandler.execute({ ...ctx, args: ['import-discovered', '--workspace', fixture.workspace,
+        '--manifest', manifestPath, '--carry-forward', oldPath, '--db', newPath, '--confirm', '--json'] } as any);
+      expect(result.exitCode).toBe(0);
+      const envelope = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+      expect(envelope.data.receipt.carryForward.byProvider).toMatchObject({
+        claude: { carried: 1, reimported: 0, droppedAsDuplicate: 0, excluded: 0 },
+        codex: { carried: 0, reimported: 1, droppedAsDuplicate: 0, excluded: 0 },
+      });
+      const rebuilt = new SessionRepository(newPath);
+      try {
+        expect(rebuilt.listSessions({ workspaceId: fixture.workspace, limit: 100 }).total).toBe(before.total);
+        expect(rebuilt.getBatchImportRun(envelope.data.receipt.run.runId)?.carryForward)
+          .toEqual(envelope.data.receipt.carryForward);
+        const onDisk = manifest.sources.find(source => source.provider === 'codex')!;
+        expect(rebuilt.getCheckpoint(onDisk.sourceId, '1.0.0')).toEqual(checkpoints.get(onDisk.sourceId));
+      } finally { rebuilt.close(); }
+    }
+    const refused = await sessionsHandler.execute({ ...ctx, args: ['import-discovered', '--workspace', fixture.workspace,
+      '--manifest', manifestPath, '--carry-forward', oldPath, '--db', oldPath, '--dry-run', '--json'] });
+    expect(refused.exitCode).toBe(2);
+    log.mockRestore();
+    expect(await readFile(oldPath)).toEqual(oldBytes);
+  });
+
+  itWithSqlite('retains three large sessions, rereads changed sources, and excludes Lane B before reads', async () => {
+    const fixture = await providerFixture();
+    const sessions = join(fixture.root, 'large-sources');
+    await mkdir(sessions);
+    const ids = ['large-a', 'large-b', 'large-c', 'lane-b'];
+    for (const id of ids) {
+      await writeFile(join(sessions, `${id}.jsonl`), [
+        JSON.stringify({ type: 'session_meta', payload: { id, cwd: fixture.workspace } }),
+        JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: 'safe history '.repeat(30_000) }] } }),
+      ].join('\n') + '\n');
+    }
+    const manifest = await discoverWorkspaceHistories({ workspace: fixture.workspace,
+      codexRoot: sessions, expectedProviders: ['codex'] });
+    const previous = new SessionRepository();
+    const rebuilt = new SessionRepository();
+    const limited = new SessionRepository();
+    try {
+      await importDiscoveryManifest({ manifest, repository: previous });
+      await rm(join(sessions, 'large-c.jsonl'));
+      await writeFile(join(sessions, 'lane-b.jsonl'), 'invalid synthetic excluded content');
+      const changed = join(sessions, 'large-a.jsonl');
+      await writeFile(changed, await readFile(changed, 'utf8') + JSON.stringify({ type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'current-source-marker' }] } }) + '\n');
+      const receipt = await importDiscoveryManifest({ manifest, repository: rebuilt,
+        carryForward: previous, exclude: ['lane-b'] });
+      expect(receipt.carryForward?.byProvider.codex).toEqual({
+        reimported: 2, carried: 1, droppedAsDuplicate: 0, excluded: 1,
+      });
+      expect(receipt.totals.sessionsAccepted).toBe(3);
+      expect(rebuilt.listSessions({ workspaceId: fixture.workspace, limit: 20 }).items
+        .map(session => session.nativeSessionId).sort()).toEqual(ids.slice(0, 3));
+      expect(rebuilt.search({ workspaceId: fixture.workspace, query: '"current-source-marker"', limit: 20 }).items).toHaveLength(1);
+      const rejected = await importDiscoveryManifest({ manifest, repository: limited,
+        carryForward: previous, exclude: ['lane-b'], limits: { maxRecordBytes: 1024 } });
+      expect(rejected.totals.rejected).toBe(2);
+      expect(limited.listSessions({ workspaceId: fixture.workspace, limit: 20 }).items
+        .map(session => session.nativeSessionId)).toEqual(['large-c']);
+    } finally { previous.close(); rebuilt.close(); limited.close(); }
+  });
+
   itWithSqlite('excludes Codex IDs and globs before discovery reads and reports excluded counts in batch receipts', async () => {
     const fixture = await providerFixture();
     const authorized = join(fixture.root, 'excluded');
@@ -381,6 +492,63 @@ describe('workspace session discovery and batch import', () => {
     await expect(readDiscoveryManifest(path)).rejects.toThrow('identity does not match');
   });
 
+  it.each(['codexRoot', 'codexRoots', 'config'] as const)(
+    'adds %s roots to provider-home authorized Codex defaults', async (origin) => {
+      const fixture = await providerFixture();
+      const explicit = join(fixture.workspace, 'exported');
+      const roleRoot = join(fixture.providerHome, '.codex/roles-runtime/full/.codex/sessions');
+      const runtimeHome = join(fixture.root, 'runtime-codex');
+      await writeCodexRollout(explicit, fixture.workspace, 'explicit');
+      await writeCodexRollout(roleRoot, fixture.workspace, 'role');
+      await writeCodexRollout(join(runtimeHome, 'sessions'), fixture.workspace, 'runtime');
+      vi.stubEnv('CODEX_HOME', runtimeHome);
+      if (origin === 'config') {
+        await mkdir(join(fixture.workspace, '.aiwg'));
+        await writeFile(join(fixture.workspace, '.aiwg/aiwg.config'), JSON.stringify({
+          sessions: { codex_roots: ['exported'] },
+        }));
+      }
+      const manifest = await discoverWorkspaceHistories({
+        workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+        ...(origin === 'codexRoot' ? { codexRoot: explicit }
+          : origin === 'codexRoots' ? { codexRoots: [explicit] } : {}),
+      });
+      expect(manifest.authorizedRoots?.codex).toEqual([
+        explicit, join(fixture.providerHome, '.codex/sessions'), join(runtimeHome, 'sessions'), roleRoot,
+      ]);
+      expect(manifest.sources).toHaveLength(4);
+      expect(manifest.sources.map(source => source.authorizedRoot).sort())
+        .toEqual([...manifest.authorizedRoots!.codex!].sort());
+    },
+  );
+
+  it.each(['codexRoot', 'codexRoots', 'config'] as const)(
+    'limits %s discovery to explicit Codex roots without provider-home authorization', async (origin) => {
+      const fixture = await providerFixture();
+      const explicit = join(fixture.workspace, 'exported');
+      const roleHome = join(fixture.providerHome, '.codex/roles-runtime/full/.codex');
+      await writeCodexRollout(explicit, fixture.workspace, 'explicit');
+      await writeCodexRollout(join(roleHome, 'sessions'), fixture.workspace, 'role');
+      vi.stubEnv('CODEX_HOME', roleHome);
+      if (origin === 'config') {
+        await mkdir(join(fixture.workspace, '.aiwg'));
+        await writeFile(join(fixture.workspace, '.aiwg/aiwg.config'), JSON.stringify({
+          sessions: { codex_roots: ['exported'] },
+        }));
+      }
+      const manifest = await discoverWorkspaceHistories({
+        workspace: fixture.workspace, operatorHome: fixture.providerHome, expectedProviders: ['codex'],
+        ...(origin === 'codexRoot' ? { codexRoot: explicit }
+          : origin === 'codexRoots' ? { codexRoots: [explicit] } : {}),
+      });
+      expect(manifest.authorizedRoots?.codex).toEqual([explicit]);
+      expect(manifest.sources.map(source => source.authorizedRoot)).toEqual([explicit]);
+      expect(manifest.providers[0].rootCounts).toEqual([
+        { ...rootIdentity(explicit), status: 'checked', sourceCount: 1, duplicateCount: 0 },
+      ]);
+    },
+  );
+
   it('keeps automatic Codex roots behind provider-home authorization', async () => {
     const fixture = await providerFixture();
     vi.stubEnv('CODEX_HOME', join(fixture.providerHome, '.codex'));
@@ -438,11 +606,12 @@ describe('workspace session discovery and batch import', () => {
       workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
       codexRoots: [first, second, alias, first],
     });
-    expect(manifest.sources).toHaveLength(2);
-    expect(manifest.authorizedRoots?.codex).toEqual([first, second]);
+    expect(manifest.sources).toHaveLength(3);
+    expect(manifest.authorizedRoots?.codex).toEqual([first, second, join(fixture.providerHome, '.codex/sessions')]);
     expect(manifest.providers[0].rootCounts).toEqual([
       { ...rootIdentity(first), status: 'checked', sourceCount: 1, duplicateCount: 0 },
       { ...rootIdentity(second), status: 'checked', sourceCount: 1, duplicateCount: 1 },
+      { ...rootIdentity(join(fixture.providerHome, '.codex/sessions')), status: 'checked', sourceCount: 1, duplicateCount: 0 },
     ]);
   });
 
@@ -481,6 +650,40 @@ describe('workspace session discovery and batch import', () => {
     expect((await discoverWorkspaceHistories({
       workspace: fixture.workspace, expectedProviders: ['codex'], authorizedRoots: {},
     })).sources).toEqual([]);
+  });
+
+  itWithSqlite('refreshes previously saved Codex role roots without adding new roots', async () => {
+    const fixture = await providerFixture();
+    const roleRoot = join(fixture.providerHome, '.codex/roles-runtime/saved/.codex/sessions');
+    await mkdir(roleRoot, { recursive: true });
+    await writeMatchingSession('codex', roleRoot, 'saved-role', fixture.workspace);
+    const initial = await discoverWorkspaceHistories({
+      workspace: fixture.workspace, providerHome: fixture.providerHome, expectedProviders: ['codex'],
+    });
+    const manifestPath = join(fixture.workspace, '.aiwg/sessions/discovery-manifest.json');
+    await writeDiscoveryManifest(manifestPath, initial);
+    await writeMatchingSession('codex', roleRoot, 'later-role', fixture.workspace);
+    const newRoot = join(fixture.providerHome, '.codex/roles-runtime/new/.codex/sessions');
+    await mkdir(newRoot, { recursive: true });
+    await writeMatchingSession('codex', newRoot, 'new-role', fixture.workspace);
+    const runtimeHome = join(fixture.root, 'runtime-codex');
+    await mkdir(join(runtimeHome, 'sessions'), { recursive: true });
+    await writeMatchingSession('codex', join(runtimeHome, 'sessions'), 'runtime', fixture.workspace);
+    vi.stubEnv('CODEX_HOME', runtimeHome);
+
+    await refreshSessionCatalog(fixture.workspace, false, 0);
+    const refreshed = await readDiscoveryManifest(manifestPath);
+    expect(refreshed.authorizedRoots).toEqual(initial.authorizedRoots);
+    expect(refreshed.sources).toHaveLength(3);
+    expect(refreshed.sources.filter(source => source.authorizedRoot === roleRoot)
+      .map(source => source.nativeSessionId).sort()).toEqual(['later-role', 'saved-role']);
+    const repository = new SessionRepository(join(fixture.workspace, '.aiwg/sessions/catalog.sqlite'));
+    try {
+      const sessions = repository.listSessions({ workspaceId: fixture.workspace, limit: 10 });
+      expect(sessions.total).toBe(3);
+      expect(sessions.items.map(session => session.nativeSessionId))
+        .toEqual(expect.arrayContaining(['saved-role', 'later-role']));
+    } finally { repository.close(); }
   });
 
   itWithSqlite.each(['inspect', 'stream'] as const)(

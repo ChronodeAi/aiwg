@@ -16,6 +16,8 @@
  */
 
 import * as fs from 'fs';
+import { refIdFromFilename } from '../../research/identity.js';
+import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { parseFrontmatter } from '../corpus-views/ref-parser.js';
@@ -48,25 +50,24 @@ function depthBand(lines: number): string {
 function refFiles(root: string): string[] {
   const dir = path.join(root, ...REFS_DIR);
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => /^REF-\d{3,4}[a-z]?(-.*)?\.md$/.test(f)).sort();
+  return fs.readdirSync(dir, { withFileTypes: true }).filter(f => f.isFile() && refIdFromFilename(f.name)).map(f => f.name).sort();
 }
 
 function refIdOf(filename: string): string | null {
-  const m = filename.match(/^(REF-\d{3,4}[a-z]?)/);
-  return m ? m[1] : null;
+  return refIdFromFilename(filename);
 }
 
 function findAnalysis(root: string, refId: string): string | null {
   const dir = path.join(root, ...REFS_DIR);
   if (!fs.existsSync(dir)) return null;
-  const m = fs.readdirSync(dir).find((f) => f === `${refId}.md` || f.startsWith(`${refId}-`));
+  const m = refFilesForId(dir, refId)[0];
   return m ? path.join(dir, m) : null;
 }
 
 function hasPdf(root: string, refId: string): boolean {
   const dir = path.join(root, ...PDFS_DIR);
   if (!fs.existsSync(dir)) return false;
-  return fs.readdirSync(dir).some((f) => f === `${refId}.pdf` || f.startsWith(`${refId}-`));
+  return refFilesForId(dir, refId, '.pdf').length > 0;
 }
 
 export interface AuditResult {
@@ -212,7 +213,7 @@ function extractYear(text: string): string | null {
 function pdfHash(root: string, refId: string): string | null {
   const dir = path.join(root, ...PDFS_DIR);
   if (!fs.existsSync(dir)) return null;
-  const m = fs.readdirSync(dir).find((f) => f === `${refId}.pdf` || f.startsWith(`${refId}-`));
+  const m = refFilesForId(dir, refId, '.pdf')[0];
   if (!m) return null;
   return createHash('sha256').update(fs.readFileSync(path.join(dir, m))).digest('hex');
 }

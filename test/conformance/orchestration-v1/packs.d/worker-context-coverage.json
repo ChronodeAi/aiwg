@@ -1,0 +1,8 @@
+{
+  "T-OG-03": [
+    "test/unit/ralph-external/muse-adapter-contract.test.ts"
+  ],
+  "T-OG-05": [
+    "test/unit/ralph-external/cli-arguments-status.test.ts"
+  ]
+}

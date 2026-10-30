@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,7 +44,14 @@ function validateProvenance(root, claim, evidence, now) {
   assert(Array.isArray(evidence.subject?.sourceFiles) && evidence.subject.sourceFiles.length > 0, `${claim.id}: source scope is absent`);
   assert(JSON.stringify(evidence.subject.sourceFiles) === JSON.stringify(claim.sourceFiles), `${claim.id}: source scope differs from registry`);
   assert(evidence.subject.sourceDigest === digestSources(root, claim.sourceFiles), `${claim.id}: evidence is stale for current benchmark sources`);
-  assert(evidence.subject.branch === 'main', `${claim.id}: evidence was not observed from main`);
+  const checkout = evidence.subject.checkout;
+  // A local reference run can qualify changed bytes before the conductor commits.
+  // Retain the actual detached base revision and require explicit modified scope.
+  const detachedReference = evidence.schemaVersion === SERVER_EVIDENCE_SCHEMA && evidence.subject.branch === 'HEAD'
+    && checkout?.kind === 'detached-worktree' && checkout.baseCommit === evidence.subject.commit
+    && Array.isArray(checkout.modifiedSourceFiles) && checkout.modifiedSourceFiles.length > 0
+    && checkout.modifiedSourceFiles.every(file => claim.sourceFiles.includes(file));
+  assert(evidence.subject.branch === 'main' || detachedReference, `${claim.id}: evidence was not observed from main or an explicit detached reference worktree`);
   assert(/^[0-9a-f]{40}$/.test(evidence.subject.commit), `${claim.id}: commit provenance is invalid`);
 
   const observedAt = Date.parse(evidence.observedAt);
@@ -189,6 +196,68 @@ function renderServerClaim(id, evidence) {
   ].join('\n');
 }
 
+/** Import emitted live reports and Vitest JSON results; render with the same release-gate owner. */
+export function importServerBenchmarkRun(root, input, now = new Date()) {
+  const registry = parseJson(resolveWithin(root, 'docs/storage/evidence/claims.v1.json'));
+  const claim = registry.claims.find(candidate => candidate.id === input.id);
+  assert(claim?.backend, 'import requires a registered server claim');
+  assert(claim.sourceFiles.includes(input.testFile) && input.testFile.startsWith('test/integration/'), `${claim.id}: live test file is outside registered source scope`);
+  const previous = parseJson(resolveWithin(root, claim.evidence));
+  const { sideEffects, ...qualification } = parseJson(resolveWithin(root, input.report));
+  assert(Array.isArray(sideEffects) && sideEffects.length === qualification.scope?.observedOperations,
+    `${claim.id}: emitted side effects do not match operation scope`);
+  const outcomes = new Map();
+  for (const effect of sideEffects) {
+    assert(['committed', 'replayed'].includes(effect.outcome), `${claim.id}: emitted side effect failed`);
+    outcomes.set(effect.outcome, (outcomes.get(effect.outcome) ?? 0) + 1);
+  }
+  qualification.sideEffectSummary = [...outcomes].sort(([left], [right]) => left.localeCompare(right))
+    .map(([outcome, count]) => ({ outcome, count }));
+  const results = parseJson(resolveWithin(root, input.testResults));
+  const suites = results.testResults.filter(suite => suite.name.endsWith(input.testFile));
+  assert(suites.length === 1, `${claim.id}: expected exactly one live test file`);
+  assert(Date.parse(qualification.startedAt) >= suites[0].startTime
+    && Date.parse(qualification.completedAt) <= Math.ceil(suites[0].endTime), `${claim.id}: report is outside live test run interval`);
+  const expectedRunId = createHash('sha256').update(`${qualification.scope.commit}\0${qualification.scope.backend}\0${qualification.startedAt}`).digest('hex');
+  assert(qualification.runId === expectedRunId, `${claim.id}: emitted run id does not match provenance`);
+  const assertions = suites[0].assertionResults;
+  const passed = assertions.filter(test => test.status === 'passed');
+  const skipped = assertions.filter(test => ['pending', 'skipped', 'todo', 'disabled'].includes(test.status));
+  assert(results.success === true && passed.length > 0 && passed.length + skipped.length === assertions.length,
+    `${claim.id}: live test run must pass`);
+  const evidence = {
+    schemaVersion: SERVER_EVIDENCE_SCHEMA,
+    evidenceId: claim.id,
+    observedAt: qualification.completedAt,
+    validUntil: new Date(Date.parse(qualification.completedAt) + claim.maxAgeDays * 86_400_000).toISOString(),
+    subject: {
+      branch: qualification.scope.branch, commit: qualification.scope.commit,
+      sourceFiles: claim.sourceFiles, sourceDigest: digestSources(root, claim.sourceFiles),
+      ...(input.checkout ? { checkout: input.checkout } : {}),
+    },
+    runtime: { node: process.version, platform: process.platform, arch: process.arch },
+    server: input.server,
+    qualification,
+    testGate: {
+      passed: passed.length, failed: 0, skipped: skipped.length,
+      coverage: passed.map(test => test.title),
+      ...(skipped.length ? { skippedCoverage: skipped.map(test => test.title) } : {}),
+    },
+    interpretation: previous.interpretation,
+  };
+  validateEvidence(root, claim, evidence, now);
+  const documentPath = resolveWithin(root, claim.document);
+  const document = readFileSync(documentPath, 'utf8');
+  const start = `<!-- aiwg-storage-benchmark-claim:${claim.id}:start -->`;
+  const end = `<!-- aiwg-storage-benchmark-claim:${claim.id}:end -->`;
+  assert(document.split(start).length === 2 && document.split(end).length === 2, `${claim.id}: evidence block is missing or duplicated`);
+  const rendered = document.slice(0, document.indexOf(start)) + renderClaim(claim.id, evidence)
+    + document.slice(document.indexOf(end) + end.length);
+  writeFileSync(resolveWithin(root, claim.evidence), `${JSON.stringify(evidence, null, 2)}\n`);
+  writeFileSync(documentPath, rendered);
+  return evidence;
+}
+
 function digestSources(root, files) {
   const hash = createHash('sha256');
   for (const file of [...files].sort()) hash.update(file).update('\0').update(readFileSync(resolveWithin(root, file))).update('\0');
@@ -221,7 +290,11 @@ function assert(condition, message) { if (!condition) throw new Error(message); 
 const invokedPath = process.argv[1] ? realpathSync(process.argv[1]) : '';
 if (invokedPath === realpathSync(fileURLToPath(import.meta.url))) {
   try {
-    const result = verifyStorageBenchmarkClaims(process.argv[2] ?? process.cwd());
+    const result = process.argv[2] === '--import-server-run'
+      ? { schemaVersion: REGISTRY_SCHEMA, valid: true, imported: importServerBenchmarkRun(
+        process.cwd(), parseJson(resolveWithin(process.cwd(), process.argv[3])),
+      ).evidenceId }
+      : verifyStorageBenchmarkClaims(process.argv[2] ?? process.cwd());
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`storage benchmark claim gate failed: ${error instanceof Error ? error.message : String(error)}\n`);

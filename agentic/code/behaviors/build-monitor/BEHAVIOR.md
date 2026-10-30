@@ -1,4 +1,8 @@
 ---
+activation: bound
+summary: "Check builds and typechecking on matching build events and report actionable failures."
+bound_to:
+  agents: [build-engineer]
 name: build-monitor
 version: 1.0.0
 description: Track build health by monitoring build tool completions and running scheduled

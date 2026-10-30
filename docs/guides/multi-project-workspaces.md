@@ -19,6 +19,10 @@ In brief:
 
 ## The three layers
 
+> "Where should this note live: the member repo, the workspace root, or my private memory?"
+
+Your assistant keeps member policy in the member repo, coordination at the root, and private context in user-level memory.
+
 Keep repository work, workspace coordination, and personal defaults distinct.
 They can coexist without using the same storage location or access policy.
 
@@ -40,6 +44,10 @@ instructions must tell the assistant what to read.
 
 ## Initialize every repository you manage
 
+> "Set up AIWG in storefront and billing-api without mixing their memory and policy."
+
+Your assistant initializes each member with its own `.aiwg/aiwg.config` so delivery, tracker, and identity stay per repository.
+
 Give each managed member its own AIWG setup and `.aiwg/aiwg.config`. The member
 config controls delivery mode, branches, remotes, tracker authority, identities,
 and commit and release-tag signing. A workspace allowlist does not replace it.
@@ -47,6 +55,8 @@ Keep notes, memory, and artifacts associated with the repository they describe.
 
 > Set up AIWG for storefront and billing-api separately. Show each repository's
 > delivery policy, tracker authority, identity, and artifact destination.
+
+Your assistant reads each member config and reports delivery policy and tracker authority before any git or tracker write.
 
 Choose how to retain project material before you initialize a member. The
 choice is harder to change afterwards, because creating the member's `.aiwg/`
@@ -87,6 +97,12 @@ compound context is always kept under the checkout, and memory can resolve to
 registered user storage. Confirm where each kind of record lands.
 
 ## Declare the workspace
+
+> "Declare storefront, billing-api, and ops-runbooks in this workspace with read, write, and handoff-only access."
+
+Your assistant writes the root `workspace` and `repos` blocks once; paths outside the listed member trees are denied.
+
+### Command reference
 
 Add membership to the root's `.aiwg/aiwg.config`. This example grants storefront
 the delivery actions, billing-api read-and-comment access, and ops-runbooks reads:
@@ -144,11 +160,17 @@ action; it does not perform the whole delivery-policy preflight.
 > Check whether this workspace allows commits to billing-api, and tell me which
 > rule decides it. Read the member's own policy before preparing a handoff.
 
+Your assistant intersects workspace permission, member policy, and repository instructions and names the deciding rule.
+
 For exact configuration and operation syntax, see
 [workspace repository access](../security/repo-access-manifest.md) and the
 [CLI reference](../cli/reference.md).
 
 ## Keep a workspace index
+
+> "Link this decision in the workspace index as accepted and point superseded entries at it."
+
+Your assistant adds the dated entry to `WORKSPACE.md` with status and replacement links.
 
 Use one entry file at the root, such as `WORKSPACE.md`, to link to dated plans,
 reviews, research, decisions, and runbooks. Keep implementation detail in the
@@ -168,6 +190,10 @@ copies, worker and machine capacity, and separation of unrelated projects and
 sensitive material. Link the detail instead of expanding the index indefinitely.
 
 ## Decide what may cross project boundaries
+
+> "Before I share this finding with billing-api, strip engagement context and keep a traceability link."
+
+Your assistant writes a neutral reusable version in the owning project and reviews outgoing content before sharing.
 
 Decide sharing before importing history, selecting storage roots, or handing
 context to another worker. Project-specific paths describe defaults; they do
@@ -221,6 +247,8 @@ authorize copying all of its content elsewhere.
 > Review what this workspace shares through user instructions, indices, storage,
 > and session imports. Identify each explicit sharing choice and its scope.
 
+Your assistant lists each explicit sharing choice with its scope before moving material.
+
 Use three practices when material crosses a boundary:
 
 1. Write a neutral, reusable version of a finding into the project that owns it.
@@ -235,9 +263,25 @@ Use three practices when material crosses a boundary:
 
 ## Run work across repositories
 
+> "Fix the login retry bug in billing-api in its own worktree. Keep storefront untouched and bring back test output."
+
+Your assistant gives the worker one repository, one bounded task, and a completion criterion, then verifies the changes itself.
+
+**Conductor-to-worker brief (example):**
+
+```brief
+Objective: make the billing-api retry test pass; nothing else.
+Inputs: billing-api at the current head; failing log attached. Must not touch: storefront or other members.
+Acceptance: the named retry test exits 0 in the billing-api worktree.
+Limits: one worktree, one attempt. Uncertainty policy: stop-and-report.
+Return: changed files plus test evidence for conductor review.
+```
+
 Keep one accountable conductor responsible for integration, conflict resolution,
 verification, and the final result. Give each worker a bounded task in one
 repository, with relevant inputs, allowed outputs, and a completion criterion.
+
+### Command reference
 
 Use a separate worktree for each concurrent task. Record its owning repository
 and base revision, avoid overlapping writers, and clean up after integration
@@ -280,6 +324,10 @@ establish that the target system accepted the operation.
 
 ## Add checks as complexity grows
 
+> "This workspace now has six repos and two people. Which checks should I add?"
+
+Your assistant picks health, membership, mirror, lint, and firewall checks for the workspace size and reports each check's scope.
+
 Use the checks that match the workspace's complexity and handling requirements.
 These tiers are operating guidance, not compliance certification.
 
@@ -306,7 +354,13 @@ is deterministic or assistant-driven depends on the checks it invokes.
 > Check engagement in each member, audit workspace membership, and review mirror
 > drift. Report the scope of each check and any state you could not verify.
 
+Your assistant runs engagement, membership, and mirror checks and states what each check could not verify.
+
 ## An optional portfolio view
+
+> "Summarize these eight repos as a portfolio without moving their implementation detail."
+
+Your assistant keeps membership and responsibility in the catalog and inventory and refreshes changeable facts before acting.
 
 For many repositories, keep a catalog file, a narrative inventory, a dated audit,
 and baselines. A generic layout might use `catalog.yaml`, `inventory.md`,

@@ -2,10 +2,8 @@
  * Local text-only HTTP worker driver (roctinam/aiwg#2899, B-OG-09, B-OG-50 S1).
  *
  * Registers under the registry's generic, pre-reserved slot
- * `workerAdapters['local-http']` (schema `$defs/http` invocation kind,
- * `protocol: 'ollama'|'llama-cpp'|'openai-compatible'`) — see
- * `agentic/code/providers/model-capabilities.v1.json`'s `workerHealthAdapters.
- * local-http` descriptive placeholder, owned by this issue (B-OG-09). This
+ * `workerAdapters['local-http']` (process/curl, adapter-frame stdin), owned
+ * by this issue (B-OG-09). This
  * module is the Ollama backend of that slot; llama.cpp/openai-compatible
  * backends would share the same registry id with a different `protocol`.
  *
@@ -35,21 +33,10 @@
  * local inference. That assurance stays unqualified: nothing here observes
  * what the server does with the prompt.
  *
- * Request body (model, brief): owned by this module as a PURE function,
- * `buildOllamaGenerateBody`, per operator authorization on #2899 follow-up.
- * It is NOT yet wired into production stdin framing: the frozen
- * `src/serve/worker-stdin-frame.mjs` vocabulary (`stdin: 'closed' |
- * 'brief-text' | 'brief-json'`) has no adapter-pluggable envelope hook —
- * `'brief-json'` is hardcoded to OpenHuman's `{message, model_override, cwd}`
- * shape. The registry declares the closest existing fail-closed value,
- * `stdin: 'closed'`, with the `stdin` control `unqualified`, pointing at
- * roctinam/aiwg#2998 and #3002 (provider-supplied stdin frames / generated
- * artifacts). Until one of those lands, **dispatch through the real
- * conductor is blocked**: there is no production path that calls
- * `buildOllamaGenerateBody` and hands its output to this adapter's stdin.
- * Tests call the pure function directly to build the request body they feed
- * the fake server, which is accurate to what the adapter will do once wired,
- * not to what the stdin-closed registry entry can do today.
+ * Request body (model, brief): `buildWorkerStdinFrame` uses the resolved
+ * invocation's selected model and the existing adapter-frame primitive.
+ * No model is cached on the adapter: concurrent selections cannot cross over.
+ * The brief is decoded strictly and bounded before JSON encoding.
  *
  * `keep_alive` is never sent: the request body carries only
  * `{model, prompt, stream:false}`, so model residency is governed entirely
@@ -163,7 +150,7 @@ export function assertOllamaModelName(model) {
 
 /** Pure request-body builder: `{model, prompt, stream:false}`, JSON-encoded,
  * no tools, no `keep_alive` (server residency defaults apply).
- * Not yet wired into production stdin framing (see module docstring, #2998/#3002). */
+ * Used by the installed adapter-frame stdin hook. */
 export function buildOllamaGenerateBody({ model, brief, role }) {
   assertOllamaModelName(model);
   if (role === 'coding') {
@@ -406,7 +393,7 @@ export class OllamaAdapter extends ProviderAdapter {
   buildAnalysisArgs() { return this.buildSessionArgs(); }
 
   /** Driver-owned argv after the binary: no brief text (text travels on
-   * stdin only, once #2998/#3002 land — see module docstring), no explicit
+   * stdin only via the adapter-frame hook), no explicit
    * effort, an explicit validated model and local-only endpoint, and a
    * text-only transport that refuses the coding role. There is no
    * tool-calling surface implemented anywhere in this adapter. Curl is
@@ -436,6 +423,16 @@ export class OllamaAdapter extends ProviderAdapter {
       '--max-time', String(OLLAMA_REQUEST_TIMEOUT_SECONDS),
       '--max-filesize', String(OLLAMA_MAX_RESPONSE_BYTES),
       '--fail-with-body', '-H', 'Content-Type: application/json', '-X', 'POST', url, '--data-binary', '@-'];
+  }
+
+  /** Pure per-invocation framing: never cache or inherit the selected model. */
+  buildWorkerStdinFrame(brief, invocation) {
+    if (invocation?.selected?.effort?.value != null) {
+      throw new Error('Ollama worker effort must be null/not-applicable');
+    }
+    const text = brief instanceof Uint8Array
+      ? new TextDecoder('utf-8', { fatal: true }).decode(brief) : brief;
+    return buildOllamaGenerateBody({ model: invocation?.selected?.model, brief: text, role: invocation?.role });
   }
 
   /** No streaming event grammar is implemented (stream:false is explicit): final-only. */

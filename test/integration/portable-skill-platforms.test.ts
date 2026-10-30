@@ -83,7 +83,7 @@ describe('portable skill copies and independent indexed retrieval (#2282)', () =
       const found = JSON.parse(log.mock.calls.map(call => call[0]).join(''));
       expect(found.results[0].name).toBe(name);
       log.mockClear();
-      await indexCliMain(['show', 'skill', found.results[0].id, '--json']);
+      await indexCliMain(['show', 'skill', found.results[0].id, '--body', '--json']);
       const shown = JSON.parse(log.mock.calls.map(call => call[0]).join(''));
       expect(shown.content).toBe(fs.readFileSync(path.join(path.dirname(source), name, 'SKILL.md'), 'utf8'));
     }

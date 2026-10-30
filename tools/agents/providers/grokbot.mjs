@@ -171,7 +171,7 @@ export async function postDeploy(targetDir, opts = {}) {
     opts.createAgentsMd ||
     (!opts.commandsOnly && !opts.skillsOnly && !opts.rulesOnly)
   ) {
-    createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
+    if (opts.contextFiles !== false) createAgentsMd(targetDir, opts.srcRoot, opts.dryRun);
   }
   if (!opts.quiet) {
     const root = resolveGrokbotSkillsDir(opts.env || process.env);

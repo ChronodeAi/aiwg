@@ -10,6 +10,25 @@
 
 ---
 
+## RC response regression gate
+
+After the RC build (#3201), check the [release comparison gate](release-comparison.md). Quarterly full validation runs the complete comparison against the last published package on Claude, Codex, and Hermes: the complete base/Wave 5 probe corpus plus the workflow scenarios, n=5 per side, identical subject model/settings, and a distinct blind judge model. Routine releases require current-quarter evidence whose tested commit is the candidate or an authenticated ancestor, plus candidate-specific approval recording any reuse. Resolve or explicitly accept each regression with a recorded reason linked to its evidence before shipping. Invalid or incomplete runs hold the gate. Higher-consequence model spot checks supplement the complete corpus. Do not count offline stub tests or a selected smoke set as the release comparison.
+
+RC build → required tests → quarterly comparison or verified current-quarter reuse → fix or record acceptance for each regression → ship.
+
+Review the recorded decision thresholds and per-scenario A/B/tie tallies before
+dispositioning regressions. Assertion pass-rate drops and A-passed/B-failed pairs
+always regress. Judge-only regressions require a one-sided exact sign-test
+`p < 0.05` by default (ties excluded; at n=5 only 5/0 A wins qualify), or a
+dimension mean drop greater than 1.0 on the integer 0–4 scale. Improvement uses
+the mirrored tests; conflicting signals favor regression. Thresholds are
+configurable with `--judge-alpha` / `judgeAlpha` and `--judge-score-margin` /
+`judgeScoreMargin`; freeze them in the plan before running. The quarterly
+producer uses defaults, and retained reports must match the trusted plan.
+Check each report's p-values, B-minus-A dimension deltas, maximum absolute delta,
+and fired rule alongside the per-pair evidence. See the
+[decision rule](../../tools/rules/README.md) for bounds and details.
+
 ## 0. Pre-flight (Do once, on the host machine)
 
 Run these checks **before** opening any provider session. They verify your local install is healthy and the version under test is what you expect.
@@ -142,7 +161,7 @@ Record the read-access behavior:
 
 | Path | Looks like |
 |---|---|
-| **`aiwg show`** | Agent runs `aiwg show skill aiwg-utils-quickref` (or equivalent) and quotes the content. |
+| **`aiwg show`** | Agent runs `aiwg show skill aiwg-utils-quickref --body` (or equivalent) and quotes the content. |
 | **Direct file read** | Agent reads a `.md` file via its native Read tool. Acceptable for providers where `aiwg show` isn't reachable. |
 | **MCP `rule-show` / `skill-show`** | Hermes only — agent uses MCP tool. |
 | **Failure** | Agent guesses, declines, or references a non-existent path. |
@@ -181,7 +200,7 @@ Before opening the per-provider matrix, confirm the universal artifact-presence 
 # Verify AIWG knows where it deployed and what
 aiwg list                                              # framework presence
 aiwg discover "intake wizard" --limit 3 --json         # discovery surface live
-aiwg show skill aiwg-utils-quickref | head -10         # quickref reachable
+aiwg show skill aiwg-utils-quickref --body | head -10         # quickref reachable
 ```
 
 ---
@@ -202,7 +221,7 @@ aiwg show skill aiwg-utils-quickref | head -10         # quickref reachable
 |---|---|---|
 | Commands are a static built-in enum in `codex-rs` — file-based commands are NOT scanned by the loader | `.codex/commands/` is deployed for operator visibility but the discovery bridge is `AGENTS.md` (linked aggressively per the 32KB cap) | Open `AGENTS.md` at repo root — it links to `.aiwg/AIWG.md`, frameworks, and rules. Size is well under 32KB (`wc -c AGENTS.md`). Inside session: agent uses AGENTS.md context, not the `.codex/commands/` files |
 | `~/.codex/` is home-scope (cross-project) while repository skills need a project discovery path | Deploys prompts to `~/.codex/prompts/`, skills to `.agents/skills/`, and agents/rules to `.codex/`; AGENTS.md is the project-scope bridge | `ls .agents/skills/ \| wc -l` = canonical kernel count by default; `ls ~/.codex/prompts/ \| wc -l` ≥ 1; no AIWG-managed entries remain in legacy `~/.codex/skills/` |
-| No native Skill tool dispatch — agent has no way to invoke a skill body | Agents must use `aiwg show skill <name>` via shell tool — discovery returns paths the agent fetches via Bash | Step 5 already proves this; in this session verify the agent uses `aiwg show` (not a direct path read) and the CLI returns content |
+| No native Skill tool dispatch — agent has no way to invoke a skill body | Agents must use `aiwg show skill <name> --body` via shell tool — discovery returns paths the agent fetches via Bash | Step 5 already proves this; in this session verify the agent uses `aiwg show` (not a direct path read) and the CLI returns content |
 | OIDC trusted publishing not native to Codex workflow tooling | Documented in `docs/contributing/versioning.md`, automated via GitHub Actions OIDC step in `.github/workflows/npm-publish.yml` | N/A for in-session validation — release-pipeline concern |
 | 32KB AGENTS.md cap (per Codex doc) means inlining everything overflows | `aiwg use` and `aiwg regenerate` emit a link-heavy AGENTS.md, not a content dump | `wc -c AGENTS.md` < 32000 |
 
@@ -275,7 +294,7 @@ aiwg show skill aiwg-utils-quickref | head -10         # quickref reachable
 | 16 core MCP tools by default; 45 more via `AIWG_MCP_TOOLSETS=<csv>` | Default tools available; opt-in extras via env var | Inside session, list MCP tools — count is 16 (or 61 if `AIWG_MCP_TOOLSETS=all`, including deprecated compatibility tools) |
 | Standard skills (~460) recursively discovered under `~/.hermes/skills/.aiwg/`; kernel (~20) at top level | Curator (v0.12.0+) protects kernel via `.bundled_manifest` | `ls ~/.hermes/skills/ \| grep -v "^\.aiwg$" \| wc -l` ≥ 20 (kernel); `find ~/.hermes/skills/.aiwg/ -name SKILL.md \| wc -l` ≥ 300 (standard) |
 | `AGENTS.md` + `.hermes.md` are the discovery bridges (no provider-native context file) | Both files generated by `aiwg use --provider hermes` | Both files present at project root |
-| Rules inlined in AGENTS.md + reachable via CLI `aiwg show rule`; MCP `rule-list`/`rule-show` optional | Non-MCP and MCP surfaces populated | `grep -c "^### Rule:" AGENTS.md` ≥ 7; `AGENTS.md` contains `aiwg show rule <name>`; optional MCP `rule-list` returns rule names |
+| Rules inlined in AGENTS.md + reachable via CLI `aiwg show rule`; MCP `rule-list`/`rule-show` optional | Non-MCP and MCP surfaces populated | `grep -c "^### Rule:" AGENTS.md` ≥ 7; `AGENTS.md` contains `aiwg show rule <name> --body`; optional MCP `rule-list` returns rule names |
 
 ### 7-K. Omnius
 

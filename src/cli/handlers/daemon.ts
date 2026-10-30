@@ -1,7 +1,7 @@
 /**
  * Daemon Command Handlers
  *
- * Handlers for daemon-related CLI commands (behavior management, daemon init).
+ * Handlers for daemon-related CLI commands (lifecycle, behavior management, daemon init).
  * Each handler delegates to existing scripts in tools/.
  *
  * @tests @test/unit/cli/handlers/coverage.test.ts
@@ -34,17 +34,23 @@ abstract class DaemonHandler implements CommandHandler {
   }
 }
 
-/**
- * Daemon Handler
- *
- * Delegates to the daemon command namespace implementation.
- */
-class DaemonCommandHandler extends DaemonHandler {
+/** Runs the existing daemon CLI without changing its shared lifecycle state. */
+class DaemonControlHandler extends DaemonHandler {
   id = 'daemon';
   name = 'Daemon';
-  description = 'Manage the AIWG daemon and its subsystems';
+  description = 'Manage the daemon: start, stop, status, chat, attach and scheduled tasks';
   scriptPath = 'tools/daemon/index.mjs';
+
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    const runner = createScriptRunner(await getFrameworkRoot());
+    return runner.run(this.scriptPath, ctx.args, { cwd: ctx.cwd });
+  }
+
+  async help(ctx: HandlerContext): Promise<HandlerResult> {
+    return this.execute({ ...ctx, args: ['--help'] });
+  }
 }
+
 
 /**
  * Behavior Handler
@@ -73,7 +79,7 @@ class DaemonInitHandler extends DaemonHandler {
 /**
  * Exported handler instances
  */
-export const daemonHandler: CommandHandler = new DaemonCommandHandler();
+export const daemonHandler: CommandHandler = new DaemonControlHandler();
 export const behaviorHandler: CommandHandler = new BehaviorHandler();
 export const daemonInitHandler: CommandHandler = new DaemonInitHandler();
 

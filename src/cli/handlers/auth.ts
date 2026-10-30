@@ -1,3 +1,5 @@
+import { namedSensitiveStore, resolveSensitiveInput, sensitiveInputOptions, type SensitiveInputDependencies } from '../../auth/sensitive-input.js';
+import type { SecretStore } from '../../auth/credential-store.js';
 import { AuthClient, defaultBrowserOpener, type BrowserOpener } from "../../auth/client.js";
 import { authConfigFromEnvironment } from "../../auth/config.js";
 import { createCredentialStore, type CommandRunner } from "../../auth/credential-store.js";
@@ -8,6 +10,8 @@ function usage(): string {
   return [
     "Usage:",
     "  aiwg auth login [--device] [--device-label <label>] [--store native|file] [--allow-file-store]",
+    "  aiwg auth secret set <name> [--value-interactive | --value-stdin | --value-file <path> | --value-store <name> | --value-env <name>]",
+    "  aiwg auth secret delete <name>",
     "  aiwg auth status [--json] [--store native|file] [--allow-file-store]",
     "  aiwg auth logout [--all] [--store native|file] [--allow-file-store]",
     "",
@@ -33,6 +37,8 @@ function classify(error: unknown): number {
 
 interface AuthHandlerDependencies {
   env?: NodeJS.ProcessEnv;
+  secretStore?: (name: string) => SecretStore;
+  sensitiveInput?: SensitiveInputDependencies;
   platform?: NodeJS.Platform;
   runner?: CommandRunner;
   store?: CredentialStore;
@@ -60,8 +66,22 @@ export function createAuthHandler(dependencies: AuthHandlerDependencies = {}): C
         return { exitCode: 0 };
       }
       const [subcommand, ...args] = ctx.args;
-      if (!["login", "status", "logout"].includes(subcommand)) return { exitCode: 2, message: usage() };
+      if (!["login", "status", "logout", "secret"].includes(subcommand)) return { exitCode: 2, message: usage() };
       try {
+        if (subcommand === "secret") {
+          const [operation, name, ...inputArgs] = args;
+          if (!["set", "delete"].includes(operation) || !name || name.startsWith('--')) return { exitCode: 2, message: usage() };
+          const store = (dependencies.secretStore ?? namedSensitiveStore)(name);
+          if (operation === "delete") await store.deleteSecret();
+          else {
+            const secret = await resolveSensitiveInput({ ...sensitiveInputOptions(inputArgs), signal: ctx.signal }, {
+              environment: dependencies.env, ...dependencies.sensitiveInput,
+            });
+            await store.saveSecret(secret);
+          }
+          console.log(operation === "delete" ? "Named sensitive value removed." : "Named sensitive value stored.");
+          return { exitCode: 0 };
+        }
         const storeMode = value(args, "--store") || "native";
         if (!["native", "file"].includes(storeMode)) return { exitCode: 2, message: "--store must be native or file" };
         const allowFile = args.includes("--allow-file-store") || dependencies.env?.AIWG_AUTH_ALLOW_FILE_STORE === "1" || process.env.AIWG_AUTH_ALLOW_FILE_STORE === "1";
@@ -130,7 +150,8 @@ export function createAuthHandler(dependencies: AuthHandlerDependencies = {}): C
           : "Logged out and removed local credentials.");
         return { exitCode: 0 };
       } catch (error) {
-        return { exitCode: classify(error), message: error instanceof Error ? error.message : String(error) };
+        return { exitCode: classify(error), message: subcommand === 'secret' && !/^(--value-|A sensitive value|An interactive terminal|Sensitive value store name)/.test(error instanceof Error ? error.message : '')
+          ? 'Native sensitive value store operation failed.' : error instanceof Error ? error.message : String(error) };
       }
     },
   };

@@ -43,7 +43,10 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
-    timeout-minutes: 15
+    # A free-plan Socket org (500 units/hour) cannot cover one release in a
+    # single quota window, so the audit waits for the next window (see pace below).
+    # 90 minutes maximum npm visibility wait + 120 Socket pacing + 30 scan overhead.
+    timeout-minutes: 240
     defaults:
       run:
         shell: bash
@@ -123,7 +126,69 @@ jobs:
           Commit: ${TAG_COMMIT}
           EOF
 
+      - name: Wait for published npm versions
+        id: npm_visibility
+        shell: sh
+        env:
+          NPM_VISIBILITY_WAIT_MINUTES: ${{ vars.SOCKET_NPM_VISIBILITY_WAIT_MINUTES || '45' }}
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -eu
+          case "$NPM_VISIBILITY_WAIT_MINUTES" in
+            [1-9]|[1-8][0-9]|90) ;;
+            *) echo "SOCKET_NPM_VISIBILITY_WAIT_MINUTES must be an integer from 1 to 90" >&2; exit 1 ;;
+          esac
+          DEADLINE=$(( $(date +%s) + NPM_VISIBILITY_WAIT_MINUTES * 60 ))
+          while :; do
+            AVAILABLE=true
+            for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
+              REMAINING=$(( DEADLINE - $(date +%s) ))
+              if [ "$REMAINING" -le 0 ]; then
+                AVAILABLE=false
+                break
+              fi
+              VISIBLE_VERSION=$(timeout "$REMAINING" npm view "$PACKAGE@$VERSION" version \
+                --fetch-retries=0 --fetch-timeout=30000 2>/dev/null) || VISIBLE_VERSION=
+              if [ "$VISIBLE_VERSION" != "$VERSION" ]; then
+                echo "Waiting for npm visibility: $PACKAGE@$VERSION"
+                AVAILABLE=false
+              fi
+            done
+            if [ "$AVAILABLE" = true ]; then
+              echo "available=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            REMAINING=$(( DEADLINE - $(date +%s) ))
+            if [ "$REMAINING" -le 0 ]; then
+              break
+            fi
+            SLEEP_SECONDS=30
+            if [ "$REMAINING" -lt "$SLEEP_SECONDS" ]; then
+              SLEEP_SECONDS=$REMAINING
+            fi
+            sleep "$SLEEP_SECONDS"
+          done
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          TAG=${RELEASE_REF#refs/tags/}
+          cat > "$evidence_dir/workflow-status.md" <<EOF
+          # Socket post-publish workflow status
+
+          Status: unavailable: npm-review-pending
+          Stage: npm-visibility
+          Release: ${VERSION}
+          Ref: ${RELEASE_REF}
+          Commit: ${COMMIT}
+
+          Published npm versions were not all visible within ${NPM_VISIBILITY_WAIT_MINUTES} minutes.
+          Re-dispatch after npm review completes:
+
+          gh workflow run socket-post-publish.yml --repo jmagly/aiwg --ref main -f version=${VERSION} -f tag=${TAG} -f commit=${COMMIT}
+          EOF
+          cat "$evidence_dir/workflow-status.md" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build published dependency inventory
+        if: steps.npm_visibility.outputs.available == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
@@ -157,13 +222,21 @@ jobs:
           Ref: ${RELEASE_REF}
           EOF
 
+      - name: Install audit script runtime dependencies
+        # The audit script imports production dependencies (for example semver)
+        # from the checked-out release source; install them without lifecycle scripts.
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
       - name: Query Socket and evaluate baseline
         id: socket
+        if: steps.npm_visibility.outputs.available == 'true'
         continue-on-error: true
         env:
           SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
           SOCKET_ORG_SLUG: ${{ vars.SOCKET_ORG_SLUG }}
+          SOCKET_PACE_QUOTA_MINUTES: ${{ vars.SOCKET_PACE_QUOTA_MINUTES || '120' }}
           VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
         run: |
           set -uo pipefail
           STATUS_FILE="$evidence_dir/workflow-status.md"
@@ -183,7 +256,7 @@ jobs:
             --dependency-lock agentic/code/plugins/droid-bridge/package-lock.json \
             --dependency-lock tools/eval/package-lock.json \
             --dependency-lock apps/cockpit/desktop/src-tauri/Cargo.lock \
-            --commit "${{ steps.release.outputs.commit }}" \
+            --commit "$COMMIT" \
             --organization "${SOCKET_ORG_SLUG}" \
             --output-dir "$evidence_dir"; then
             AUDIT_STATUS=passed
@@ -197,7 +270,7 @@ jobs:
           Stage: socket-audit
           Release: ${VERSION}
           Ref: ${RELEASE_REF}
-          Commit: ${{ steps.release.outputs.commit }}
+          Commit: ${COMMIT}
           EOF
           [ "$AUDIT_STATUS" = passed ]
 

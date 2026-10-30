@@ -51,8 +51,8 @@ Core rules are non-negotiable defaults deployed to every AIWG installation.
 ### HIGH
 
 #### anti-laziness
-**Summary**: Two halves.
-**Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md
+**Summary**: Core rule (always loaded via its compact `anti-laziness.core.md` body): finish authorized work, verify, fix root causes, report faithfully. Owned by the aiwg-utils addon.
+**Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/anti-laziness.md
 
 #### executable-feedback
 **Summary**: Code-generating agents must execute tests before returning results.

@@ -25,12 +25,29 @@ export interface ReviewProposal {
   rationale: string;
 }
 
+/** Observed evaluator provenance and review evidence; agreement is not proof. */
+export interface ReviewEvaluation {
+  evaluatorModel?: string;
+  evaluatorVendor?: string;
+  evaluatorFamily?: string;
+  acceptanceCriteriaRef?: string;
+  disagreements?: Array<{
+    claimRef: string;
+    generatorPosition: string;
+    evaluatorPosition: string;
+    resolutionRef?: string;
+  }>;
+  /** Previous review/decision reference, recorded on the re-review after material fixes. */
+  reReviewOf?: string;
+}
+
 export interface ReviewDecision {
   reviewer: ReviewActor;
   proposalVersion: number;
   decision: 'approve' | 'reject';
   rationale: string;
   atEpochMs: number;
+  evaluation?: ReviewEvaluation;
 }
 
 export interface ReviewEvent {

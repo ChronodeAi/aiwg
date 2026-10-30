@@ -36,6 +36,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { resolveUserConfigDir } from '../config/user-config-dir.mjs';
 import { loadInstallationIdentity } from '../installation/manager.mjs';
+import { helperEnvironment } from '../process/cli-command.mjs';
 
 const CACHE_DIR = resolveUserConfigDir();
 const CACHE_FILE = path.join(CACHE_DIR, 'update-notifier.json');
@@ -261,10 +262,7 @@ const NOTIFIER_CHILD_ENV_ALLOWLIST = Object.freeze([
  * secret-shaped variable" (go/no-go review, blocker 1 tests).
  */
 export function notifierChildEnv(parentEnv = process.env) {
-  const env = {};
-  for (const name of NOTIFIER_CHILD_ENV_ALLOWLIST) {
-    if (parentEnv[name] !== undefined) env[name] = parentEnv[name];
-  }
+  const env = helperEnvironment(parentEnv, NOTIFIER_CHILD_ENV_ALLOWLIST);
   env.AIWG_UPDATE_NOTIFIER_CHILD = '1';
   return env;
 }

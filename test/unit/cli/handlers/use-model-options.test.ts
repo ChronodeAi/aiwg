@@ -63,6 +63,6 @@ describe('use scope deploy arguments', () => {
 
   it('keeps project deploys at project scope', () => {
     expect(collectUseScopeDeployArgs([])).toEqual([]);
-    expect(collectUseScopeDeployArgs(['--scope', 'project'])).toEqual([]);
+    expect(collectUseScopeDeployArgs(['--scope', 'project'])).toEqual(['--scope', 'project']);
   });
 });

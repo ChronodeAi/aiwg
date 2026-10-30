@@ -6,12 +6,12 @@
  *
  *   - discover          (cross-type ranked search)
  *   - skill-list        (enumerate canonical skill corpus)
- *   - skill-show        (fetch SKILL.md body)
+ *   - skill-show        (metadata card + drill-ins)
  *   - command-list      (enumerate CLI commands)
- *   - command-show      (fetch command definition)
+ *   - command-show      (metadata card + drill-ins)
  *   - rule-list         (enumerate rules)
- *   - rule-show         (fetch rule body)
- *   - agent-show        (fetch agent definition; agent-list pre-exists)
+ *   - rule-show         (metadata card + drill-ins)
+ *   - agent-show        (metadata card + drill-ins; agent-list pre-exists)
  *   - template-list     (enumerate templates)
  *   - template-show     (fetch raw template body)
  *
@@ -22,9 +22,32 @@
  */
 
 import { z } from 'zod';
+import { integer } from '../../schema/zod-validation.mjs';
 import { runAiwgCli, mcpError, mcpJson, AIWG_ROOT } from '../helpers.mjs';
 import path from 'node:path';
 import { pinContainedRoot, readContainedFile, listContainedFiles, validateContainedPath } from '../../utils/contained-filesystem.mjs';
+
+/** Shared CLI/MCP drill-in vocabulary for all discovery cards. */
+export const showDrillInSchema = {
+  body: z.boolean().optional().describe('Fetch the full authored body'),
+  section: z.array(z.string()).optional().describe('Exact headings (case-insensitive fallback); repeatable'),
+  rules: z.boolean().optional().describe('Show governing rule summaries and required checks'),
+  with_rule_bodies: z.boolean().optional().describe('Include full governing rule bodies'),
+  bound_rule_bodies: z.boolean().optional().describe('Legacy alias for with_rule_bodies'),
+  resources: z.boolean().optional().describe('List companion resources'),
+  resource: z.string().optional().describe('Fetch one resource path from the card'),
+};
+export function showDrillInArgs(input) {
+  return [
+    ...(input.body ? ['--body'] : []),
+    ...(input.section ?? []).flatMap(heading => ['--section', heading]),
+    ...(input.rules ? ['--rules'] : []),
+    ...(input.with_rule_bodies ? ['--with-rule-bodies'] : []),
+    ...(input.bound_rule_bodies ? ['--bound-rule-bodies'] : []),
+    ...(input.resources ? ['--resources'] : []),
+    ...(input.resource ? ['--resource', input.resource] : []),
+  ];
+}
 
 /**
  * Register discovery tools on the MCP server.
@@ -38,11 +61,11 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
   // ============================================================
   server.registerTool('discover', {
     title: 'Discover AIWG Capabilities',
-    description: 'Semantic search across AIWG operational assets: skills, agents, commands, rules, flows, runbooks, templates, and behaviors. Returns ranked candidates with capability summaries. Mirrors `aiwg discover --json`.',
+    description: 'Semantic search across AIWG operational assets: skills, agents, commands, rules, flows, runbooks, templates, and behaviors. Returns ranked candidates with capability summaries, governing rules, rule stats, and required fetch-and-follow checks before governed work. Mirrors `aiwg discover --json`.',
     inputSchema: {
       phrase: z.string().describe('Natural-language capability description (e.g. "create intake form")'),
       type: z.enum(['skill', 'agent', 'command', 'rule', 'flow', 'runbook', 'template', 'behavior']).optional().describe('Restrict to one artifact type'),
-      limit: z.number().int().min(1).max(50).default(5).describe('Maximum results (default 5)'),
+      limit: integer().min(1).max(50).default(5).describe('Maximum results (default 5)'),
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, async ({ phrase, type, limit }) => {
@@ -67,7 +90,7 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
     description: 'Enumerate available AIWG skills from the canonical corpus. Optional filter by name pattern.',
     inputSchema: {
       filter: z.string().optional().describe('Substring or glob filter on skill name'),
-      limit: z.number().int().min(1).max(500).default(50).describe('Maximum results'),
+      limit: integer().min(1).max(500).default(50).describe('Maximum results'),
     },
     annotations: { readOnlyHint: true },
   }, async ({ filter, limit }) => {
@@ -83,14 +106,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
 
   server.registerTool('skill-show', {
     title: 'Show AIWG Skill',
-    description: 'Fetch the full body of an AIWG SKILL.md by name. Returns path + content envelope.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Skill name (slug; e.g. "intake-wizard")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'skill', name, '--json']);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'skill', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`skill-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {
@@ -121,14 +145,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
 
   server.registerTool('command-show', {
     title: 'Show AIWG CLI Command Definition',
-    description: 'Fetch the full spec/help text for a specific `aiwg` CLI command.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Command name (e.g. "use", "discover", "ralph")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'command', name, '--json']);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'command', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`command-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {
@@ -139,12 +164,33 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
   // ============================================================
   // rule-list / rule-show  (#1320)
   // ============================================================
+  server.registerTool('rule-inventory', {
+    title: 'Inventory configured AIWG rules',
+    description: 'Inspect scoped rule configuration and activation without asserting native session loading. Mirrors aiwg rules inventory --json.',
+    inputSchema: {
+      scope: z.enum(['workspace', 'user', 'installation', 'catalog']).default('workspace'),
+      capability: z.string().optional(), activation: z.string().optional(),
+      tier: z.string().optional(), provider: z.string().optional(), bodies: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: true },
+  }, async ({ scope, capability, activation, tier, provider, bodies }) => {
+    try {
+      const args = ['rules', 'inventory', '--scope', scope ?? 'workspace', '--json'];
+      for (const [flag, value] of [['--capability', capability], ['--activation', activation], ['--tier', tier], ['--provider', provider]]) {
+        if (value) args.push(flag, value);
+      }
+      if (bodies) args.push('--bodies');
+      const { stdout, code, stderr } = await runAiwgCli(args);
+      if (code !== 0) return mcpError(`rule-inventory failed: ${stderr || stdout}`);
+      return mcpJson(stdout);
+    } catch (err) { return mcpError(`rule-inventory: ${err.message}`); }
+  });
   server.registerTool('rule-list', {
     title: 'List AIWG Rules',
     description: 'Enumerate AIWG enforcement rules (e.g. skill-discovery, no-attribution, anti-laziness, citation-policy). Top-7 CRITICAL/HIGH rules are inlined into Hermes AGENTS.md priming (skill-discovery added #1347); this tool reaches the rest.',
     inputSchema: {
       filter: z.string().optional().describe('Substring filter on rule name'),
-      limit: z.number().int().min(1).max(200).default(50),
+      limit: integer().min(1).max(200).default(50),
     },
     annotations: { readOnlyHint: true },
   }, async ({ filter, limit }) => {
@@ -160,14 +206,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
 
   server.registerTool('rule-show', {
     title: 'Show AIWG Rule',
-    description: 'Fetch the full body of a specific AIWG rule by name.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Rule name (e.g. "no-attribution", "anti-laziness")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'rule', name, '--json']);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'rule', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`rule-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {
@@ -180,14 +227,15 @@ export function registerDiscoveryTools(server, { corpusStore } = {}) {
   // ============================================================
   server.registerTool('agent-show', {
     title: 'Show AIWG Agent Definition',
-    description: 'Fetch the full agent definition (system prompt + frontmatter) by name.',
+    description: 'Return the AIWG metadata card with governing rules, outline, resources, and drill-in guidance. Use body/section for authored content.',
     inputSchema: {
+      ...showDrillInSchema,
       name: z.string().describe('Agent name (e.g. "test-engineer", "security-auditor")'),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ name }) => {
+  }, async ({ name, ...drillIn }) => {
     try {
-      const { stdout, code, stderr } = await runAiwgCli(['show', 'agent', name, '--json']);
+      const { stdout, code, stderr } = await runAiwgCli(['show', 'agent', name, '--json', ...showDrillInArgs(drillIn)]);
       if (code !== 0) return mcpError(`agent-show failed: ${stderr}`);
       return mcpJson(stdout);
     } catch (err) {

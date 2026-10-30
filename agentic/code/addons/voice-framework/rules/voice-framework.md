@@ -1,4 +1,13 @@
 ---
+activation: paths
+summary: "Apply the audience-appropriate voice using project, user, then built-in profile precedence; write precisely with concrete examples and varied structure."
+bound_to:
+  skills:
+    - output-mode-guide
+    - voice-analyze
+    - voice-apply
+    - voice-blend
+    - voice-create
 enforcement: medium
 paths:
   - "**/*.md"

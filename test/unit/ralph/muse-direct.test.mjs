@@ -96,18 +96,27 @@ test('T-OG-06 exactly registers both partial Muse test files', () => {
   const registry = loadOrchestrationPackRegistry(root);
   const report = inspectPackRegistry(registry, root);
   assert.equal(report.packs['T-OG-06'].status, 'partial');
-  assert.deepEqual(report.packs['T-OG-06'].testFiles, [
-    'test/conformance/orchestration-v1/muse-direct.test.ts', 'test/unit/ralph/muse-direct.test.mjs']);
+  const museFiles = ['test/conformance/orchestration-v1/muse-direct.test.ts', 'test/unit/ralph/muse-direct.test.mjs'];
+  // The Muse fragment registers exactly its own two files; other owners (e.g. #2926
+  // scheduler fixtures) may also register T-OG-06 tests in packs.json.
+  const fragment = JSON.parse(readFileSync(path.join(root, 'test/conformance/orchestration-v1/packs.d/muse.json'), 'utf8'));
+  assert.deepEqual(fragment['T-OG-06'], museFiles);
+  assert.deepEqual(report.packs['T-OG-06'].testFiles.slice(-museFiles.length), museFiles);
+  assert.equal(report.packs['T-OG-06'].testFiles.filter(file => file.includes('muse')).length, museFiles.length);
 });
 
-test('workspace trust defaults off and only the host profile can explicitly enable it', () => {
+test('workspace trust defaults on for conductor-prepared worker trees; only the host mapping controls it (#3685)', () => {
   const { profile, input } = directInput();
-  assert.equal(profile.controls.trust.mapping, '[]');
+  assert.equal(profile.controls.trust.mapping, '["--trust-workspace"]');
+  const args = owner.buildWorkerArgs(input, profile, { sandbox: 'external' });
+  assert.ok(args.includes('--trust-workspace'));
+  assert.equal(args[args.indexOf('--workspace') + 1], input.cwd);
+  assert.equal(args[args.indexOf('--trust-workspace') - 1], input.cwd);
+  const readOnly = owner.buildWorkerArgs(input, profile, { sandbox: 'read-only' });
+  for (const flag of ['--trust-workspace', '--disable-write', '--disable-shell']) assert.ok(readOnly.includes(flag));
+  for (const flag of ['--yolo', '--disable-sandbox']) assert.ok(!readOnly.includes(flag));
+  profile.controls.trust.mapping = '[]';
   assert.ok(!owner.buildWorkerArgs(input, profile, { sandbox: 'external' }).includes('--trust-workspace'));
-  profile.controls.trust.mapping = '["--trust-workspace"]';
-  const args = owner.buildWorkerArgs(input, profile, { sandbox: 'read-only' });
-  for (const flag of ['--trust-workspace', '--disable-write', '--disable-shell']) assert.ok(args.includes(flag));
-  for (const flag of ['--yolo', '--disable-sandbox']) assert.ok(!args.includes(flag));
   profile.controls.trust.mapping = '["--yolo"]';
   assert.throws(() => owner.buildWorkerArgs(input, profile, { sandbox: 'external' }), /trust/);
 });

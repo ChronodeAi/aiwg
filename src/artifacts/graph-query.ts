@@ -9,10 +9,22 @@
  * @tests @test/unit/artifacts/graph-query.test.ts
  */
 
-import type { DependencyGraph, GraphType, TypedEdge } from './types.js';
+import path from 'node:path';
+import { isRefId, refIdFromFilename } from '../research/identity.js';
+import type { ArtifactIndex, MetadataEntry, DependencyGraph, GraphType, TypedEdge } from './types.js';
 import { normalizeEdges } from './types.js';
-import { buildFortemiCoreDependencyGraph } from './fortemi-core-query-adapter.js';
+import { buildFortemiCoreDependencyGraph, loadFortemiCoreMetadataEntries } from './fortemi-core-query-adapter.js';
 import { closeGraphBackend, openGraphBackend } from './backend-runtime.js';
+import { loadGraphIndexFile } from './index-reader.js';
+import { isOrdinaryMemoryEntry } from './query-engine.js';
+
+function graphMemoryMetadata(cwd: string, graph: GraphType, backend: 'local' | 'fortemi-core'): Record<string, MetadataEntry> {
+  const local = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', graph)?.entries ?? {};
+  if (backend === 'fortemi-core') {
+    return { ...Object.fromEntries(loadFortemiCoreMetadataEntries(cwd, graph).entries.map(entry => [entry.path, entry])), ...local };
+  }
+  return local;
+}
 
 export interface NeighborsOptions {
   /** Graph to query */
@@ -61,17 +73,18 @@ export function getNeighbors(
   graph: DependencyGraph,
   node: string,
   direction: 'in' | 'out' | 'both' = 'both',
-  edgeType?: string
+  edgeType?: string,
+  metadata: Record<string, MetadataEntry> = {},
 ): string[] {
   const entry = graph[node];
-  if (!entry) return [];
+  if (!entry || (metadata[node] && !isOrdinaryMemoryEntry(metadata[node]))) return [];
 
   const results = new Set<string>();
 
   if (direction === 'in' || direction === 'both') {
     const edges: TypedEdge[] = normalizeEdges(entry.upstream as (string | TypedEdge)[]);
     for (const edge of edges) {
-      if (!edgeType || edge.type === edgeType) {
+      if ((!edgeType || edge.type === edgeType) && (!metadata[edge.path] || isOrdinaryMemoryEntry(metadata[edge.path]))) {
         results.add(edge.path);
       }
     }
@@ -80,7 +93,7 @@ export function getNeighbors(
   if (direction === 'out' || direction === 'both') {
     const edges: TypedEdge[] = normalizeEdges(entry.downstream as (string | TypedEdge)[]);
     for (const edge of edges) {
-      if (!edgeType || edge.type === edgeType) {
+      if ((!edgeType || edge.type === edgeType) && (!metadata[edge.path] || isOrdinaryMemoryEntry(metadata[edge.path]))) {
         results.add(edge.path);
       }
     }
@@ -94,7 +107,7 @@ export function getNeighbors(
  *
  * Supports:
  * - Exact path match ("documentation/citations/REF-008-citations.md")
- * - REF-XXX shorthand — finds the first key containing the REF identifier
+ * - REF-XXX shorthand — finds a key with the exact REF filename token
  * - Partial path match — finds the first key ending with the given string
  */
 export function resolveNode(graph: DependencyGraph, node: string): string | null {
@@ -102,8 +115,8 @@ export function resolveNode(graph: DependencyGraph, node: string): string | null
   if (graph[node]) return node;
 
   // REF-XXX shorthand
-  if (/^REF-\d+$/.test(node)) {
-    const key = Object.keys(graph).find(k => k.includes(node));
+  if (isRefId(node)) {
+    const key = Object.keys(graph).find(k => refIdFromFilename(path.basename(k)) === node);
     return key ?? null;
   }
 
@@ -191,7 +204,7 @@ export async function showNeighbors(
     process.exit(1);
   }
 
-  const neighbors = getNeighbors(graph, resolved, direction, edgeType);
+  const neighbors = getNeighbors(graph, resolved, direction, edgeType, graphMemoryMetadata(cwd, graphType, backend));
 
   if (json) {
     console.log(JSON.stringify({
@@ -273,8 +286,9 @@ export async function executeSetQuery(
     process.exit(1);
   }
 
-  const neighborsA = getNeighbors(graph, resolvedA, direction, edgeType);
-  const neighborsB = getNeighbors(graph, resolvedB, direction, edgeType);
+  const metadata = graphMemoryMetadata(cwd, graphType, backend);
+  const neighborsA = getNeighbors(graph, resolvedA, direction, edgeType, metadata);
+  const neighborsB = getNeighbors(graph, resolvedB, direction, edgeType, metadata);
 
   let result: string[];
   switch (op) {

@@ -117,3 +117,75 @@ The security incident template at `agentic/code/extensions/sec/templates/securit
 The exporter is disabled by default. Before enabling it for production, record the approved collector hostname, DNS ownership, certificate trust chain, egress firewall/proxy configuration, retention/deletion policy and operator approval. Use an isolated collector that accepts OTLP/HTTP JSON at `/v1/traces` over TLS without embedded URL credentials. Verify a real exported trace by querying that collector: spans, links and chronology must match the receipt; no protected canary or provider request ID may appear. Verify refusal when DNS changes to private or mixed public/private answers, when the collector returns partial success or redirects, and when it stalls. Test sustained load against the approved queue capacity, deadline and collector throughput; measure dropped/failed/timeout diagnostics and memory. No production collector or external load qualification is implied by the offline tests.
 
 For a telemetry-loss drill, stall or disconnect the collector, verify bounded diagnostics and unchanged decision/receipt outcomes, restore connectivity and confirm fresh traces without retroactive duplicate accounting. For suspected egress, disable the sink, preserve sanitized traces and access logs under legal hold, inspect DNS/TLS/egress logs and notify the incident owner; do not attach raw payloads to tickets. For credential compromise, rotate credentials outside this exporter (which never accepts URL credentials), inspect collector ACLs and access audit, and follow the linked security incident template. For evidence preservation, apply the trace/review/job retention and tombstone rules before sanitized export, log the custodian and canary scan, and verify deletion or hold behavior. Record timestamps, collector version, trace IDs, findings and recovery evidence in the incident record; exercises are not complete until performed against the approved deployment.
+
+## Optional worker receipt projection (#2929)
+
+`WorkerReceiptTelemetry` projects the existing `dispatch-evidence.mjs`
+`buildDirectActivityReceipt()` evidence into `worker.attempt` spans using the same
+`decision-telemetry/v1` contract and bounded exporter. It adopts the GenAI model
+and token attributes from **OpenTelemetry semantic-conventions v1.37.0**
+([tagged specification](https://github.com/open-telemetry/semantic-conventions/tree/v1.37.0/docs/gen-ai)).
+These GenAI conventions are developmental; upgrades require an explicit mapping
+review. The trace's `schemaUrl` (also the OTLP scope schema URL) is
+`https://opentelemetry.io/schemas/1.37.0`, and
+`aiwg.otel.gen_ai_semconv_revision` records `1.37.0`.
+
+The host explicitly constructs an observer with `enabled: true`, a sink, trusted
+worker selection policy, conductor/run IDs and an operator `allowedModels` list.
+Pass it as the optional second argument to `buildDirectActivityReceipt(fields,
+observer)`, or call `observer.offer(existingReceipt, timing)` after retaining
+evidence. Neither receipts nor traces become mandatory for direct dispatch.
+No exporter, environment switch, Mission session, MC daemon, managed admission
+store or remote service is created automatically. Omitted/false `enabled` or an
+absent sink exports nothing. Drain with `shutdown()` only outside dispatch and
+completion handling.
+
+One observer covers attempts sharing a task policy; use separate observers for
+different policy scopes. An observer correlates attempts in a W3C trace. An optional
+validated conductor `parent` supplies causal ancestry; vendor tracestate is
+dropped. Conductor, run, task and invocation IDs become SHA-256 opaque attributes;
+each observation has a fresh span ID. No paths, command digests, provider request
+IDs, arbitrary events/links or receipt payloads are copied. The fixed
+`attempt.terminated` event records only `confirmed`, `uncertain` or unknown
+termination. Span status stays unset: termination does not prove acceptance.
+Explicit timing uses existing host evidence; without it, the span marks receipt
+observation time with zero duration, never invented execution time.
+
+`gen_ai.request.model` is requested configuration; `gen_ai.response.model` comes
+only from observed identity and never falls back to the request. Only
+operator-listed, bounded model labels pass; secret-shaped labels are suppressed.
+Backend-attested observation has `provider-fact` provenance; runtime configuration
+alone is `client-derived`; unavailable identity stays unknown. Receipt usage
+quality `reported`, `estimated`, or `unknown` maps to `provider-fact`, `estimate`,
+or `unknown`. Missing/invalid counts and unknown-quality numerics become null;
+known zero stays zero. Provenance is retained in the internal map and exported
+as `aiwg.worker.observed_model_provenance`, `aiwg.usage.quality`,
+`aiwg.usage.input_tokens_provenance`, `aiwg.usage.output_tokens_provenance`, and
+`aiwg.usage.cost_provenance`. Unknown GenAI attributes are omitted from OTLP
+rather than encoded as numeric zero or a string measurement.
+
+Before mapping or enqueue, the observer requires the host's existing
+`selection.dataPolicy.allowedProcessing` to explicitly include `remote`. A
+selected `dataClass` must exist, and its `allowedProcessing`, when specified,
+must also permit remote processing. Unknown policy/classes and local-only
+restrictions suppress export entirely, including to a valid HTTPS collector.
+Policy is copied at construction and never read from worker output. The host
+must supply the policy resolved for this task; HTTPS/DNS validation is transport
+validation and grants no permission to export local-only metadata.
+
+Worker mapping constructs every field explicitly. Prompt, brief, final, env,
+free-form error text and arbitrary receipt fields never enter a trace. The
+exporter additionally applies its metadata allowlist and optional canary filter;
+worker diagnostics always use fixed text, including for custom sinks. The default
+queue holds at most 32 traces plus one in flight, each at most 65,536 serialized
+bytes, with a 1,000ms export deadline and at most 100 diagnostics. Full queues,
+oversized traces, exceptions, outages and abort-ignoring sinks cannot delay receipt
+construction or alter dispatch, completion, retained files or effects. Shutdown
+drains at most the bounded queued work; failed exports are not retried. The
+projection retains no receipts and does not replay historical evidence.
+
+T-OG-09/10/13 register synthetic correlation, provenance/unknown usage,
+prompt/final/env/secret canaries, class-local-only no-egress and collector
+outage/saturation/hang fixtures as **partial** coverage. Mission/effects remain
+the evidence owners. Managed integration, production collector qualification and
+other P2/P3 assertions remain outside this slice; direct traces stay optional.

@@ -1,3 +1,4 @@
+import { copyWorkerAdapterRuntime } from '../../helpers/worker-adapter-runtime.mjs';
 /**
  * #2909 (B-OG-44) DeepSeek Harness (`dsh`) promotion: offline S1 profile
  * work. T-OG-15 renders the version-bound `deepseek-harness-direct`
@@ -11,6 +12,7 @@
  * bundled profile stays unqualified (DH08).
  */
 import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
+import { launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -55,11 +57,7 @@ async function installPackage(bytes: Buffer) {
   await writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: APPROVED.entry.packageName,
     version: APPROVED.entry.packageVersion, type: 'module' }), { mode: 0o644 });
   await writeFile(path.join(packageRoot, 'lib', 'deepseek-harness-adapter.mjs'), bytes, { mode: 0o644 });
-  for (const name of ['provider-adapter.mjs', 'worker-health.mjs']) {
-    const dest = path.join(packageRoot, 'lib', name);
-    await copyFile(path.resolve('tools/ralph-external/lib', name), dest);
-    await chmod(dest, 0o644);
-  }
+  await copyWorkerAdapterRuntime(base, packageRoot);
   // Legacy class in the same module file imports this transport module too.
   // '../../providers/...' from pkg/lib resolves to base/providers/... (pkg/lib
   // mirrors tools/ralph-external/lib; base mirrors tools/).
@@ -86,7 +84,7 @@ async function installPackage(bytes: Buffer) {
 }
 
 function loadingRegistry() {
-  const registry = structuredClone(loadProviderModelCapabilities());
+  const registry = { ...structuredClone(loadProviderModelCapabilities()), workerAdapters: {} };
   registry.providers['deepseek-harness'].workerAdapter = structuredClone(registry.providers['deepseek-harness'].workerHealthAdapter);
   return registry;
 }
@@ -265,7 +263,14 @@ describe('T-OG-15 DeepSeek Harness direct command contract', () => {
     const result = await new SessionLauncher().launchWorker({ invocationPath, runDir,
       inputs: { snapshot, drivers }, now: '2026-10-07T00:00:00Z',
       checkDispatch: () => ({ ok: true, enabled: true, failures: [] }),
+      launchIsolated: (options: any) => {
+        const launched = launchIsolatedWorker(options);
+        const proof = (outcome: any) => ({ ...outcome, mode: 'systemd-unit', unit: 'aiwg-worker-dsh-fixture' });
+        return launched?.then ? launched.then(proof) : proof(launched);
+      },
+      isolationStatus: () => ({ active: false, cgroupEmpty: true, execMainCode: 1, execMainStatus: 0, result: 'success' }),
       isolation: { mode: 'degraded', reason: 'synthetic' }, allowDegraded: true });
+    expect(result.termination).toBe('confirmed');
     const record = JSON.parse(await readFile(recordPath, 'utf8'));
     expect(record).toMatchObject({ model: MODEL, effort: EFFORT, sandbox: 'workspace-write', approval: 'never', cwd: workdir,
       patchPath: path.join(runDir, 'artifact-dsh-patch'), brief: payload });

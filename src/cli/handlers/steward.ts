@@ -18,8 +18,6 @@
  */
 
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
-import { access } from 'node:fs/promises';
-import { join } from 'node:path';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
 import {
   loadCapabilityMatrix,
@@ -40,23 +38,10 @@ import {
   discoverProjectLocalBundles,
   type ProjectLocalBundle,
 } from '../../extensions/project-local-discovery.js';
-import { routeModelTier } from '../../models/router.js';
-import { buildWrapperRouteEnvelope, type RoutedCapabilityType } from '../../models/wrapper-route.js';
-import {
-  loadProviderModelCatalog,
-  type ModelPolicyProvider,
-  type ProviderModelCatalog,
-} from '../../models/provider-policy.js';
-import {
-  CapabilityResolutionError,
-  resolveRoutableCapability,
-} from '../../artifacts/capability-resolver.js';
+import { printFullMatrix, permissionsUsage, formatProvider, emulationLabel } from './steward-format.js';
+import { handleStewardModels } from './steward-models.js';
 
 const BASELINE_PROVIDER = 'claude-code';
-
-function isModelPolicyProvider(provider: string): provider is ModelPolicyProvider {
-  return Object.hasOwn(loadProviderModelCatalog().providers, provider);
-}
 
 interface ResolvedStewardProvider {
   id: string;
@@ -88,63 +73,6 @@ async function detectProvider(ctx?: HandlerContext): Promise<string | null> {
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
-
-const NATIVE_MARK = '✓ native';
-const EMULATED_MARK = '~ emulated';
-const EXTERNAL_MARK = '↗ external';
-const UNSUPPORTED_MARK = '- not supported';
-
-function emulationLabel(strategy: string | null): string {
-  if (!strategy) return 'none';
-  if (strategy === 'native') return 'native (no fallback needed)';
-  return strategy;
-}
-
-function formatProvider(
-  id: string,
-  provider: ProviderCapabilities,
-  matrix: CapabilityMatrix,
-  meta?: ResolvedStewardProvider['projectLocal'],
-): string {
-  const lines: string[] = [];
-  lines.push(`\n  Provider: ${provider.display_name} (${id})`);
-  if (meta) {
-    lines.push(`  Project-local: yes`);
-    lines.push(`  Base adapter:   ${meta.baseAdapter}`);
-  }
-  lines.push(`  Status:   ${provider.status}`);
-  lines.push(`  Daemon:   ${provider.daemon_tier}${provider.daemon_pty_adapter ? ' (+ pty-adapter)' : ''}`);
-  lines.push(`  ${'─'.repeat(60)}`);
-
-  const featureKeys = Object.keys(matrix.features) as FeatureKey[];
-  for (const featureId of featureKeys) {
-    const isNative = provider.native_features?.[featureId] === true;
-    const emulation = provider.emulation?.[featureId] ?? null;
-    const status = isNative
-      ? NATIVE_MARK
-      : isExternalStrategy(emulation) ? EXTERNAL_MARK : (emulation ? EMULATED_MARK : UNSUPPORTED_MARK);
-    const feat = matrix.features[featureId];
-
-    lines.push(`\n  ${featureId} — ${status}`);
-    if (feat?.description) lines.push(`    ${feat.description}`);
-    if (isNative) {
-      if (id === 'omp' && featureId === 'mcp') {
-        lines.push('    OMP supplies the native client. AIWG persistent injection/removal is available for project and profile scope; ephemeral injection is unsupported.');
-        lines.push('    example: aiwg mcp inject --provider omp --servers local-tools');
-      } else if (id === 'omp' && featureId === 'behaviors') {
-        lines.push('    AIWG bridges selected handlers through an OMP extension; no default policy is installed. Permission-request and pre-compaction enforcement are unsupported.');
-      } else if (id === 'omp' && (featureId === 'tasks' || featureId === 'agent_teams')) {
-        lines.push('    OMP native leaf tasks use AIWG workspace admission limits and verified child results; nested requests share the same scheduler.');
-        lines.push('    example: aiwg team run --provider omp --body-file tasks.json');
-      } else if (feat?.native_example) lines.push(`    example: ${feat.native_example}`);
-    } else if (isExternalStrategy(emulation)) {
-      lines.push(`    trigger: system cron, systemd timer, or CI; AIWG does not own the clock`);
-    } else if (emulation) {
-      lines.push(`    fallback: ${emulationLabel(emulation)}`);
-    }
-  }
-  return lines.join('\n');
-}
 
 async function findProjectLocalProvider(
   projectDir: string,
@@ -207,53 +135,6 @@ async function resolveStewardProvider(
   };
 }
 
-function printFullMatrix(matrix: CapabilityMatrix): void {
-  const { providers, features } = matrix;
-  const providerIds = Object.keys(providers);
-  const featureIds = Object.keys(features) as FeatureKey[];
-
-  console.log(`\n  Provider Capability Matrix (v${matrix.version})`);
-  console.log(`  ✓ = native   ~ = AIWG emulation   - = not supported\n`);
-
-  const featureColW = 20;
-  const provColW = 14;
-  const header = '  ' + 'Feature'.padEnd(featureColW) + providerIds.map(p => p.padEnd(provColW)).join('');
-  console.log(header);
-  console.log('  ' + '─'.repeat(featureColW + providerIds.length * provColW));
-
-  for (const featureId of featureIds) {
-    const feat = features[featureId];
-    let row = '  ' + featureId.padEnd(featureColW);
-    for (const providerId of providerIds) {
-      const provider = providers[providerId];
-      const isNative = provider?.native_features?.[featureId] === true;
-      const emulation = provider?.emulation?.[featureId] ?? null;
-      const mark = isNative ? '✓' : (emulation ? '~' : '-');
-      row += mark.padEnd(provColW);
-    }
-    console.log(row);
-    if (feat?.description) {
-      console.log('  ' + ' '.repeat(featureColW) + feat.description);
-    }
-    console.log('');
-  }
-}
-
-// ── Main execution ─────────────────────────────────────────────────────────────
-
-function permissionsUsage(): string {
-  return `
-  aiwg steward permissions — authorization model audit and normalization
-
-  Usage:
-    aiwg steward permissions audit                 Find normalized-model errors and legacy grants
-    aiwg steward permissions migrate --dry-run     Preview legacy permission normalization
-    aiwg steward permissions migrate --apply       Back up and atomically normalize config
-
-  Reads .aiwg/aiwg.config authorization block. Migration backs up before writing.
-`;
-}
-
 async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void> {
   const subcommand = args[0];
 
@@ -262,6 +143,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
   aiwg steward — Provider capability awareness and command routing
 
   Usage:
+    aiwg steward decision-offload [--json]         Offline advisory readiness and adoption report
     aiwg steward capabilities --provider <name>   Capabilities for a specific provider
     aiwg steward capabilities --feature <name>    Provider support matrix for a feature
     aiwg steward capabilities --all               Full matrix (all providers x features)
@@ -271,6 +153,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     aiwg steward models --route --capability-type <agent|skill|rule|workflow>
       --capability <id> --assignment <text> [--provider <name>] [--json]
                                                   Emit a capability-bound wrapper launch envelope
+    aiwg steward authorization                    Bounded HITL policy: inspect/validate/preview/enable/revoke
     aiwg steward permissions audit                Find normalized-model errors and legacy grants
     aiwg steward permissions migrate --dry-run    Preview legacy permission normalization
     aiwg steward permissions migrate --apply      Back up and atomically normalize config
@@ -287,6 +170,22 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     provider-compiled role/tier policy, and cheap-first defaults unless policy
     or human rationale escalates.
 `);
+    return;
+  }
+
+  if (subcommand === 'decision-offload') {
+    const unknown = args.slice(1).filter(arg => arg !== '--json');
+    if (unknown.length) throw new AiwgError({ code: 'ERR_USAGE_UNKNOWN_ARGUMENT',
+      message: `Unknown decision-offload argument: ${unknown[0]}`, exitCode: EXIT_CODES.USAGE });
+    const { buildDecisionOffloadSnapshot } = await import('../../decision/offload.js');
+    const decisionOffload = await buildDecisionOffloadSnapshot({ projectRoot: ctx?.cwd ?? process.cwd(), frameworkRoot: ctx?.frameworkRoot });
+    console.log(JSON.stringify(args.includes('--json') ? { decisionOffload } : decisionOffload, null, 2));
+    return;
+  }
+
+  if (subcommand === 'authorization') {
+    const { authorizationCli } = await import('../../config/authorization-cli.js');
+    await authorizationCli(args.slice(1), ctx?.cwd);
     return;
   }
 
@@ -526,147 +425,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     return;
   }
 
-  if (subcommand === 'models' || subcommand === 'model-routing') {
-    const flagValue = (name: string): string | undefined => {
-      const index = args.indexOf(name);
-      if (index < 0) return undefined;
-      const value = args[index + 1];
-      if (!value || value.startsWith('--')) throw new AiwgError({
-        code: 'ERR_USAGE_MISSING_VALUE',
-        message: `${name} requires a value.`,
-        exitCode: EXIT_CODES.USAGE,
-      });
-      return value;
-    };
-    if (args.includes('--route')) {
-      const rawProvider = flagValue('--provider') ?? await resolveActiveProvider({
-        cwd: ctx ? getProjectDir(ctx, ctx.args) : process.cwd(),
-        detectProcess: true,
-      }).then(result => result.provider ?? undefined);
-      const provider = normalizeProviderId(rawProvider);
-      if (!provider || provider === 'generic') throw new AiwgError({
-        code: 'ERR_USAGE_UNKNOWN_PROVIDER',
-        message: `Cannot compile a wrapper route for provider: ${rawProvider ?? '(undetected)'}`,
-        hint: 'Pass --provider with a supported provider id.',
-        exitCode: EXIT_CODES.USAGE,
-      });
-      if (!isModelPolicyProvider(provider)) throw new AiwgError({
-        code: 'ERR_USAGE_UNSUPPORTED_PROVIDER',
-        message: `Model wrapper routing is not implemented for provider: ${provider}`,
-        hint: 'Use `aiwg steward capabilities --provider pi` for current Pi capability routing; model routing is tracked separately.',
-        exitCode: EXIT_CODES.USAGE,
-      });
-      const capabilityType = flagValue('--capability-type') as RoutedCapabilityType | undefined;
-      const capability = flagValue('--capability');
-      const assignment = flagValue('--assignment');
-      if (!capabilityType || !['agent', 'skill', 'rule', 'workflow'].includes(capabilityType)) throw new AiwgError({
-        code: 'ERR_USAGE_MISSING_VALUE',
-        message: '--capability-type requires agent, skill, rule, or workflow.',
-        exitCode: EXIT_CODES.USAGE,
-      });
-      if (!capability || !assignment) throw new AiwgError({
-        code: 'ERR_USAGE_MISSING_VALUE',
-        message: '--route requires both --capability <id> and --assignment <bounded text>.',
-        exitCode: EXIT_CODES.USAGE,
-      });
-      const capabilityProvider = capabilityProviderId(provider);
-      const providerCapabilities = capabilityProvider ? matrix.providers[capabilityProvider] : undefined;
-      const launchMechanism = providerCapabilities?.native_features.tasks
-        ? 'native-subagent'
-        : providerCapabilities?.emulation.tasks === 'aiwg-mc' ? 'aiwg-mc' : 'manual';
-      const premiumAuthorized = args.includes('--allow-premium');
-      const { collectProviderInventory } = await import('../../providers/provider-inventory.js');
-      const { resolveDynamicModelCatalog } = await import('../../models/model-discovery.js');
-      const projectDir = ctx ? getProjectDir(ctx, ctx.args) : process.cwd();
-      const requestedAiwgRoot = ctx?.frameworkRoot ?? process.cwd();
-      const aiwgRoot = await access(join(
-        requestedAiwgRoot,
-        'agentic/code/providers/model-catalog.v1.json',
-      )).then(() => requestedAiwgRoot).catch(() => process.cwd());
-      const resolvedCapability = await resolveRoutableCapability(
-        aiwgRoot,
-        capabilityType,
-        capability,
-      ).catch(error => {
-        if (!(error instanceof CapabilityResolutionError)) throw error;
-        throw new AiwgError({
-          code: error.kind === 'ambiguous'
-            ? 'ERR_USAGE_AMBIGUOUS_CAPABILITY'
-            : 'ERR_USAGE_UNKNOWN_CAPABILITY',
-          message: error.message,
-          hint: 'Run aiwg discover "<capability>" --json and pass an exact name or stable id.',
-          exitCode: EXIT_CODES.USAGE,
-        });
-      });
-      const catalog = await resolveDynamicModelCatalog({
-        aiwgRoot,
-        inventory: await collectProviderInventory(projectDir),
-        allowNetwork: false,
-      });
-      const baselineCatalog = loadProviderModelCatalog();
-      const effectiveCatalog = {
-        ...baselineCatalog,
-        ...catalog,
-        refreshedAt: catalog.refreshedAt ?? baselineCatalog.refreshedAt,
-        staleAfterDays: baselineCatalog.staleAfterDays,
-        providers: { ...baselineCatalog.providers, ...catalog.providers },
-      } as ProviderModelCatalog;
-      const envelope = buildWrapperRouteEnvelope({
-        provider,
-        capability: resolvedCapability,
-        assignment,
-        launchMechanism,
-        deterministic: args.includes('--deterministic'),
-        routine: args.includes('--routine'),
-        complex: args.includes('--complex'),
-        highImpact: args.includes('--high-impact'),
-        requestedPremium: args.includes('--premium'),
-        unattended: args.includes('--unattended'),
-        premiumAuthorized,
-        maxAutoTier: premiumAuthorized ? 3 : undefined,
-        catalog: effectiveCatalog,
-      });
-      if (args.includes('--json')) console.log(JSON.stringify(envelope, null, 2));
-      else {
-        console.log('\n  Model wrapper route');
-        console.log(`  Provider:   ${envelope.provider}`);
-        console.log(`  Capability: ${envelope.capability.type} ${envelope.capability.name} (${envelope.capability.id})`);
-        console.log(`  Tier/role:  ${envelope.tier ?? 'deterministic'}/${envelope.role ?? 'none'}`);
-        console.log(`  Wrapper:    ${envelope.wrapper ?? 'none'}`);
-        console.log(`  Model:      ${envelope.model?.effectiveModel ?? 'inherited or no model call'} (${envelope.model?.outcome ?? 'deterministic'})`);
-        console.log(`  Launch:     ${envelope.launch.mechanism}`);
-        console.log(`  Confirmation: ${envelope.decision.requiresConfirmation ? 'required' : 'not required'}`);
-        console.log('\n  Wrapper prompt:\n');
-        console.log(envelope.launch.prompt);
-      }
-      return;
-    }
-    const decision = routeModelTier({
-      deterministic: args.includes('--deterministic'),
-      routine: args.includes('--routine'),
-      complex: args.includes('--complex'),
-      highImpact: args.includes('--high-impact'),
-      requestedPremium: args.includes('--premium'),
-      unattended: args.includes('--unattended'),
-      premiumAuthorized: args.includes('--allow-premium'),
-      maxAutoTier: args.includes('--allow-premium') ? 3 : undefined,
-    });
-    console.log('\n  Model policy routing');
-    console.log(`  Default stance: cheap-first role/tier intent, compiled per provider from the effective catalog.`);
-    console.log(`  Suggested tier: ${decision.tier}${decision.modelTier ? ` (${decision.modelTier})` : ' (no model call)'}`);
-    console.log(`  Confirmation: ${decision.requiresConfirmation ? 'required' : 'not required'}`);
-    console.log(`  Summary before escalation: ${decision.summaryRequired ? 'required' : 'not required'}`);
-    console.log(`  Rationale: ${decision.rationale.join('; ')}`);
-    console.log('\n  Commands:');
-    console.log('    aiwg models sources --json        # inspect effective cache/static/remote catalog provenance');
-    console.log('    aiwg models refresh --json        # refresh dynamic provider catalog where supported');
-    console.log('    aiwg models audit --provider P    # compile artifact policy and diagnostics');
-    console.log('    aiwg models resolve --provider P  # show selected provider model for matching artifacts');
-    console.log('\n  Authoring:');
-    console.log('    Agents: use model-role/model-tier; avoid exact provider IDs in source scaffolds.');
-    console.log('    Skills/commands: use commandHint.modelRole and commandHint.modelTier.');
-    return;
-  }
+  if (subcommand === 'models' || subcommand === 'model-routing') return handleStewardModels(args, matrix, ctx);
 
   throw new AiwgError({
     code: 'ERR_USAGE_UNKNOWN_SUBCOMMAND',
@@ -691,6 +450,10 @@ export const stewardHandler: CommandHandler = {
   // sub-namespace help reachable, without executing anything (#2533).
   async help(ctx: HandlerContext): Promise<HandlerResult> {
     const positional = ctx.args.filter((arg) => !arg.startsWith('-'));
+    if (positional[0] === 'authorization') {
+      const { authorizationUsage } = await import('../../config/authorization-cli.js');
+      return { exitCode: 0, message: authorizationUsage, rawOutput: true };
+    }
     if (positional[0] === 'permissions') {
       return { exitCode: 0, message: permissionsUsage(), rawOutput: true };
     }

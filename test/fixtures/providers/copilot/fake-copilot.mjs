@@ -15,6 +15,7 @@
  * real profile (the brief rides on --attachment), so this fixture never
  * waits on stdin.
  */
+import { ignoreTermUntilKilled } from '../ignore-term.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const config = process.env.AIWG_FAKE_WORKER_CONFIG
@@ -120,8 +121,7 @@ switch (scenario) {
     process.exit(0);
     break;
   case 'ignore-term':
-    process.on('SIGTERM', () => {});
-    setInterval(() => {}, 1000);
+    ignoreTermUntilKilled();
     break;
   case 'hang':
     setInterval(() => {}, 1000);

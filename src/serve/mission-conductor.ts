@@ -28,6 +28,9 @@ import type { ExecutorRegistration } from './executor-registry.js';
 import { StackAdapterRegistry } from './stack-adapters.js';
 import type { GraphExecutionMetadata, GraphRunIdentity } from '../flow/graph-metadata.js';
 import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
+import { lookupEffect, reconcileEffect, recordIntent, type EffectLedger, type EffectReceipt } from '../effects/ledger.js';
+import { createVerifierRegistry } from '../effects/verifiers/registry.js';
+import { fileDigestVerifier } from '../effects/verifiers/file.js';
 
 /** A single worker cycle within a Mission — runs on exactly one stack. */
 export interface WorkerCycle {
@@ -40,6 +43,9 @@ export interface WorkerCycle {
   requiredCapabilities?: string[];
   /** Long-running workers require the `resumable` capability (per ADR §3). */
   longRunning?: boolean;
+  /** The worker's sole effect. The conductor records intent before dispatch and verifies completion.
+   * Host-supplied digests must describe the intended bytes and, for replacement, the pre-write bytes. */
+  fileEffect?: { target: string; payloadDigest: string; previousDigest?: string };
   /** Graph node projection. Present only for GraphPlaybook missions. */
   graph?: Omit<GraphExecutionMetadata, 'schemaVersion' | 'graphId' | 'graphVersion' | 'runId' | 'nodeRunId'> & {
     nodeRunId?: string;
@@ -80,6 +86,10 @@ export interface MissionLedger {
   missionId: string;
   goal: string;
   completionCriterion: string;
+  /** Mode of this conductor pass. Absent on legacy ledgers. */
+  executionMode?: 'plan-only' | 'executed';
+  /** Scorer used by this pass; null means best-output selection is unavailable. */
+  scorerId?: string | null;
   /** Append-only audit trail (one line per conductor decision/observation). */
   activityLog: string[];
   cycles: CycleResult[];
@@ -98,7 +108,7 @@ export interface MissionLedger {
 /**
  * Runs a single dispatched worker on its selected executor. The real seam to
  * `aiwg serve`'s dispatch-router + WS event stream plugs in here; tests inject
- * a fake. The default planner marks the cycle as routed-but-not-executed so the
+ * a fake. Without a worker, planning marks the cycle as routed-but-not-executed so the
  * conductor is honest about what is wired vs. pending the live transport.
  */
 export type RunWorker = (
@@ -107,21 +117,22 @@ export type RunWorker = (
   invocation: { runtimeCapability: string; primitive: string; describe: string },
 ) => { output?: string; cost?: number } | Promise<{ output?: string; cost?: number }>;
 
-/** Scores a worker output for best-output selection. Default: output length. */
+/** Scores a worker output against the mission's outcome; higher is better. */
 export type ScoreOutput = (result: CycleResult) => number;
 
 export interface ConductorOptions {
   adapters?: StackAdapterRegistry;
   /** Worker execution seam (default: plan-only, no execution). */
   runWorker?: RunWorker;
-  /** Best-output scorer (default: output length). */
+  /** Outcome scorer (e.g. executable checks). Without one, no best output is reported. */
   scoreOutput?: ScoreOutput;
+  /** Stable evaluator identity/version. Defaults to 'custom' when scoreOutput is supplied. */
+  scorerId?: string;
   /** Resume from a prior ledger's checkpoint (skip already-completed cycles). */
   resumeFrom?: MissionLedger;
+  /** Host-owned durable ledger for cycles declaring a file effect; its projectDir bounds file reads. */
+  effectLedger?: EffectLedger;
 }
-
-const defaultRunWorker: RunWorker = () => ({ output: undefined, cost: 0 });
-const defaultScore: ScoreOutput = (r) => (r.output ? r.output.length : 0);
 
 /**
  * The cross-stack Mission conductor. Decomposes a Mission into worker cycles,
@@ -130,13 +141,17 @@ const defaultScore: ScoreOutput = (r) => (r.output ? r.output.length : 0);
  */
 export class MissionConductor {
   private adapters: StackAdapterRegistry;
-  private runWorker: RunWorker;
-  private scoreOutput: ScoreOutput;
+  private runWorker?: RunWorker;
+  private scoreOutput?: ScoreOutput;
+  private scorerId: string | null;
+  private effectLedger?: EffectLedger;
 
   constructor(opts: ConductorOptions = {}) {
     this.adapters = opts.adapters ?? new StackAdapterRegistry();
-    this.runWorker = opts.runWorker ?? defaultRunWorker;
-    this.scoreOutput = opts.scoreOutput ?? defaultScore;
+    this.runWorker = opts.runWorker;
+    this.scoreOutput = opts.scoreOutput;
+    this.scorerId = opts.scoreOutput ? (opts.scorerId ?? 'custom') : null;
+    this.effectLedger = opts.effectLedger;
   }
 
   /**
@@ -165,6 +180,8 @@ export class MissionConductor {
       missionId: plan.missionId,
       goal: plan.goal,
       completionCriterion: plan.completionCriterion,
+      executionMode: this.runWorker ? 'executed' : 'plan-only',
+      scorerId: this.scorerId,
       activityLog: [],
       cycles: [],
       totalCost: 0,
@@ -175,6 +192,7 @@ export class MissionConductor {
 
     ledger.activityLog.push(
       `mission ${plan.missionId} start — goal: ${plan.goal} — ${plan.cycles.length} cycle(s)` +
+        ` — mode: ${ledger.executionMode}, scorer: ${ledger.scorerId ?? '(none)'}` +
         (resumeFrom ? ` (resume: ${carried.size} carried)` : ''),
     );
 
@@ -240,12 +258,63 @@ export class MissionConductor {
         `cycle ${cycle.id} → executor ${executor.name} (${executor.executorId}) on ${cycle.runtime}: ${invocation.describe}`,
       );
 
+      if (!this.runWorker) {
+        ledger.cycles.push({
+          cycleId: cycle.id,
+          runtime: cycle.runtime,
+          primitive: adapter.primitive,
+          executorId: executor.executorId,
+          routed: true,
+          reason: 'plan-only: worker not configured; execution pending',
+          cost: 0,
+          ...(graph ? { graph } : {}),
+        });
+        ledger.activityLog.push(`cycle ${cycle.id} PLANNED on ${cycle.runtime} — execution pending`);
+        continue;
+      }
+
       let output: string | undefined;
       let cost = 0;
+      let reason = routing.selected.matchReason;
       try {
-        const ran = await this.runWorker(cycle, executor, invocation);
-        output = ran.output;
-        cost = ran.cost ?? 0;
+        let intent: EffectReceipt | undefined;
+        let recovered = false;
+        const effects = this.effectLedger;
+        const reconcile = (id: string) => reconcileEffect(effects!, id, {
+          verifiers: createVerifierRegistry([fileDigestVerifier({ root: effects!.projectDir })]),
+          expected: { previousDigest: cycle.fileEffect!.previousDigest ?? null },
+        });
+        if (cycle.fileEffect) {
+          if (!effects) throw new Error('file effect requires a host-configured effect ledger');
+          const { target, payloadDigest, previousDigest } = cycle.fileEffect;
+          intent = await recordIntent(effects, {
+            kind: 'file.digest', target, payloadDigest,
+            context: { missionId: plan.missionId, cycleId: cycle.id,
+              ...(previousDigest === undefined ? {} : { previousDigest }) },
+          });
+          const recorded = await lookupEffect(effects, intent.effectId);
+          if (recorded.tombstoned || recorded.records.some(record => record.phase === 'failed')) {
+            throw new Error(`file effect ${intent.effectId} replay blocked: terminal outcome or tombstone`);
+          }
+          recovered = recorded.records.some(record => record.phase === 'completed');
+          if (!recovered) {
+            const checked = await reconcile(intent.effectId);
+            if (checked.result.verification.result === 'unknown') {
+              throw new Error(`file effect ${intent.effectId} replay blocked: ${checked.result.verification.reason}`);
+            }
+            recovered = checked.completed !== null;
+          }
+          if (recovered) reason = `file effect ${intent.effectId} completed; worker replay skipped`;
+        }
+        if (!recovered) {
+          const ran = await this.runWorker(cycle, executor, invocation);
+          output = ran.output;
+          cost = ran.cost ?? 0;
+          if (intent) {
+            const checked = await reconcile(intent.effectId);
+            if (!checked.completed) throw new Error(`file effect ${intent.effectId} completion unverified: ${checked.result.verification.reason}`);
+          }
+        }
       } catch (err) {
         const result: CycleResult = {
           cycleId: cycle.id,
@@ -269,7 +338,7 @@ export class MissionConductor {
         primitive: adapter.primitive,
         executorId: executor.executorId,
         routed: true,
-        reason: routing.selected.matchReason,
+        reason,
         output,
         cost,
         ...(graph ? { graph } : {}),
@@ -280,23 +349,31 @@ export class MissionConductor {
       ledger.activityLog.push(`cycle ${cycle.id} done on ${cycle.runtime} (cost ${cost})`);
     }
 
-    // Pending = cycles neither completed nor failed (none, here — full pass).
+    // Planned cycles remain pending until a worker executes them.
     const accounted = new Set([...ledger.checkpoint.completed, ...ledger.checkpoint.failed]);
     ledger.checkpoint.pending = plan.cycles.map((c) => c.id).filter((id) => !accounted.has(id));
 
     // Cross-stack aggregation: distinct runtimes that actually ran a worker.
     ledger.runtimesUsed = [
-      ...new Set(ledger.cycles.filter((c) => c.routed).map((c) => c.runtime)),
+      ...new Set(ledger.cycles.filter((c) => c.routed && accounted.has(c.cycleId)).map((c) => c.runtime)),
     ];
 
     // Best-output selection (REF-015) — conductor-side, across stacks.
     let best: MissionLedger['bestOutput'] | undefined;
-    for (const c of ledger.cycles) {
-      if (!c.output) continue;
-      const score = this.scoreOutput(c);
-      if (!best || score > best.score) {
-        best = { cycleId: c.cycleId, runtime: c.runtime, output: c.output, score };
+    if (this.scoreOutput) {
+      for (const c of ledger.cycles) {
+        if (c.output === undefined) continue;
+        const score = this.scoreOutput(c);
+        if (!Number.isFinite(score)) {
+          ledger.activityLog.push(`cycle ${c.cycleId} UNSCORED — scorer ${this.scorerId} returned a non-finite score`);
+          continue;
+        }
+        if (!best || score > best.score) {
+          best = { cycleId: c.cycleId, runtime: c.runtime, output: c.output, score };
+        }
       }
+    } else {
+      ledger.activityLog.push('best-output unavailable: no scorer configured');
     }
     ledger.bestOutput = best;
 

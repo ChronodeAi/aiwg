@@ -1,8 +1,10 @@
+import { assertEnvironmentCredentialReferences } from './credentials.mjs';
 import { writeConfigAtomic } from './config-file.mjs';
 import { constants } from 'node:fs';
 import { access, lstat, readFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { helperEnvironment } from '../process/cli-command.mjs';
 import { replaceServer } from './toml-editor.mjs';
 import { tomlString as string } from './toml-string.mjs';
 
@@ -19,6 +21,7 @@ function inline(values = {}) {
 }
 
 export function renderGrokMcpServer(server) {
+  assertEnvironmentCredentialReferences(server, 'grok-build');
   if (!server?.name) throw new Error('Grok MCP server name is required');
   const lines = [`[mcp_servers.${key(server.name)}]`];
   if (server.type === 'stdio') {
@@ -144,7 +147,7 @@ export async function unmanageGrokBuildMcp(configPath, names, options = {}) {
 }
 
 function runJson(binary, args, cwd, env) {
-  const run = spawnSync(binary, args, { cwd, env, encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
+  const run = spawnSync(binary, args, { cwd, env: helperEnvironment(env), encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
   if (run.error || run.status !== 0) return { ok: false, detail: run.error?.message || run.stderr || `exit ${run.status}` };
   try { return { ok: true, value: JSON.parse(run.stdout || '{}') }; }
   catch { return { ok: false, detail: 'Grok returned malformed JSON' }; }

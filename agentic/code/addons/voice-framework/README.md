@@ -1,5 +1,7 @@
 # Voice Framework Addon
 
+Evidence status: design intent.
+
 Voice profile and composable output-mode system for crafting and applying consistent writing. Define custom voices, apply runtime language constraints, and create personal or project styles.
 
 ## Overview

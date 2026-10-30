@@ -64,17 +64,24 @@ export function fileDigestVerifier(options: FileDigestVerifierOptions): EffectVe
       catch (error) {
         if (errno(error) !== 'ENOENT' && errno(error) !== 'ENOTDIR') return unknown('container-unreadable');
         // Missing: `absent` only when the nearest existing ancestor is itself contained.
-        let parent = dirname(lexical);
+        let parent = lexical;
         for (;;) {
+          // An existing but unresolvable component (such as a dangling
+          // symlink) is unknown. Never step above it and call the file absent.
           try {
-            const realParent = await realpath(parent);
-            if (realParent !== root && !inside(root, realParent)) return unknown('container-unreadable');
-            break;
+            await lstat(parent);
           } catch (inner) {
             if (errno(inner) !== 'ENOENT' && errno(inner) !== 'ENOTDIR') return unknown('container-unreadable');
             if (parent === dirname(parent)) return unknown('container-unreadable');
             parent = dirname(parent);
+            continue;
           }
+          try {
+            const realParent = await realpath(parent);
+            if (realParent !== root && !inside(root, realParent)) return unknown('container-unreadable');
+            if (!(await lstat(realParent)).isDirectory()) return unknown('container-unreadable');
+            break;
+          } catch { return unknown('container-unreadable'); }
         }
         const evidence = { path, expectedDigest: digest, found: false };
         return { result: 'absent', reason: 'complete-query-no-match', complete: true, evidence };
@@ -90,6 +97,12 @@ export function fileDigestVerifier(options: FileDigestVerifierOptions): EffectVe
         return unknown('container-unreadable');
       }
       const evidence = { path, expectedDigest: digest, actualDigest: actual, found: true };
+      // Query-only callers may ask whether a digest is absent. Replay callers
+      // must also prove that existing bytes are the recorded pre-write state.
+      if (actual !== digest && request.expected.previousDigest !== undefined
+        && actual !== request.expected.previousDigest) {
+        return { ...unknown('evidence-conflict'), evidence };
+      }
       return actual === digest
         ? { result: 'present', reason: 'digest-match', complete: true, evidence }
         : { result: 'absent', reason: 'complete-query-no-match', complete: true, evidence };

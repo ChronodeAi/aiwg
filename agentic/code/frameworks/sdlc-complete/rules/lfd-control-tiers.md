@@ -1,3 +1,25 @@
+---
+enforcement: high
+activation: bound
+summary: Distinguish harness-enforced, hybrid, and cooperative LFD controls; use mechanical budget stops as the adversarial backstop.
+bound_to:
+  skills:
+    - agent-loop
+    - agent-loop-ext
+    - aiwg-mission
+    - mission-control
+    - ralph
+    - ralph-external
+    - ralph-resume
+  agents:
+    - ralph-loop
+    - ralph-verifier
+  flows:
+    - flow-agentloop-lfd-controls
+triggers:
+  - which LFD controls are mechanical
+---
+
 # LFD Control Tiers — Mechanical vs Cooperative
 
 **Enforcement Level**: HIGH

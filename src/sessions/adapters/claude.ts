@@ -1,6 +1,7 @@
 import { opendir } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 import { z } from 'zod';
+import { dateTime, number } from '../../schema/zod-validation.mjs';
 import {
   schemaRejectionDetail,
   schemaIssueDetail,
@@ -27,14 +28,14 @@ export const CLAUDE_TRANSCRIPT_SCHEMA_VERSION = '1.0.0';
  *  exports carry no in-band schema version to read instead. */
 export const CLAUDE_WEB_EXPORT_SCHEMA_VERSION = '1.0.0';
 
-const ClaudeRecordSchema = z.object({
+const ClaudeRecordSchema = z.looseObject({
   type: z.string().min(1),
   subtype: z.string().optional(),
   uuid: z.string().min(1).optional(),
   parentUuid: z.string().min(1).nullable().optional(),
   sessionId: z.string().min(1).optional(),
   session_id: z.string().min(1).optional(),
-  timestamp: z.string().datetime({ offset: true }).optional(),
+  timestamp: dateTime({ offset: true }).optional(),
   cwd: z.string().optional(),
   gitBranch: z.string().optional(),
   parentSessionId: z.string().min(1).optional(),
@@ -43,14 +44,14 @@ const ClaudeRecordSchema = z.object({
   slug: z.string().min(1).optional(),
   version: z.string().optional(),
   schemaVersion: z.string().optional(),
-  message: z.object({
+  message: z.looseObject({
     id: z.string().min(1).optional(),
     role: z.string().min(1).optional(),
     content: z.union([z.string(), z.array(z.unknown())]).optional(),
-  }).passthrough().optional(),
-}).passthrough();
+  }).optional(),
+});
 
-const ClaudeHookSchema = z.object({
+const ClaudeHookSchema = z.looseObject({
   session_id: z.string().min(1),
   transcript_path: z.string().min(1),
   cwd: z.string().min(1),
@@ -60,8 +61,8 @@ const ClaudeHookSchema = z.object({
   model: z.string().optional(),
   reason: z.string().optional(),
   schemaVersion: z.string().optional(),
-  timestamp: z.string().datetime({ offset: true }).optional(),
-}).passthrough();
+  timestamp: dateTime({ offset: true }).optional(),
+});
 
 type ClaudeRecord = z.infer<typeof ClaudeRecordSchema>;
 type ClaudeHook = z.infer<typeof ClaudeHookSchema>;
@@ -74,19 +75,19 @@ type ClaudeHook = z.infer<typeof ClaudeHookSchema>;
  * rather than dropped, and content the export marks as an attachment/file is
  * recorded as a reference (bytes are not embedded in this export format).
  */
-const ClaudeWebExportAttachmentSchema = z.object({
+const ClaudeWebExportAttachmentSchema = z.looseObject({
   file_name: z.string().optional(),
   file_type: z.string().optional(),
-  file_size: z.number().optional(),
+  file_size: number().optional(),
   extracted_content: z.string().optional(),
-}).passthrough();
+});
 
-const ClaudeWebExportContentBlockSchema = z.object({
+const ClaudeWebExportContentBlockSchema = z.looseObject({
   type: z.string().optional(),
   text: z.string().optional(),
-}).passthrough();
+});
 
-const ClaudeWebExportMessageSchema = z.object({
+const ClaudeWebExportMessageSchema = z.looseObject({
   uuid: z.string().min(1),
   text: z.string().optional(),
   sender: z.enum(['human', 'assistant']),
@@ -95,16 +96,16 @@ const ClaudeWebExportMessageSchema = z.object({
   content: z.array(ClaudeWebExportContentBlockSchema).optional(),
   attachments: z.array(ClaudeWebExportAttachmentSchema).optional(),
   files: z.array(ClaudeWebExportAttachmentSchema).optional(),
-}).passthrough();
+});
 
-const ClaudeWebExportConversationSchema = z.object({
+const ClaudeWebExportConversationSchema = z.looseObject({
   uuid: z.string().min(1),
   name: z.string().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
-  account: z.object({ uuid: z.string().optional() }).passthrough().optional(),
+  account: z.looseObject({ uuid: z.string().optional() }).optional(),
   chat_messages: z.array(ClaudeWebExportMessageSchema),
-}).passthrough();
+});
 
 const ClaudeWebExportSchema = z.array(ClaudeWebExportConversationSchema);
 

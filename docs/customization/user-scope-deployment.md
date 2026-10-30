@@ -80,7 +80,7 @@ explicit no-project-artifact contract.
 | OpenClaw | `~/.openclaw/{agents,commands,skills,rules,behaviors}/` | Always user-scope (no `--scope project`) |
 | OpenHuman | `~/.openhuman/skills/` for kernel skills; `~/.openhuman/.aiwg/rules/` for rule bodies; optional native agents in `~/.openhuman/agents/`; project `AGENTS.md` bridge | **Verified** against OpenHuman induction ADR; home-dir payload plus project context bridge |
 | Grok Bot | Absolute `AIWG_GROKBOT_SKILLS_DIR` only (never invents `~/grokbot-skills` / `~/.grokbot`) | **Fail-closed** until env set ([ADR](../architecture/adr-grokbot-provider-target.md)) |
-| Hermes | `~/.hermes/skills/` | Always user-scope (skills only) |
+| Hermes | `$HERMES_HOME/skills/` (default `~/.hermes/skills/`) | Home-scoped skills; explicit `--scope project` is refused, including dry-run |
 | Codex | `~/.agents/skills/` (skills); `~/.codex/prompts/` (commands; deploy-for-visibility, not auto-scanned) | **Verified** ([`codex-rs/core-skills/src/loader.rs`](https://github.com/openai/codex)) |
 | Cursor | `~/.cursor/{agents,skills,commands,rules}/` (harmless mirror; not auto-scanned) | **Non-applicable** — Cursor's "User Rules" feature is in-app settings, not filesystem-discovered; only project-scope `.cursor/rules/*.mdc` is confirmed. See [#1159](https://git.integrolabs.net/roctinam/aiwg/issues/1159) |
 | OpenCode | `~/.config/opencode/{agents,commands}/`; skills at `~/.agents/skills/` (cross-provider canonical) | **Verified** ([opencode.ai/docs/skills](https://opencode.ai/docs/skills/), [opencode.ai/docs/rules](https://opencode.ai/docs/rules/)) — user-scope root is `~/.config/opencode/`, NOT `~/.opencode/` |

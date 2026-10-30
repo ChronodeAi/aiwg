@@ -1,0 +1,128 @@
+[
+  {
+    "rule": "evidence-integrity",
+    "enforcement": "critical",
+    "activation": "bound",
+    "reason": "Evidence integrity governs forensic collection, analysis, and reporting; every indexed forensic agent and evidence workflow receives it before handling evidence."
+  },
+  {
+    "rule": "non-destructive",
+    "enforcement": "critical",
+    "activation": "bound",
+    "reason": "The prohibition applies to evidence systems during investigation; bindings cover every forensic agent and evidence workflow before source access."
+  },
+  {
+    "rule": "red-flag-escalation",
+    "enforcement": "critical",
+    "activation": "bound",
+    "reason": "The eight red flags govern forensic analysis rather than unrelated turns; all forensic agents and evidence workflows receive the escalation contract."
+  },
+  {
+    "rule": "volatility-order",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Volatility ordering governs live collection; concrete acquisition, triage, profiling, and platform-analysis bindings deliver it before disk operations."
+  },
+  {
+    "rule": "ops-cross-repo",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "A startup ownership reminder precedes repo selection; operational agents and extension workflows receive the detailed repository and disclosure policy."
+  },
+  {
+    "rule": "ops-documentation",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Operational documents are produced by ops agents and workflows; bind their structure and verification contract to those concrete entry points."
+  },
+  {
+    "rule": "ops-information-governance",
+    "enforcement": "critical",
+    "activation": "kernel",
+    "reason": "Retain CRITICAL kernel fallback: any agent can disclose collected operational data in its first response or write before selecting an ops artifact."
+  },
+  {
+    "rule": "ops-issue-tracking",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Ops issue conventions apply during operational tracking and handoff; bind all concrete ops producers and repository-maintenance entry points."
+  },
+  {
+    "rule": "ops-safety",
+    "enforcement": "critical",
+    "activation": "kernel",
+    "reason": "Retain CRITICAL kernel fallback: any agent can issue a destructive or cross-host command before choosing a specialized operations workflow."
+  },
+  {
+    "rule": "api-abi-stability",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Stable library interfaces and release decisions are scoped; bind the deprecation audit, implementation/review roles, and release workflow."
+  },
+  {
+    "rule": "banned-apis",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Project-file globs cover arbitrary banlist languages before source access; the project banlist narrows enforcement, with audit and implementation/review bindings for agent-only work."
+  },
+  {
+    "rule": "ci-action-pinning",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "CI workflows and digest manifests define the scope; supply-chain and CI bindings deliver the policy before workflow selection."
+  },
+  {
+    "rule": "committer-2fa-required",
+    "enforcement": "high",
+    "activation": "bound",
+    "reason": "Write-access governance is audited at the hosting platform; bind the 2FA audit and supply-chain/release reviewers."
+  },
+  {
+    "rule": "crypto-flag-verification",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "Crypto commands can be proposed without a file path; retain a startup guard and bind crypto design, implementation, and review entry points."
+  },
+  {
+    "rule": "dependency-source-policy",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Dependency manifests, lockfiles, and package-manager configuration are concrete paths; supply-chain and package-gate bindings cover dependency decisions."
+  },
+  {
+    "rule": "no-adhoc-kdf",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "Key derivation can be recommended before file/workflow selection; retain a compact startup guard with detailed crypto role/workflow bindings."
+  },
+  {
+    "rule": "no-binary-blobs",
+    "enforcement": "medium",
+    "activation": "bound",
+    "reason": "Binary admission is a repository audit/review concern; bind its audit and source/release reviewers."
+  },
+  {
+    "rule": "no-confusable-unicode",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "Release and review text may have no project path; a startup guard covers that gap while audit and producer bindings deliver details."
+  },
+  {
+    "rule": "no-key-reuse-across-purposes",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "Key-purpose choices can occur in conversational design; retain a startup guard and bind crypto implementation/design/review roles."
+  },
+  {
+    "rule": "no-unauthenticated-encryption",
+    "enforcement": "high",
+    "activation": "summary",
+    "reason": "Encryption choices can be proposed without a file or selected skill; a startup guard plus crypto bindings covers those entry points."
+  },
+  {
+    "rule": "strict-toolchain",
+    "enforcement": "high",
+    "activation": "paths",
+    "reason": "Build and CI configuration paths select strictness policy; build/test/review and audit bindings cover toolchain decisions."
+  }
+]

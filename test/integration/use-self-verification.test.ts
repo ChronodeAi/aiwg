@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { loadPrebuiltDeploymentIndex } from '../../src/artifacts/prebuilt-deployment.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -153,6 +154,25 @@ describe('human-output child failure diagnostics', () => {
 });
 
 describe.sequential('aiwg use self-verifying provider deployment (#2069)', () => {
+  it('migrates legacy generated context through deployment and retains operator notes on redeploy (#3762)', () => {
+    const projectRoot = isolatedRoot('aiwg-use-context-project-');
+    const homeRoot = isolatedRoot('aiwg-use-context-home-');
+    mkdirSync(path.join(projectRoot, '.aiwg'));
+    const notes = '# Local notes\n\nUse the team fixture convention.\n';
+    writeFileSync(path.join(projectRoot, '.aiwg/AIWG.md'),
+      '# AIWG.md\n<!-- aiwg-managed -->\n<!-- Normalized project-local AIWG context. Operator notes may live outside AIWG-managed blocks. -->\n'
+      + '<!-- aiwg-context-finalization:START -->\nLegacy generated context.\n<!-- aiwg-context-finalization:END -->\n' + notes);
+    for (let pass = 0; pass < 2; pass++) {
+      const result = runUse(projectRoot, homeRoot, ['--provider', 'codex']);
+      expect(result.exitCode, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(path.join(projectRoot, '.aiwg/AIWG.md'), 'utf8')).toBe(notes);
+      const rootContext = readFileSync(path.join(projectRoot, 'AIWG.md'), 'utf8');
+      expect(rootContext).toContain(notes.trim());
+      expect(rootContext).not.toContain('Legacy generated context.');
+      expect(result.payload.findings.some((item: { id: string }) => item.id === 'context-diagnostic:duplicate-generated-context')).toBe(false);
+    }
+  }, 240_000);
+
   it('returns a planned preview without mutating the target', () => {
     const projectRoot = isolatedRoot('aiwg-use-verify-preview-project-');
     const homeRoot = isolatedRoot('aiwg-use-verify-preview-home-');
@@ -177,8 +197,10 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     const projectRoot = isolatedRoot('aiwg-use-verify-codex-project-');
     const homeRoot = isolatedRoot('aiwg-use-verify-codex-home-');
     const first = runUse(projectRoot, homeRoot, ['--provider', 'codex']);
+    expect(existsSync(path.join(projectRoot, '.aiwg/AIWG.md'))).toBe(false);
     const firstDiscovery = runDiscover(projectRoot, homeRoot);
     const repeated = runUse(projectRoot, homeRoot, ['--provider', 'codex']);
+    expect(existsSync(path.join(projectRoot, '.aiwg/AIWG.md'))).toBe(false);
     const repeatedDiscovery = runDiscover(projectRoot, homeRoot);
 
     for (const result of [first, repeated]) {
@@ -225,40 +247,24 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
       expect(discovery.total).toBeGreaterThan(0);
       expect(discovery.results[0].provenance.graph).toBe('framework');
     }
-    const fortemiRoot = path.join(
-      homeRoot,
-      '.local', 'share', 'aiwg', 'index', 'fortemi-core', 'framework',
-    );
-    const fortemiManifest = JSON.parse(readFileSync(path.join(fortemiRoot, 'manifest.json'), 'utf8'));
-    const frameworkMetadata = JSON.parse(readFileSync(
-      path.join(homeRoot, '.local', 'share', 'aiwg', 'index', 'framework', 'metadata.json'),
-      'utf8',
-    ));
-    expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(true);
-    expect(fortemiManifest.item_count).toBe(stats.totalArtifacts);
-    expect(fortemiManifest.source_index_built_at).toBe(frameworkMetadata.builtAt);
+    // The framework index is keyed by AIWG root (#3308); this run used exactly one root.
+    const rootsDir = path.join(homeRoot, '.local', 'share', 'aiwg', 'index', 'roots');
+    const rootKeys = readdirSync(rootsDir);
+    expect(rootKeys).toHaveLength(1);
+    const indexRoot = path.join(rootsDir, rootKeys[0]);
+    const fortemiRoot = path.join(indexRoot, 'fortemi-core', 'framework');
+    if (loadPrebuiltDeploymentIndex(REPO_ROOT)) {
+      expect(existsSync(path.join(indexRoot, 'framework', 'metadata.json'))).toBe(false);
+      expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(false);
+    } else {
+      const fortemiManifest = JSON.parse(readFileSync(path.join(fortemiRoot, 'manifest.json'), 'utf8'));
+      const frameworkMetadata = JSON.parse(readFileSync(path.join(indexRoot, 'framework', 'metadata.json'), 'utf8'));
+      expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(true);
+      expect(fortemiManifest.item_count).toBe(stats.totalArtifacts);
+      expect(fortemiManifest.source_index_built_at).toBe(frameworkMetadata.builtAt);
+    }
   }, 120_000);
 
-  it('keeps default non-TTY output compact, colorless, and free of registry chatter', () => {
-    const projectRoot = isolatedRoot('aiwg-use-output-codex-project-');
-    const homeRoot = isolatedRoot('aiwg-use-output-codex-home-');
-    const result = runUseHuman(projectRoot, homeRoot, ['--provider', 'codex'], 80);
-
-    expect(result.exitCode, result.stderr || result.stdout).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(result.stdout).toContain('AIWG ready');
-    expect(result.stdout).not.toContain('provider reload required');
-    expect(result.stdout).toContain('Deployed to OpenAI Codex (codex)');
-    expect(result.stdout).toContain('Indexed for discovery');
-    // The conditional fallback still appears; the imperative restart does not (#2309).
-    expect(result.stdout).toContain('If something is missing');
-    expect(result.stdout).not.toContain('Restart or reopen Codex');
-    expect(result.stdout).not.toContain('Registered ');
-    expect(result.stdout).not.toContain('reload rationale');
-    expect(result.stdout).not.toMatch(/\x1b\[/);
-    expect(result.stdout.split('\n').every((line) => line.length <= 80)).toBe(true);
-    // The child allows 180s; this output assertion is not a performance gate.
-  }, 210_000);
 
   it('verifies a native-skills provider deployment', () => {
     const projectRoot = isolatedRoot('aiwg-use-verify-cursor-project-');

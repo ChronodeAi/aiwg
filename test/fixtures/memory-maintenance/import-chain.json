@@ -1,0 +1,9 @@
+{
+  "graph": {
+    "CLAUDE.md": ["WORKSPACE.md", "AIWG.md"],
+    "WORKSPACE.md": ["docs/obligations.md"],
+    "AIWG.md": ["docs/obligations.md"],
+    "docs/obligations.md": []
+  },
+  "note": "A shared transitive include still consumes startup context; splitting is not demotion."
+}

@@ -73,7 +73,8 @@ export interface HeldoutSummary {
 export interface HeldoutStudyModule {
   prepare(seed: string): Promise<{ corpus: HeldoutCorpus; preregistration: HeldoutPreregistration; gold: unknown }>;
   score(input: { corpus: HeldoutCorpus; preregistration: HeldoutPreregistration; attempts: readonly HeldoutAttempt[];
-    gold: unknown; integrity: QualificationIntegrityMetadata; approvedCalibration: HeldoutCalibration; calibrated: false | null }): Promise<unknown>;
+    gold: unknown; frozen?: { bundle: HeldoutBundle; digest: Digest };
+    integrity: QualificationIntegrityMetadata; approvedCalibration: HeldoutCalibration; calibrated: false | null }): Promise<unknown>;
 }
 export interface HeldoutExecution { definition: DecisionDefinition; projection: DecisionProjectionPolicy;
   ruleset: import('../types.js').DecisionRuleset; binding: import('../types.js').DecisionBinding }

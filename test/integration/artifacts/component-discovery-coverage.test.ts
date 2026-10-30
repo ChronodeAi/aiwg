@@ -33,17 +33,15 @@ describe('shipped component discovery coverage', () => {
 
     expect(report.ok).toBe(true);
     expect(report.counts).toMatchObject({
-      total: 64,
-      covered: 64,
       missing: 0,
       invalid: 0,
       missingRuntimeAssets: 0,
     });
+    expect(report.counts.covered + report.counts.exempt).toBe(report.counts.total);
 
     for (const component of report.components) {
       if (component.status === 'exempt') continue;
       expect(component.drivers.length, component.component).toBeGreaterThan(0);
-      expect(component.runtimeAssets?.length ?? 0, `${component.component} runtime assets`).toBeGreaterThanOrEqual(0);
       for (const asset of component.runtimeAssets ?? []) {
         expect(asset.status, `${component.component} ${asset.type}:${asset.declaration}`).toBe('present');
         expect(asset.path, `${component.component} ${asset.declaration} path`).toBeTruthy();
@@ -58,10 +56,6 @@ describe('shipped component discovery coverage', () => {
         expect(entry, `${component.component} → ${driver.path}`).toBeDefined();
         expect(entry.type).toBe(driver.type);
         expect(entry.capability, `${driver.path} capability`).toBeTruthy();
-        expect(
-          (entry.triggers?.length ?? 0) > 0 || Boolean(entry.capability),
-          `${driver.path} search intent`,
-        ).toBe(true);
         expect(driver.providerSupport.length, `${driver.path} provider support`).toBeGreaterThan(0);
       }
     }

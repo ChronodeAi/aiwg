@@ -4,8 +4,8 @@
 
 This is the fastest supported route from an AI conversation to a verified AIWG
 project. The user pastes one prompt; the provider inspects, plans, asks only for
-decisions it cannot safely infer, installs or repairs AIWG, deploys `all`, builds
-indices, regenerates context, and verifies engagement.
+decisions it cannot safely infer, installs or repairs AIWG, then runs the guided
+interview → review → apply sequence and reports readiness.
 
 For a new, outdated, broken, duplicate, or development-mode installation, use
 the public [`SetupManifest`](../setup.aiwg.yaml). A user can paste:
@@ -19,8 +19,9 @@ me only for choices you cannot safely determine.
 
 The manifest is the canonical flow. It requires inspection before mutation,
 explicit approval for repairs and mode switches, preservation of source
-checkouts, the complete `all` deployment, index construction, regeneration,
-and evidence-based verification. Use the manual notes below when the manifest
+checkouts, a saved interview plan, read-only review, explicit apply, and
+evidence-based verification. Guided apply selects a framework from usage intent:
+`code`/`mixed` selects SDLC, `docs` selects writing, and `ops` selects ops. Use the manual notes below when the manifest
 cannot be retrieved.
 
 The public manifest declares `metadata.execution_mode: provider-orchestrated`.
@@ -99,44 +100,55 @@ explicit package name and version policy approved for that environment:
 npx aiwg --version
 ```
 
-## Project-Local Setup
+## Guided project setup
 
-Run these commands from the project root:
-
-```bash
-cd /path/to/project
-aiwg use all --provider claude
-```
-
-`aiwg use` performs deployment, index refresh, canonical-context generation,
-provider wiring checks, and scoped verification before reporting one outcome.
-Do not append standalone maintenance commands to an ordinary successful setup.
-
-Replace the provider when the user is not using Claude Code:
-
-```bash
-aiwg use all --provider codex
-aiwg use all --provider cursor
-aiwg use all --provider copilot
-aiwg use all --provider factory
-aiwg use all --provider opencode
-aiwg use all --provider warp
-aiwg use all --provider devin
-aiwg use all --provider hermes
-aiwg use all --provider openclaw
-aiwg use all --provider openhuman
-```
-
-For guided setup, use the wizard instead of choosing the framework and provider
-manually:
+Run the interview from the intended project root. Select one provider or a
+comma-separated list:
 
 ```bash
 cd /path/to/project
-aiwg wizard --dry-run --goal "help me set up AIWG for this project"
-aiwg wizard
+aiwg setup --scope project --providers claude,codex
+aiwg setup --review
+aiwg setup --apply
 ```
+
+The interview collects targets, intent, toolchains, credential references, and
+optional capabilities. It saves the plan beneath the configured artifact root
+without writing provider configuration. `--review` is read-only; a bare
+`--dry-run` also reviews an existing saved plan. Apply confirms before mutation
+and delegates to existing owners for configuration, framework deployment,
+registration, Jev setup, and direct-worker qualification. Do not append
+standalone maintenance commands to a successful setup.
+
+For CI or SSH provisioning, bootstrap Node and the CLI using the non-interactive
+installation guide, then use answer flags with `--non-interactive`. Headless
+apply requires `--yes`. Missing required choices fail with the needed flag;
+headless runs never prompt. See the [guided setup reference](getting-started/guided-setup.md)
+for runnable examples, scope and monorepo choices, credentials, and recovery.
+
+Jev and direct workers require explicit opt-in. Installed CLIs are distinct
+from authenticated and qualified workers. Credential input is resolved only at
+apply, and plans store references rather than secret values. Report core
+readiness and optional failures separately from `aiwg.setup.apply.v1`.
+
+A second successful apply makes no writes. After a failure or interruption,
+review and apply again to resume failed, skipped, or unreceipted actions. An
+interactive cancellation leaves the last saved plan intact. If environment
+facts become stale, rerun the interview/discovery before applying. Saved
+receipts cannot provide a transaction across an external side effect and the
+following receipt write; review the affected owner after a crash in that gap.
+
+For a direct complete-system deployment when no guided plan is needed, use
+`aiwg use all --provider <provider>`. The older `aiwg wizard` remains a separate
+goal-based deployment assistant.
 
 ## Global Or User-Scope Setup
+
+In guided setup, `--scope user` records user-level provider deployment rather
+than installing the CLI globally. It still writes project policy and registry
+state through their existing owners. Review project/user conflicts before
+applying; guided user scope does not mean `aiwg use --global`.
+
 
 Use `--global` when the user wants provider-native AIWG assets across many
 workspaces without a full deployment in every project:
@@ -201,9 +213,11 @@ to be rebuilt. Use `aiwg doctor` as the direct diagnostic escape hatch.
 
 ## Verification
 
-The authoritative first-run proof is the `aiwg.use.result.v1` response emitted
-by the deployment command. Inspect its resolved project, provider, scope,
-phases, findings, final state, and restart requirement.
+For guided setup, inspect the `aiwg.setup.apply.v1` report: classification,
+per-action status, and core versus optional failures. A successful deployment
+action includes verification from the deployment owner. For direct `aiwg use`,
+the first-run proof is `aiwg.use.result.v1`; inspect its resolved project,
+provider, scope, phases, findings, final state, and restart requirement.
 
 For an independent later audit, the local proof command remains:
 

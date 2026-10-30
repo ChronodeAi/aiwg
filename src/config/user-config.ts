@@ -59,6 +59,7 @@ export interface ConfigFileSpec {
  */
 export const KNOWN_CONFIG_FILES: ConfigFileSpec[] = [
   { filename: 'config.yaml', description: 'Global AIWG user preferences' },
+  { filename: 'aiwg.config', description: 'Operator rule pins and capability groups' },
   { filename: 'models.json', description: 'Model tier and provider overrides' },
   { filename: 'ops.json', description: 'Ops workspace registry' },
   { filename: 'mcp-servers.json', description: 'MCP server registry (single source of truth)' },
@@ -168,7 +169,7 @@ export class UserConfig {
       try {
         await access(filePath);
         const content = await readFile(filePath, 'utf-8');
-        if (spec.filename.endsWith('.json')) {
+        if (spec.filename.endsWith('.json') || spec.filename === 'aiwg.config') {
           result[spec.filename] = JSON.parse(content);
         } else {
           result[spec.filename] = content;

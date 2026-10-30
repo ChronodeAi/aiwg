@@ -21,6 +21,56 @@
 
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
+
+// The hook is deployed into the project, so locate the installed runtime
+// through an explicit AIWG_ROOT or the real CLI executable on PATH.
+function activationRuntime() {
+  const candidates = [];
+  if (process.env.AIWG_ROOT) candidates.push(process.env.AIWG_ROOT);
+  for (const dir of (process.env.AIWG_ROOT ? '' : process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    try { candidates.push(path.dirname(path.dirname(fs.realpathSync(path.join(dir, 'aiwg'))))); } catch { /* not on this PATH entry */ }
+  }
+  for (const root of candidates) {
+    const modulePath = path.join(root, 'dist/src/decision/offload-activation.js');
+    if (fs.existsSync(modulePath)) return { root, modulePath };
+  }
+  return null;
+}
+
+async function compactContext() {
+  if (process.stdin.isTTY) return;
+  let event;
+  try {
+    const buffer = Buffer.alloc(65537);
+    let used = 0;
+    // stdin can be a non-blocking pipe whose writer has not sent the event yet.
+    // EAGAIN means "no data yet", not "no input": wait briefly and retry.
+    const deadline = Date.now() + 5000;
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    while (used < buffer.length) {
+      let count;
+      try { count = fs.readSync(0, buffer, used, buffer.length - used, null); }
+      catch (error) {
+        if (error && error.code === 'EAGAIN' && Date.now() < deadline) { Atomics.wait(pause, 0, 0, 10); continue; }
+        throw error;
+      }
+      if (count === 0) break;
+      used += count;
+    }
+    if (used > 65536) return;
+    event = JSON.parse(buffer.subarray(0, used).toString('utf8'));
+  } catch { return; }
+  if (event?.hook_event_name !== 'SessionStart' || event.source !== 'compact') return;
+  const runtime = activationRuntime();
+  if (!runtime) return;
+  try {
+    const { inspectDecisionOffloadActivation, DECISION_COMPACT_ANCHOR } = await import(pathToFileURL(runtime.modulePath).href);
+    const state = await inspectDecisionOffloadActivation({ cwd: process.cwd(), frameworkRoot: runtime.root });
+    if (state.shouldAnchor) console.log(DECISION_COMPACT_ANCHOR);
+  } catch { /* absent or invalid configuration never injects an unverified pointer */ }
+}
 
 // Configuration
 const SESSIONS_FILE = process.env.AIWG_SESSIONS_FILE || '.aiwg/sessions.json';
@@ -215,6 +265,7 @@ async function main() {
       // Invoked with no subcommand. This is the SessionStart hook path: anything
       // printed here lands at the top of every session transcript, so stay silent
       // and exit clean. Help is available explicitly via `help`/`--help`. (#2543)
+      await compactContext();
       break;
 
     case 'help':

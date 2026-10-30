@@ -1,6 +1,6 @@
 {
   "type": "object",
-  "description": "Provider-scoped parallelism caps — limits concurrent subagents, Ralph loops, and MC missions to keep AIWG within the rate-limit envelope of the underlying model provider (#1359). Composes (effective limit = MIN) with context-budget caps and rlm-context-management Rule 8.",
+  "description": "Provider-scoped parallelism caps \u2014 limits concurrent subagents, Ralph loops, and MC missions to keep AIWG within the rate-limit envelope of the underlying model provider (#1359). Composes (effective limit = MIN) with context-budget caps and rlm-context-management Rule 8.",
   "additionalProperties": false,
   "properties": {
     "max_parallel_subagents": {
@@ -36,6 +36,15 @@
       },
       "propertyNames": {
         "pattern": "^[a-z][a-z0-9-]{0,62}$"
+      }
+    },
+    "groupTemplates": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]{0,62}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/groupTemplate"
       }
     },
     "groups": {
@@ -83,6 +92,13 @@
           "type": "integer",
           "minimum": 1,
           "default": 300
+        },
+        "starvationSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400,
+          "default": 120,
+          "description": "Wait threshold for bounded group/run starvation diagnostics; does not change admission ordering."
         },
         "leaseSeconds": {
           "type": "integer",
@@ -187,6 +203,9 @@
             }
           },
           "then": {
+            "properties": {
+              "reservationUsd": {}
+            },
             "required": [
               "reservationUsd"
             ]
@@ -496,6 +515,10 @@
         "quotaScope"
       ],
       "not": {
+        "properties": {
+          "executable": {},
+          "endpoint": {}
+        },
         "required": [
           "executable",
           "endpoint"
@@ -590,16 +613,87 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 50
+        },
+        "template": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "efforts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "dataPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "localOnlyPaths": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.@+,-]+(?:/[A-Za-z0-9_.@+,-]+)*$(?![\\s\\S])"
+              },
+              "description": "Literal project-relative local-only files or directory subtrees; deployed conductor guards have limited shell coverage."
+            },
+            "allowedProcessing": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "local",
+                  "remote"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "allowProductImprovement": {
+              "type": "boolean"
+            },
+            "allowUnknown": {
+              "type": "boolean"
+            },
+            "maxRetentionDays": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       },
-      "required": [
-        "members"
+      "anyOf": [
+        {
+          "properties": {
+            "members": {}
+          },
+          "required": [
+            "members"
+          ]
+        },
+        {
+          "properties": {
+            "template": {}
+          },
+          "required": [
+            "template"
+          ]
+        }
       ]
     },
     "execution": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "launchMode": {
+          "enum": [
+            "systemd-unit",
+            "native-sandbox"
+          ],
+          "default": "systemd-unit",
+          "description": "Policy-selected worker launch boundary. native-sandbox requires a verified enforcing CLI sandbox and has no cgroup resource limit."
+        },
         "isolation": {
           "enum": [
             "worktree",
@@ -671,6 +765,98 @@
         "wallSeconds": {
           "type": "integer",
           "minimum": 1
+        }
+      }
+    },
+    "groupTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/member"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "fallback": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "default": []
+        },
+        "execution": {
+          "$ref": "#/definitions/execution"
+        },
+        "requiredRoles": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "efficiency",
+              "coding",
+              "reasoning"
+            ]
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "maxParallel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "template": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$"
+        },
+        "efforts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "dataPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "localOnlyPaths": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9_.@+,-]+(?:/[A-Za-z0-9_.@+,-]+)*$(?![\\s\\S])"
+              },
+              "description": "Literal project-relative local-only files or directory subtrees; deployed conductor guards have limited shell coverage."
+            },
+            "allowedProcessing": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "local",
+                  "remote"
+                ]
+              },
+              "uniqueItems": true
+            },
+            "allowProductImprovement": {
+              "type": "boolean"
+            },
+            "allowUnknown": {
+              "type": "boolean"
+            },
+            "maxRetentionDays": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     }

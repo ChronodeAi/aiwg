@@ -1,5 +1,7 @@
 # Twelve-Factor Application Design and Audit
 
+Evidence status: design intent.
+
 The `twelve-factor` addon packages design-time guidance and audit-time evidence collection for applications that need to satisfy the original Twelve-Factor App principles plus common modern extensions: API-first contracts, telemetry, security by default, supply-chain provenance, dependency hygiene, runtime disposability, and platform portability.
 
 Use it when a team is designing a new service, reviewing an existing architecture, preparing operational readiness evidence, or turning 12+ Factor gaps into remediation work.
@@ -47,7 +49,7 @@ Find the addon workflows through the standard capability path:
 ```bash
 aiwg discover "twelve factor application design"
 aiwg discover "12 factor audit evidence"
-aiwg show skill twelve-factor-audit
+aiwg show skill twelve-factor-audit --body
 ```
 
 ## Files

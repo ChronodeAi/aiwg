@@ -232,3 +232,13 @@ durable receipt.
 - `.aiwg/planning/training-framework/phase-4-fortemi-review.md` — Fortemi architecture review
 - `docs/storage/migration.md` — bulk migration into Fortemi
 - AIWG MCP server registry: `aiwg mcp list`, `aiwg mcp add`
+
+## Credential references
+
+Registry `headerEnv` and `envFrom` accept environment names, private `file:`
+references and named `store:` entries through the existing MCP resolver.
+See [Supplying sensitive values](../../cli/sensitive-values.md#mcp-registry-values).
+Literal headers remain supported; values reflected in connection/tool errors
+and results are redacted. Credential-bearing stdio configurations refuse
+`NODE_DEBUG=child_process`, and server stderr is drained without forwarding.
+The configured server receives its assigned environment/header values only.

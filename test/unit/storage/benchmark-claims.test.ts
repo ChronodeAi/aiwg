@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { importServerBenchmarkRun } from '../../../tools/benchmarks/verify-storage-claims.mjs';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const root = resolve(import.meta.dirname, '../../..');
@@ -55,6 +56,54 @@ describe('storage benchmark claim gate (#2191)', () => {
     writeFileSync(postgrestPath, `${JSON.stringify(postgrest, null, 2)}\n`);
     expect(() => execFileSync(process.execPath, [verifier, drifted], { timeout: 60_000, encoding: 'utf8', stdio: 'pipe' }))
       .toThrow(/operation scope mismatch/);
+  });
+
+  it('imports emitted reports and test results and renders the registered claim', () => {
+    const temporary = fixtureRoot();
+    const id = 'postgres-direct-reference-v1';
+    const evidencePath = join(temporary, `docs/storage/evidence/${id}.json`);
+    const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'));
+    const { sideEffectSummary, ...report } = evidence.qualification;
+    const sideEffects = sideEffectSummary.flatMap((effect: { outcome: string; count: number }) =>
+      Array.from({ length: effect.count }, (_, index) => ({ operation: `fixture:${effect.outcome}:${index}`, outcome: effect.outcome })));
+    writeFileSync(join(temporary, 'report.json'), JSON.stringify({ ...report, sideEffects }));
+    writeFileSync(join(temporary, 'results.json'), JSON.stringify({ success: true, testResults: [{
+      name: join(temporary, 'test/integration/storage-postgres-live.test.ts'),
+      startTime: Date.parse(report.startedAt), endTime: Date.parse(report.completedAt),
+      assertionResults: evidence.testGate.coverage.map((title: string) => ({ title, status: 'passed' })),
+    }] }));
+    const input = {
+      id, report: 'report.json', testResults: 'results.json',
+      testFile: 'test/integration/storage-postgres-live.test.ts', server: evidence.server,
+      checkout: evidence.subject.checkout,
+    };
+    const imported = importServerBenchmarkRun(temporary, input);
+    expect(imported.qualification).toEqual(evidence.qualification);
+    expect(imported.runtime.node).toBe(process.version);
+    expect(() => execFileSync(process.execPath, [verifier, temporary], { timeout: 60_000, encoding: 'utf8' })).not.toThrow();
+    const before = readFileSync(evidencePath, 'utf8');
+    writeFileSync(join(temporary, 'report.json'), JSON.stringify({ ...report, sideEffects: sideEffects.slice(1) }));
+    expect(() => importServerBenchmarkRun(temporary, input)).toThrow(/side effects do not match/);
+    expect(readFileSync(evidencePath, 'utf8')).toBe(before);
+    writeFileSync(join(temporary, 'report.json'), JSON.stringify({ ...report, sideEffects }));
+    expect(() => importServerBenchmarkRun(temporary, { ...input, testFile: 'test/integration/unregistered.test.ts' })).toThrow(/outside registered/);
+    writeFileSync(join(temporary, 'results.json'), JSON.stringify({ success: false, testResults: [] }));
+    expect(() => importServerBenchmarkRun(temporary, input)).toThrow(/exactly one live test file/);
+    expect(readFileSync(evidencePath, 'utf8')).toBe(before);
+  });
+
+  it('requires explicit base and changed-source provenance for detached reference runs', () => {
+    const temporary = fixtureRoot();
+    const evidencePath = join(temporary, 'docs/storage/evidence/postgres-direct-reference-v1.json');
+    const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'));
+    evidence.subject.branch = 'HEAD';
+    evidence.qualification.scope.branch = 'HEAD';
+    evidence.subject.checkout = { kind: 'detached-worktree', baseCommit: evidence.subject.commit, modifiedSourceFiles: ['src/storage/backends/postgres.ts'] };
+    writeFileSync(evidencePath, JSON.stringify(evidence));
+    expect(() => execFileSync(process.execPath, [verifier, temporary], { timeout: 60_000, encoding: 'utf8', stdio: 'pipe' })).not.toThrow();
+    evidence.subject.checkout.baseCommit = '0'.repeat(40);
+    writeFileSync(evidencePath, JSON.stringify(evidence));
+    expect(() => execFileSync(process.execPath, [verifier, temporary], { timeout: 60_000, encoding: 'utf8', stdio: 'pipe' })).toThrow(/explicit detached reference/);
   });
 
   it('runs before storage claims can ship from CI and tag workflows', () => {

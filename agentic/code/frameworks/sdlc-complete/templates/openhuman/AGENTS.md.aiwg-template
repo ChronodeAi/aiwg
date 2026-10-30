@@ -26,18 +26,10 @@ This project uses [AIWG](https://aiwg.io) for SDLC orchestration. OpenHuman is
 AIWG-convention-aware: kernel skills live in `~/.openhuman/skills/`, rule bodies
 in `~/.openhuman/.aiwg/rules/`, and this file is the Discover-First bridge.
 
-### Discover-First Protocol
+### Capability Routing
 
-Most AIWG skills are not loaded into context — reach them on demand:
-
-```bash
-aiwg discover "create a security review"   # rank matching skills/agents/commands/rules
-aiwg show skill flow-security-review        # fetch the body
-```
-
-Run `aiwg discover` before concluding AIWG lacks a capability, or before
-improvising a workflow from training data. It indexes the full installed
-corpus, not just the kernel set surfaced here.
+Routing authority: `aiwg show rule skill-discovery` (kernel). Capability phrases:
+`aiwg show skill aiwg-utils-quickref`.
 
 ### Skills
 

@@ -56,6 +56,7 @@ export class BaseAdapter {
 
   /** @type {Map<string, Object>} Room registry keyed by platform room ID */
   #rooms = new Map();
+  #sensitiveValues = [];
 
   constructor(platform) {
     if (new.target === BaseAdapter) {
@@ -180,7 +181,23 @@ export class BaseAdapter {
   /** Record an error */
   _recordError(error) {
     this.#errors++;
-    this.#lastError = error?.message || String(error);
+    this.#lastError = this._redactText(error?.message || String(error));
+  }
+
+  /** Recipient-local redaction also covers service responses reflecting credentials. */
+  _setSensitiveValues(...values) {
+    this.#sensitiveValues = values.filter(value => typeof value === 'string' && value)
+      .flatMap(value => [value, encodeURIComponent(value)]).sort((a, b) => b.length - a.length);
+  }
+
+  _redactText(text) {
+    return this.#sensitiveValues.reduce((result, value) => result.split(value).join('[REDACTED]'), String(text));
+  }
+
+  _redactError(error) {
+    const safe = new Error(this._redactText(error?.message || String(error)));
+    safe.name = error?.name || 'Error';
+    return safe;
   }
 
   /**
@@ -197,6 +214,7 @@ export class BaseAdapter {
       try {
         await handler(command, args, { ...context, platform: this.platform });
       } catch (error) {
+        error = this._redactError(error);
         this._recordError(error);
         console.error(`[${this.platform}] Command handler error:`, error);
       }
@@ -216,6 +234,7 @@ export class BaseAdapter {
       try {
         await handler(text, { ...context, platform: this.platform });
       } catch (error) {
+        error = this._redactError(error);
         this._recordError(error);
         console.error(`[${this.platform}] Message handler error:`, error);
       }

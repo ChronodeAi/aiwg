@@ -30,6 +30,7 @@ import {
   loadGlobalGraphConfigs,
   orderedGraphEntries,
 } from './types.js';
+import { resolveIndexWorkers } from './index-preparation.js';
 import { SUPPORTED_VIEWS } from './corpus-views/renderers.js';
 import {
   parseResourceSelector,
@@ -38,11 +39,11 @@ import {
   type WebReleaseOptions,
 } from '../resources/web-release.js';
 import { findPackageRoot } from '../cli/find-package-root.js';
-import { createResourceCredentialProvider } from '../auth/resource-credentials.js';
+import { createResourceCredentialProvider, prepareResourceCredentials } from '../auth/resource-credentials.js';
 
 const MAX_RESOURCE_TRUST_ROOT_BYTES = 64 * 1024;
 
-function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, 'selector' | 'offline'> {
+function webReleaseOptionsFromEnvironment(credentialProvider = createResourceCredentialProvider(process.env)): Omit<WebReleaseOptions, 'selector' | 'offline'> {
   const baseUrl = process.env.AIWG_RESOURCE_BASE_URL;
   const cacheRoot = process.env.AIWG_RESOURCE_CACHE_ROOT;
   const trustRootFile = process.env.AIWG_RESOURCE_TRUST_ROOT_FILE;
@@ -62,7 +63,7 @@ function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, 'selector' 
   }
 
   return {
-    credentialProvider: createResourceCredentialProvider(process.env),
+    credentialProvider,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...(cacheRoot === undefined ? {} : { cacheRoot }),
     ...(publicKeyPem === undefined ? {} : { publicKeyPem }),
@@ -372,10 +373,12 @@ export function printIndexUsage(): void {
   console.log('  build [--force] [--verbose] [--all] [--scope <dir>] [--graph <name>]');
   console.log('  refresh [--full] [--workspace <path>]... [--root <dir>]...');
   console.log('          [--only graphs|sessions|caches|runtime|models|issues] [--dry-run] [--json] [--lock-wait-ms <n>]');
+  console.log('  --only also accepts a registered index name (for example project) or all.');
   console.log('          [--max-record-bytes <n>] [--max-source-bytes <n>]');
   console.log('  Session import defaults: 67108864 bytes per record, 1073741824 bytes (1 GiB) per source; source 0 is unlimited.');
   console.log('  --exclude <id-or-glob> (repeatable): skip session IDs or absolute path globs; adds to sessions.import.exclude and AIWG_SESSIONS_IMPORT_EXCLUDE (comma-separated).');
   console.log('  Import limits: CLI flag > AIWG_SESSIONS_IMPORT_MAX_RECORD_BYTES / AIWG_SESSIONS_IMPORT_MAX_SOURCE_BYTES > workspace config > default.');
+  console.log('  build/refresh --index-workers <n>: preparation processes (0 = serial); flag > AIWG_INDEX_WORKERS > automatic CPU/memory limits.');
   console.log('  sync [--backend fortemi-core] [--graph <name> | --all] [--repo <name>]');
   console.log('       [--privacy private|sanitized|public] [--generated-at <iso>] [--json]');
   console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');
@@ -553,6 +556,7 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('Usage: aiwg index build [options]');
     console.log('');
     console.log('Options:');
+    console.log('  --index-workers <n> Preparation processes (0 = serial); overrides AIWG_INDEX_WORKERS');
     console.log('  --force          Full rebuild (ignore checksums, re-index everything)');
     console.log('  --verbose        Show detailed progress during indexing');
     console.log('  --all            Build all known graphs (including user-defined)');
@@ -578,6 +582,15 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('  aiwg index build --scope documentation/references');
     console.log('  aiwg index build --all');
     console.log('  aiwg index sync --all');
+    return;
+  }
+
+  let workers: number | undefined;
+  try {
+    workers = resolveIndexWorkers(parseFlagValue(args, '--index-workers', 'Error: --index-workers requires a value'));
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
     return;
   }
 
@@ -610,14 +623,14 @@ async function handleBuild(args: string[]): Promise<void> {
     // --graph X: build the JSON graph if X is one; otherwise X may be a
     // research-corpus markdown view, rendered below.
     if (graph in GRAPH_CONFIGS) {
-      await buildIndex(cwd, { force, verbose, scope, includeIgnored, graph, explicit: true });
+      await buildIndex(cwd, { force, verbose, scope, includeIgnored, workers, graph, explicit: true });
       jsonBuilt = true;
       builtGraphs.add(graph);
     }
   } else if (all) {
     // Build all known graphs — user asked for everything, but don't hard-error on missing dirs
     for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
-      await buildIndex(cwd, { force, verbose, includeIgnored, graph: name, explicit: false });
+      await buildIndex(cwd, { force, verbose, includeIgnored, workers, graph: name, explicit: false });
       builtGraphs.add(name);
     }
     jsonBuilt = true;
@@ -625,7 +638,7 @@ async function handleBuild(args: string[]): Promise<void> {
     // Default: build graphs with defaultBuild=true; skip gracefully if their dirs don't exist
     for (const [name, config] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       if (config.defaultBuild) {
-        await buildIndex(cwd, { force, verbose, includeIgnored, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
+        await buildIndex(cwd, { force, verbose, includeIgnored, workers, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
         builtGraphs.add(name);
       }
     }
@@ -1215,6 +1228,21 @@ async function handleExport(args: string[]): Promise<void> {
   }
 }
 
+function warnSyncTextQuality(manifest: import('./fortemi-core-sync.js').FortemiCoreSyncManifest): void {
+  const quality = manifest.text_quality;
+  if (!quality?.degenerate) return;
+  const config = GRAPH_CONFIGS[manifest.graph];
+  const source = config
+    ? ` Source: ${config.scanDirs.join(', ')} (nodeStrategy: ${config.nodeStrategy ?? 'default'}).`
+    : '';
+  if (manifest.item_count === 0) {
+    console.warn(`Warning: graph '${manifest.graph}' contains no indexed items; this graph cannot return results.${source}`);
+    return;
+  }
+  const percent = Math.round(quality.short_text_count / manifest.item_count * 100);
+  console.warn(`Warning: graph '${manifest.graph}': ${quality.short_text_count}/${manifest.item_count} items (${percent}%) have <${quality.short_text_threshold_chars} chars of indexed text; ${quality.filename_title_count} have a filename as title. This graph may return poor results. Check source content and extracted text sidecars.${source}`);
+}
+
 /**
  * Handle 'index sync' command
  */
@@ -1284,6 +1312,7 @@ async function handleSync(args: string[]): Promise<void> {
       console.log(`Fortemi Core sync: ${manifests.length} graph(s) succeeded, ${failures.length} failed`);
       for (const manifest of manifests) {
         console.log(`  ${manifest.graph}: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
+        warnSyncTextQuality(manifest);
       }
       for (const failure of failures) {
         console.error(`  ${failure.graph}: failed — ${failure.error}`);
@@ -1299,6 +1328,7 @@ async function handleSync(args: string[]): Promise<void> {
       return;
     }
     console.log(`Fortemi Core ${manifest.status}: ${manifest.item_count} item(s) → ${manifest.export_path}`);
+    warnSyncTextQuality(manifest);
   } catch (err) {
     console.error('Error: ' + (err instanceof Error ? err.message : String(err)));
     process.exit(1);
@@ -1454,7 +1484,7 @@ async function handleStats(args: string[]): Promise<void> {
  */
 async function handleStatus(args: string[]): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: aiwg index status [--json]');
+    console.log('Usage: aiwg index status [--only <name|all>] [--json]');
     console.log('       aiwg index list   [--json]   (alias)');
     console.log('');
     console.log('Enumerate every registered index graph (built-in + module + operator)');
@@ -1468,7 +1498,9 @@ async function handleStatus(args: string[]): Promise<void> {
     return;
   }
   const { showIndexStatus } = await import('./index-status.js');
-  await showIndexStatus(process.cwd(), { json: args.includes('--json') });
+  const onlyAt = args.indexOf('--only');
+  if (onlyAt >= 0 && (!args[onlyAt + 1] || args[onlyAt + 1].startsWith('--'))) throw new Error('--only requires an index name');
+  await showIndexStatus(process.cwd(), { json: args.includes('--json'), only: onlyAt >= 0 ? args[onlyAt + 1] : undefined });
 }
 
 /**
@@ -1640,6 +1672,8 @@ const DISCOVER_VALUE_FLAGS = new Set([
  * @implements #1214
  */
 async function handleDiscover(args: string[]): Promise<void> {
+  const credentials = await prepareResourceCredentials(args);
+  args = credentials.args;
   const { discoverCapability } = await import('./query-engine.js');
   const cwd = process.cwd();
 
@@ -1707,7 +1741,7 @@ async function handleDiscover(args: string[]): Promise<void> {
   const offline = flags.includes('--offline');
   const webReleaseOptions = resourceSource === 'local'
     ? undefined
-    : webReleaseOptionsFromEnvironment();
+    : webReleaseOptionsFromEnvironment(credentials.credentialProvider);
 
   await discoverCapability(cwd, {
     phrase,
@@ -1726,19 +1760,43 @@ async function handleDiscover(args: string[]): Promise<void> {
 }
 
 /**
- * Handle 'index show' command — print the full text of a specific
+ * Handle 'index show' command — show the metadata card of a specific
  * artifact by type and name.
  *
  * Shape (#1218):
- *   aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]
+ *   aiwg show <type> <name> [--json] [--first] [--bound-rule-bodies] [--graph <name>] [--backend local|fortemi-core]
  *
  * Type is positional (not a flag) so the verb reads as
  * "show <kind> <name>". `<type>` is one of the operational show types.
  *
- * Companion to `discover`: where discover ranks candidates, show fetches
- * the artifact body so consumers don't need to navigate the filesystem.
+ * Companion to `discover`: where discover ranks candidates, show returns
+ * a metadata card with section/body drill-ins so consumers don't need to navigate the filesystem.
  */
+const SHOW_FLAGS = new Set(['--json', '--first', '--bound-rule-bodies', '--graph', '--backend', '--resource-source',
+  '--aiwg-version', '--offline', '--body', '--section', '--rules', '--with-rule-bodies', '--resources', '--resource',
+  '--help']);
+
+// Section headings can themselves start with `--` (e.g. "--max-iterations (default: 10)"), and the card
+// tells agents to pass them verbatim. Only a missing value or another show flag counts as "no value".
+function showFlagValue(flags: string[], index: number): string {
+  const value = flags[index + 1];
+  if (!value || SHOW_FLAGS.has(value.split('=')[0])) throw new Error(`${flags[index]} requires a value`);
+  return value;
+}
+
+/** Values for a repeatable value flag, accepting both `--flag value` and `--flag=value`. */
+function showFlagValues(flags: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < flags.length; i++) {
+    if (flags[i] === name) values.push(showFlagValue(flags, i));
+    else if (flags[i].startsWith(`${name}=`)) values.push(flags[i].slice(name.length + 1));
+  }
+  return values;
+}
+
 async function handleShow(args: string[]): Promise<void> {
+  const credentials = await prepareResourceCredentials(args);
+  args = credentials.args;
   const { showArtifact, showMetadata } = await import('./query-engine.js');
   const cwd = process.cwd();
 
@@ -1753,8 +1811,8 @@ async function handleShow(args: string[]): Promise<void> {
 
   const HELP_TEXT = [
     '',
-    'Usage: aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
-    '       aiwg show metadata <id-or-name-or-path> [--json] [--first] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
+    'Usage: aiwg show <type> <name> [--json] [--first] [--bound-rule-bodies] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
+    '       aiwg show metadata <id-or-name-or-path> [--json] [--first] [--bound-rule-bodies] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
     '       aiwg index show <type> <name> ...',
     '',
     `Types: ${OPERATIONAL_SHOW_TYPES.join(' | ')}`,
@@ -1769,6 +1827,12 @@ async function handleShow(args: string[]): Promise<void> {
     '  aiwg show agent aiwg-steward',
     '  aiwg show command discover',
     '  aiwg show skill intake-wizard --resource-source web --aiwg-version stable',
+    '',
+    'Default: metadata card. --body restores full output; --section <heading> is repeatable.',
+    '--rules [--with-rule-bodies] | --resources | --resource <path>',
+    'Bound rules: summaries and show pointers are appended for bound skills, agents, and flows.',
+    'Fetch and follow every required_rule_checks entry before starting governed work; summaries do not replace full rules.',
+    'Use --rules --with-rule-bodies to include their full text (legacy alias: --bound-rule-bodies).',
     '',
     'Tip: use `aiwg discover "<phrase>" --json` first to find the stable id.',
   ].join('\n');
@@ -1833,10 +1897,17 @@ async function handleShow(args: string[]): Promise<void> {
   const offline = flags.includes('--offline');
   const webReleaseOptions = resourceSource === 'local'
     ? undefined
-    : webReleaseOptionsFromEnvironment();
+    : webReleaseOptionsFromEnvironment(credentials.credentialProvider);
 
   const params = {
     name,
+    boundRuleBodies: flags.includes('--bound-rule-bodies'),
+    body: flags.includes('--body'),
+    sections: showFlagValues(flags, '--section'),
+    rules: flags.includes('--rules'),
+    withRuleBodies: flags.includes('--with-rule-bodies'),
+    resources: flags.includes('--resources'),
+    resource: showFlagValues(flags, '--resource')[0],
     typeFilter: type ? [type] : undefined,
     json,
     first,

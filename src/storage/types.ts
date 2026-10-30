@@ -142,6 +142,8 @@ export interface LogseqBackendConfig {
   type: 'logseq';
   graph: string;
   apiUrl?: string;
+  /** Environment name (default LOGSEQ_API_TOKEN), file:ABSOLUTE_PATH or store:NAME. */
+  apiTokenEnv?: string;
   useApi?: boolean;
 }
 

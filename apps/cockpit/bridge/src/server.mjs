@@ -100,11 +100,16 @@ function allowedExecutorTarget(target, executorUrl = executorRequestContext.getS
   const url = parseExecutorUrl(target);
   // The operator-configured origin is the allowlist, including scheme and port.
   // AgentCards and request data cannot add destinations to it.
-  const origin = parseExecutorUrl(executorUrl).origin;
-  if (url.origin !== origin) {
+  const configured = parseExecutorUrl(executorUrl);
+  if (url.origin !== configured.origin) {
     throw executorAuthError('executor_target_refused', 'outbound target is outside the configured executor origin');
   }
-  return url;
+  // Keep the outgoing authority visibly rooted in operator configuration.
+  // Only path/query/fragment come from the checked target, never its origin.
+  configured.pathname = url.pathname;
+  configured.search = url.search;
+  configured.hash = url.hash;
+  return configured;
 }
 
 async function executorFetch(target, init = {}, executorUrl = executorRequestContext.getStore()?.executorOrigin ?? EXECUTOR_URL, hasFallback = false) {
@@ -3534,7 +3539,7 @@ export function createBridge({
         // ambiguous name is operator-correctable input, never a Bridge 502.
         if (!type || !name) return json(res, 400, { error: 'type_name_or_path_required' });
         try {
-          return json(res, 200, { type, name, body: await runAiwg(['show', type, name]) });
+          return json(res, 200, { type, name, body: await runAiwg(['show', type, name, '--body']) });
         } catch (e) {
           const detail = String(e?.message ?? e);
           const ambiguous = /ambiguous/i.test(detail);

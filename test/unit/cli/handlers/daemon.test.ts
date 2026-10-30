@@ -1,6 +1,6 @@
 /**
  * Unit tests for daemon.ts handler
- * Covers daemon, behavior, and daemon-init commands.
+ * Covers lifecycle, behavior and daemon-init commands.
  *
  * @issue #689
  * @parent #684
@@ -57,18 +57,23 @@ describe('daemonHandler', () => {
 
   it('delegates to tools/daemon/index.mjs', async () => {
     await daemonHandler.execute(makeCtx(['status']));
-    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['status']);
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['status'], { cwd: '/mock/cwd' });
   });
 
   it('passes start args', async () => {
     await daemonHandler.execute(makeCtx(['start', '--foreground']));
-    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['start', '--foreground']);
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['start', '--foreground'], { cwd: '/mock/cwd' });
   });
 
   it('forwards non-zero exit', async () => {
     mockRun.mockResolvedValue({ exitCode: 1 });
     const result = await daemonHandler.execute(makeCtx(['start']));
     expect(result.exitCode).toBe(1);
+  });
+
+  it('routes help through the lifecycle CLI in the caller directory', async () => {
+    await daemonHandler.help!(makeCtx());
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['--help'], { cwd: '/mock/cwd' });
   });
 });
 
@@ -169,6 +174,7 @@ describe('daemonInitHandler', () => {
 describe('daemonHandlers', () => {
   it('exports exactly 3 handlers', () => {
     expect(daemonHandlers).toHaveLength(3);
+    expect(daemonHandlers).toContain(daemonHandler);
     const ids = daemonHandlers.map(h => h.id);
     expect(ids).toContain('daemon');
     expect(ids).toContain('behavior');
@@ -184,5 +190,32 @@ describe('daemonHandlers', () => {
       expect(Array.isArray(handler.aliases)).toBe(true);
       expect(typeof handler.execute).toBe('function');
     }
+  });
+});
+
+describe('daemonHandler', () => {
+  beforeEach(() => { vi.clearAllMocks(); mockRun.mockResolvedValue({ exitCode: 0 }); });
+
+  it.each([['status'], ['start', '--foreground'], ['chat', 'hello']])('forwards argv %j to the existing daemon entry point', async (...args) => {
+    await daemonHandler.execute(makeCtx(args));
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', args, { cwd: '/mock/cwd' });
+  });
+
+  it('forces help instead of executing a lifecycle command', async () => {
+    await daemonHandler.help!(makeCtx(['start', '--help']));
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['--help'], { cwd: '/mock/cwd' });
+  });
+
+  it('preserves a daemon failure exit code', async () => {
+    mockRun.mockResolvedValue({ exitCode: 1 });
+    expect((await daemonHandler.execute(makeCtx(['stop']))).exitCode).toBe(1);
+  });
+});
+
+describe('handlers barrel', () => {
+  it('re-exports daemonHandler alongside the other daemon handlers', async () => {
+    const barrel = await import('../../../../src/cli/handlers/index.js');
+    const daemon = await import('../../../../src/cli/handlers/daemon.js');
+    expect(barrel.daemonHandler).toBe(daemon.daemonHandler);
   });
 });

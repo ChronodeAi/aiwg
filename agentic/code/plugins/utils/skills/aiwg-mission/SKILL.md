@@ -71,6 +71,38 @@ Non-triggers (route elsewhere):
 
 6. **Converge + report.** Run cycles until the completion criterion is met (with a `max-cycles` escape hatch), select the best output, and report what each worker did and the aggregated result. Apply the anti-laziness recovery protocol (PAUSE→DIAGNOSE→ADAPT→RETRY→ESCALATE) rather than abandoning on failure.
 
+## Delegation and final acceptance
+
+Use optional `uncertaintyPolicy: stop-and-report` to pause and report uncertainty;
+omission or `default` follows conductor policy. Fill `mustNotRegress` with
+`{kind: command|path, target, expectedStatus: passed|failed|present|absent}`
+(command: passed/failed; path: present/absent). Set `verificationOracle` to
+`{command, expectedExitCode}` checks: exact observed exit statuses decide done.
+The trusted verifier records `oracleResults` with artifact evidence; worker
+claims alone do not satisfy the oracle. Run regression checks before acceptance.
+
+For non-trivial implementation, set `designReviewRequired: true`, review the
+design first, then attach `designReviewArtifact: {ref, digest}` to the brief
+before dispatch. Result assembly refuses acceptance without that reference.
+
+For final PR review set the intent's existing `verification.independentReview`
+to `required` and `differentFamily` to `require`. Supply the current PR `headSha`
+and observed writer/reviewer lineage to `assembleWorkerResult`; never take them
+from worker claims. Resolve reviewers with `reviewOf` and
+`requireDifferentFamily`. Record each `reviewRounds` entry with its 1-based
+`round`, exact `headSha`, `reviewerObservationRef` and review `artifact`.
+A changed head needs a new review. Different CLI names do not prove diversity.
+
+Keep `findingsLedger` across rounds (an empty array records a clean review):
+`{id, class, severity, round, status, summary, followUp?}`. A means introduced or
+exposed by this diff; open A blocker/major findings must be resolved. B means
+pre-existing: file a follow-up and retain its reference. C means out of scope.
+B/C never block acceptance. Retain finding IDs and earlier rounds in successor
+records; do not delete findings to obtain a clean result. Record clean rounds
+even when no findings were raised. Acceptance derives readable `roundsToClean`
+on the verification record. Stop at the declared round/budget limit and report
+remaining blockers instead of extending scope indefinitely.
+
 ## Worker check-ins
 
 Check each live worker every 15s; confirm startup within 60s. Quiet limit 90s and stall limit 300s by default (a configured 1.25 scale on those defaults gives 112.5s/375s); hard stop 1800s. Resolved values win over these defaults. Without a native monitor, poll owned run files and processes from the shell at the same cadence. Heartbeats and log bytes are not progress. Supervise by observer state: `quiet` (suspected) is not a stop — keep waiting while you diagnose (read the status, check owned-worktree progress); `stalled` opens diagnosis through the diagnostic grace period; only `hung` authorizes a no-progress stop, and only a worker this conductor owns — confirm it stopped, then continue within remaining attempts; preserve partial work. The launcher also stops independently of progress state on `failed-to-start`, the hard wall-clock deadline (`HARD_DEADLINE`), the step-count limit (`STEP_LIMIT`), and a fatal observer-record failure. Observer loss and opaque MCP coverage are unknown, never worker failure. Terminal verification still applies: read the diff and run trusted checks outside the worker sandbox before integrating.

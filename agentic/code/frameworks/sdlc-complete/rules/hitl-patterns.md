@@ -1,5 +1,15 @@
 ---
 enforcement: medium
+activation: "bound"
+summary: "Present explicit review, approval, decision or override gates; mark drafts and uncertainties, incorporate human revisions, and preserve gate history and timeout handling."
+bound_to:
+  agents: ["architecture-designer", "deployment-manager", "executive-orchestrator", "security-auditor", "test-architect"]
+  skills: ["agent-loop", "artifact-orchestration", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-deploy-to-production", "flow-elaboration-to-construction", "flow-gate-check", "flow-inception-to-elaboration", "gate-evaluation", "orchestrate-project", "ralph", "ralph-external", "security-gate"]
+  flows: ["flow-agentloop-lfd-controls", "flow-change-control", "flow-compliance-validation", "flow-concept-to-inception", "flow-construction-to-transition", "flow-deploy-to-production", "flow-elaboration-to-construction", "flow-gate-check", "flow-inception-to-elaboration"]
+triggers:
+  - "draft then edit human review workflow"
+  - "human gate approve revise abort delegate"
+  - "record gate history and draft uncertainty"
 ---
 
 # Human-in-the-Loop (HITL) Patterns Rules

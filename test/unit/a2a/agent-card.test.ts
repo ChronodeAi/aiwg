@@ -160,6 +160,26 @@ describe('fetchAgentCard', () => {
     ]);
   });
 
+  it('sends bearer only as an HTTP header and redacts transport and parse errors', async () => {
+    const bearer = 'fixture-secret-card';
+    const request: typeof fetch = async (input, init) => {
+      expect(String(input)).not.toContain(bearer);
+      expect(init?.headers).toHaveProperty('authorization', `Bearer ${bearer}`);
+      throw new Error(`transport reflected ${bearer}`, { cause: new Error(bearer) });
+    };
+    try {
+      await fetchAgentCard('https://exec.test', 'inst-1', { bearer, fetch: request, skipVerify: true });
+      expect.unreachable('request should fail');
+    } catch (error) {
+      expect((error as Error).message).toBe('transport reflected [REDACTED]');
+      expect((error as Error).stack).not.toContain(bearer);
+      expect((error as Error).cause).toBeUndefined();
+    }
+    await expect(fetchAgentCard('https://exec.test', 'inst-1', {
+      bearer, skipVerify: true, fetch: async () => new Response(bearer),
+    })).rejects.toThrow(/invalid JSON/);
+  });
+
   it('throws on non-200 responses', async () => {
     const stub: typeof fetch = async () => new Response('not found', { status: 404 });
     await expect(

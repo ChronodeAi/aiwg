@@ -1,0 +1,30 @@
+{
+  "T-OG-05": {
+    "testFiles": ["test/conformance/orchestration-v1/worker-resolution.test.ts"],
+    "requirements": ["NFR-OG-001"],
+    "scenarios": [
+      {
+        "id": "P01",
+        "requirement": "NFR-OG-001",
+        "mechanismOwner": "B-OG-10",
+        "slice": "S2",
+        "testFile": "test/conformance/orchestration-v1/worker-resolution.test.ts",
+        "testName": "T-OG-05 NFR-OG-001 P01 1000 cached managed plan/admission requests have p95 <= 250 ms"
+      }
+    ]
+  },
+  "T-OG-06": {
+    "testFiles": ["test/unit/serve/shared-host-scheduler-fencing.test.ts"],
+    "requirements": ["NFR-OG-003"],
+    "scenarios": [
+      {
+        "id": "P01",
+        "requirement": "NFR-OG-003",
+        "mechanismOwner": "B-OG-12",
+        "slice": "S2",
+        "testFile": "test/unit/serve/shared-host-scheduler-fencing.test.ts",
+        "testName": "T-OG-06 NFR-OG-003 P01 100 managed requests across two processes survive SIGKILL with zero premature releases and no cap overshoot"
+      }
+    ]
+  }
+}

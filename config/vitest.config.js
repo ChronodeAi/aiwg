@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
-import { artifactIndexFiles, packagingFiles, discoveryFiles, nodeFiles, d29SlowFiles, d17SlowFiles, orchestrationConformanceFiles } from './test-lanes.mjs';
+import DurationSequencer from '../tools/testing/duration-sequencer.mjs';
+import { artifactIndexFiles, packagingFiles, discoveryFiles, deploymentFiles, releaseSlowFiles, wasmFiles, nodeFiles, d29SlowFiles, d17SlowFiles, orchestrationConformanceFiles } from './test-lanes.mjs';
 
 // Watch-service tests use polling so host-wide inotify quotas cannot make the
 // suite nondeterministic on shared development and CI machines.
@@ -9,6 +10,8 @@ process.env.CHOKIDAR_USEPOLLING ??= '1';
 export default defineConfig({
   root: path.resolve(import.meta.dirname, '..'),
   test: {
+    globalSetup: ['./test/helpers/default-home-setup.mjs', './test/helpers/prebuilt-relations-setup.mjs', './test/helpers/deployment-cache-setup.mjs'],
+    setupFiles: ['./test/helpers/deployment-cache-isolation.mjs'],
     // Test file patterns
     include: [
       'test/**/*.test.ts',
@@ -18,6 +21,8 @@ export default defineConfig({
       'agentic/code/frameworks/*/test/**/*.test.ts',
       'agentic/code/frameworks/*/test/**/*.spec.ts'
     ],
+
+    // Build shipped tables once; fresh worker HOMEs use the same immutable corpus.
 
     // Runner ownership follows imported APIs, not the .mjs extension.
     // Node unit tests and all UAT tests have their own required lanes.
@@ -35,8 +40,15 @@ export default defineConfig({
     // VS Code Extension Test Runner — never let vitest discover it (#1210).
     exclude: [
       // Required serial packaging and corpus lanes run separately in CI.
-      ...packagingFiles, ...artifactIndexFiles, ...discoveryFiles, ...nodeFiles, ...d29SlowFiles, ...d17SlowFiles, ...orchestrationConformanceFiles,
+      ...packagingFiles, ...artifactIndexFiles, ...discoveryFiles, ...deploymentFiles, ...releaseSlowFiles, ...nodeFiles, ...d29SlowFiles, ...d17SlowFiles, ...orchestrationConformanceFiles,
+      // PGlite/WASM must use vitest.wasm.config.js: V8 can abort on thread
+      // teardown (UnregisterWasmAllocation, #3073); no test can catch it.
+      ...wasmFiles,
       'test/uat/**',
+      // The offline conformance lane owns this TypeScript suite too.
+      'test/conformance/network-analysis-v1/**',
+      // Evidence traces use their dedicated single-fork lane and change cwd.
+      'test/evidence/**',
       'tools/ralph-external/**',
       'test/unit/ralph/**',
       'vscode-extension/**',
@@ -107,6 +119,9 @@ export default defineConfig({
     // Timeout configuration
     testTimeout: 30000,
     hookTimeout: 30000,
+
+    // Keep native --shard, assigning longest measured files to the lightest shard.
+    sequence: { sequencer: DurationSequencer },
 
     // Parallel execution for speed
     pool: 'threads',

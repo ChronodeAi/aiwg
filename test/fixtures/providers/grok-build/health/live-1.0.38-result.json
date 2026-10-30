@@ -1,0 +1,27 @@
+{
+  "text": "ok",
+  "stopReason": "end_turn",
+  "sessionId": "fixture-sessionId-2",
+  "requestId": "fixture-requestId-2",
+  "usage": {
+    "input_tokens": 19461,
+    "cache_read_input_tokens": 1792,
+    "cache_creation_input_tokens": 0,
+    "output_tokens": 27,
+    "reasoning_tokens": 26,
+    "total_tokens": 21280
+  },
+  "num_turns": 1,
+  "total_cost_usd": 0.0135932,
+  "total_cost_usd_ticks": 135932000,
+  "modelUsage": {
+    "grok-4.7-build": {
+      "inputTokens": 19461,
+      "outputTokens": 27,
+      "cacheReadInputTokens": 1792,
+      "cacheCreationInputTokens": 0,
+      "modelCalls": 1,
+      "costUSD": 0.0135932
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import fs from "fs";
 import os from "os";
@@ -10,10 +10,15 @@ import {
   diagnoseAiwgFortemiShardMigration,
   resolveAiwgFortemiShardTuple,
   writeAiwgFortemiKnowledgeShard,
+  AIWG_FULL_V1_SHARD_READER_VERSIONS,
+  importAiwgFortemiKnowledgeShard,
+  exportAiwgFortemiKnowledgeShardWithReport,
+  validateAiwgFortemiKnowledgeShard,
   type AiwgFortemiShardConverter,
 } from "../../../src/artifacts/fortemi-shard-export.js";
 import {
   ArchiveManager,
+  MemoryBlobStore,
   exportShardWithReport,
   importShard,
   openShard,
@@ -642,4 +647,216 @@ describe("AIWG portable Fortemi shard export", () => {
       await manager.close();
     }
   }, 20_000);
+});
+
+const shardFixtureRoot = path.resolve("test/fixtures/fortemi-shard");
+const shard22FixtureRoot = path.join(shardFixtureRoot, "full-v1-query-template-v2.2");
+const jsonBytes = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value));
+const readJson = <T>(bytes: Uint8Array): T => JSON.parse(new TextDecoder().decode(bytes));
+type EmbeddingRecord = Record<string, unknown>;
+
+function corpusShard(
+  mutate?: (sets: EmbeddingRecord[], configs: EmbeddingRecord[], manifest: Record<string, unknown>) => void,
+): Uint8Array {
+  const files = unpackTarGz(fs.readFileSync(path.join(shardFixtureRoot, "aiwg-full-v1.shard")));
+  const manifest = readJson<Record<string, unknown>>(files.get("manifest.json")!);
+  manifest.version = "2.2.0";
+  manifest.min_reader_version = "2.2.0";
+  const componentNames = ["embedding_sets", "embedding_configs"];
+  const values = componentNames.map(component => {
+    const bytes = new Uint8Array(fs.readFileSync(path.join(shard22FixtureRoot, `${component}.json`)));
+    files.set(`${component}.json`, bytes);
+    return readJson<EmbeddingRecord[]>(bytes);
+  });
+  if (mutate) {
+    mutate(values[0], values[1], manifest);
+    componentNames.forEach((component, index) => files.set(`${component}.json`, jsonBytes(values[index])));
+  }
+  for (const [index, component] of componentNames.entries()) {
+    (manifest.counts as Record<string, number>)[component] = values[index].length;
+    (manifest.checksums as Record<string, string>)[`${component}.json`] = sha256(files.get(`${component}.json`)!);
+  }
+  files.set("manifest.json", jsonBytes(manifest));
+  return packTarGz(files);
+}
+
+describe("AIWG Knowledge Shard 2.2.0 full-v1 candidate qualification", () => {
+  let manager: ArchiveManager;
+  beforeEach(() => { manager = new ArchiveManager("memory"); });
+  afterEach(async () => { await manager.close(); });
+
+  it("qualifies the pinned Fortemi corpus with byte-equivalent files and fields after persistence and re-import", async () => {
+    expect(fs.readFileSync(path.join(shard22FixtureRoot, "PROVENANCE.txt"), "utf8"))
+      .toContain("b88084407751153e67a9279fff9303cc3db70474");
+    expect(sha256(fs.readFileSync(path.join(shard22FixtureRoot, "embedding_sets.json"))))
+      .toBe("f279cad22517395194c6a5dc327b4531bd089e151b9141324c94f01e81bacf32");
+    expect(sha256(fs.readFileSync(path.join(shard22FixtureRoot, "embedding_configs.json"))))
+      .toBe("bc76206df48215d0da7a3c944874d7af5b6e01bb07df8b5849869025b7d25f89");
+    const contractRoot = path.resolve("src/artifacts/fortemi-shard-contract/2.2.0");
+    const contract = JSON.parse(fs.readFileSync(path.join(contractRoot, "contract.json"), "utf8"));
+    for (const name of ["manifest", "embedding-set", "embedding-config"]) {
+      expect(sha256(fs.readFileSync(path.join(contractRoot, `full-v1-${name}.schema.json`))))
+        .toBe(contract.schemaBundle.files[`contracts/knowledge-shard/2.2.0/full-v1/${name}.schema.json`]);
+    }
+    const archive = corpusShard();
+    expect(await validateAiwgFortemiKnowledgeShard(archive)).toEqual({ valid: true, errors: [] });
+    const destination = await manager.create("shard22-corpus");
+    const imported = await importAiwgFortemiKnowledgeShard(destination, archive);
+    expect(imported.success, imported.errors.join("; ")).toBe(true);
+    expect(imported.component_counts).toMatchObject({ embedding_sets: 2, embedding_configs: 2 });
+    await expect(exportAiwgFortemiKnowledgeShardWithReport(destination, {
+      profile: "full-v1", schemaVersion: "2.0.0", blobStore: new MemoryBlobStore(),
+    })).rejects.toThrow(/refusing a lossy downgrade/);
+    expect(imported.capability_report).toMatchObject({
+      requested_schema_version: "2.2.0", advertised_profiles: ["full-v1"], authority_status: "candidate",
+      authority: { commit: "b88084407751153e67a9279fff9303cc3db70474" },
+    });
+    expect(AIWG_FULL_V1_SHARD_READER_VERSIONS).toContain("2.2.0");
+    expect((await importAiwgFortemiKnowledgeShard(destination, archive)).success).toBe(true);
+    const persisted = await destination.query<{ component: string; record_json: EmbeddingRecord }>(
+      "SELECT component, record_json FROM knowledge_shard_component_record WHERE component IN ('embedding_sets', 'embedding_configs') ORDER BY component, ordinal",
+    );
+    for (const component of ["embedding_configs", "embedding_sets"]) {
+      const expected = JSON.parse(fs.readFileSync(path.join(shard22FixtureRoot, `${component}.json`), "utf8"));
+      expect(persisted.rows.filter(row => row.component === component).map(row => row.record_json)).toEqual(expected);
+    }
+    const reexport = await exportAiwgFortemiKnowledgeShardWithReport(destination, {
+      profile: "full-v1", schemaVersion: "2.2.0", blobStore: new MemoryBlobStore(),
+    });
+    expect(reexport.success, reexport.errors.join("; ")).toBe(true);
+    const files = unpackTarGz(reexport.archive!);
+    for (const component of ["embedding_sets", "embedding_configs"]) {
+      expect(files.get(`${component}.json`)).toEqual(new Uint8Array(
+        fs.readFileSync(path.join(shard22FixtureRoot, `${component}.json`)),
+      ));
+    }
+    const fresh = await manager.create("shard22-reimport");
+    expect((await importAiwgFortemiKnowledgeShard(fresh, reexport.archive!)).success).toBe(true);
+    const again = await exportAiwgFortemiKnowledgeShardWithReport(fresh, {
+      profile: "full-v1", schemaVersion: "2.2.0", blobStore: new MemoryBlobStore(),
+    });
+    expect(again.success, again.errors.join("; ")).toBe(true);
+    expect(again.archive).toEqual(reexport.archive);
+  }, 45_000);
+
+  it.each(["absent", "null", "internal", "external"])("preserves %s vector ownership and nullable query/provider fields", async ownership => {
+    const archive = corpusShard((sets, configs) => {
+      if (ownership === "absent") {
+        delete sets[0].query_template;
+        delete sets[0].vector_source;
+        delete configs[0].provider_dimension;
+      } else {
+        sets[0].query_template = null;
+        sets[0].vector_source = ownership === "null" ? null : ownership;
+        configs[0].provider_dimension = null;
+      }
+    });
+    const destination = await manager.create(`shard22-${ownership}`);
+    const imported = await importAiwgFortemiKnowledgeShard(destination, archive);
+    expect(imported.success, imported.errors.join("; ")).toBe(true);
+    const exported = await exportAiwgFortemiKnowledgeShardWithReport(destination, {
+      profile: "full-v1", schemaVersion: "2.2.0", blobStore: new MemoryBlobStore(),
+    });
+    expect(exported.success, exported.errors.join("; ")).toBe(true);
+    const source = unpackTarGz(archive);
+    const restored = unpackTarGz(exported.archive!);
+    for (const component of ["embedding_sets.json", "embedding_configs.json"]) expect(restored.get(component)).toEqual(source.get(component));
+    const set = readJson<EmbeddingRecord[]>(restored.get("embedding_sets.json")!)[0];
+    expect(set.vector_source ?? "internal").toBe(ownership === "external" ? "external" : "internal");
+  }, 20_000);
+
+  it.each([
+    ["invalid vector_source", (sets: EmbeddingRecord[]) => { sets[0].vector_source = "remote"; }],
+    ["query without placeholder", (sets: EmbeddingRecord[]) => { sets[0].query_template = "no placeholder"; }],
+    ["repeated query placeholder", (sets: EmbeddingRecord[]) => { sets[0].query_template = "{text}{text}"; }],
+    ["UTF-8 query limit", (sets: EmbeddingRecord[]) => { sets[0].query_template = `${"😀".repeat(512)}{text}`; }],
+    ["provider dimension below storage", (_sets: EmbeddingRecord[], configs: EmbeddingRecord[]) => { configs[0].provider_dimension = 512; }],
+    ["provider dimension above limit", (_sets: EmbeddingRecord[], configs: EmbeddingRecord[]) => { configs[0].provider_dimension = 16385; }],
+  ] as const)("rejects %s before any database call", async (_label, mutate) => {
+    const destination = await manager.create("shard22-invalid");
+    const query = vi.spyOn(destination, "query");
+    const transaction = vi.spyOn(destination, "transaction");
+    await expect(importAiwgFortemiKnowledgeShard(destination, corpusShard(mutate)))
+      .rejects.toThrow(/Canonical full-v1 validation failed/);
+    expect(query).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  }, 20_000);
+
+  it.each(["core-v1", "record-v1", "unknown-v1"])("fails closed for un-upgraded 2.2.0/%s with zero writes", async profile => {
+    const archive = corpusShard((_sets, _configs, manifest) => { manifest.profile = profile; });
+    expect((await validateAiwgFortemiKnowledgeShard(archive)).valid).toBe(false);
+    const destination = await manager.create("shard22-profile");
+    const transaction = vi.spyOn(destination, "transaction");
+    const query = vi.spyOn(destination, "query");
+    await expect(importAiwgFortemiKnowledgeShard(destination, archive)).rejects.toThrow(/Unsupported/);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    await expect(exportAiwgFortemiKnowledgeShardWithReport(destination, { profile, schemaVersion: "2.2.0" }))
+      .rejects.toThrow(/Unsupported/);
+  }, 20_000);
+
+  it("exports edits to the candidate fields and rejects invalid persisted ownership", async () => {
+    const destination = await manager.create("shard22-edits");
+    expect((await importAiwgFortemiKnowledgeShard(destination, corpusShard())).success).toBe(true);
+    await destination.query(
+      "UPDATE knowledge_shard_component_record SET record_json = jsonb_set(record_json, '{query_template}', $1::jsonb) WHERE schema_version = '2.2.0' AND component = 'embedding_sets' AND ordinal = 0",
+      [JSON.stringify("Find matching synthetic records:\n{text}")],
+    );
+    await destination.query(
+      "UPDATE knowledge_shard_component_record SET record_json = jsonb_set(record_json, '{provider_dimension}', '8192'::jsonb) WHERE schema_version = '2.2.0' AND component = 'embedding_configs' AND ordinal = 0",
+    );
+    const options = { profile: "full-v1", schemaVersion: "2.2.0" as const, blobStore: new MemoryBlobStore() };
+    const exported = await exportAiwgFortemiKnowledgeShardWithReport(destination, options);
+    expect(exported.success, exported.errors.join("; ")).toBe(true);
+    const files = unpackTarGz(exported.archive!);
+    expect(readJson<EmbeddingRecord[]>(files.get("embedding_sets.json")!)[0]).toMatchObject({
+      query_template: "Find matching synthetic records:\n{text}", vector_source: "external",
+    });
+    expect(readJson<EmbeddingRecord[]>(files.get("embedding_configs.json")!)[0]).toMatchObject({ provider_dimension: 8192 });
+    expect(await validateAiwgFortemiKnowledgeShard(exported.archive!)).toEqual({ valid: true, errors: [] });
+    await destination.query(
+      "UPDATE knowledge_shard_component_record SET record_json = jsonb_set(record_json, '{vector_source}', $1::jsonb) WHERE schema_version = '2.2.0' AND component = 'embedding_sets' AND ordinal = 0",
+      [JSON.stringify("invalid")],
+    );
+    const invalid = await exportAiwgFortemiKnowledgeShardWithReport(destination, options);
+    expect(invalid.success).toBe(false);
+    expect(invalid.archive).toBeNull();
+    expect(invalid.errors.join("; ")).toMatch(/embedding_sets/);
+  }, 20_000);
+
+  it("retains 2.1.0 and 2.0.0 full-v1 support and legacy 1.x core-v1 support", async () => {
+    for (const version of ["2.0.0", "2.1.0"]) {
+      const files = unpackTarGz(fs.readFileSync(path.join(shardFixtureRoot, "aiwg-full-v1.shard")));
+      const manifest = readJson<Record<string, unknown>>(files.get("manifest.json")!);
+      manifest.version = version;
+      manifest.min_reader_version = version;
+      files.set("manifest.json", jsonBytes(manifest));
+      const archive = packTarGz(files);
+      const destination = await manager.create(`shard-${version}`);
+      const imported = await importAiwgFortemiKnowledgeShard(destination, archive);
+      expect(imported.success, imported.errors.join("; ")).toBe(true);
+      const exported = await exportAiwgFortemiKnowledgeShardWithReport(destination, {
+        profile: "full-v1", schemaVersion: version as "2.0.0" | "2.1.0", blobStore: new MemoryBlobStore(),
+      });
+      expect(exported.success, exported.errors.join("; ")).toBe(true);
+      expect(unpackTarGz(exported.archive!).get("manifest.json")).toEqual(files.get("manifest.json"));
+    }
+    for (const version of ["1.0.0", "1.1.0", "1.2.0"]) {
+      const files = unpackTarGz(fs.readFileSync(path.join(shardFixtureRoot, "aiwg-core-v1.shard")));
+      const manifest = readJson<Record<string, unknown>>(files.get("manifest.json")!);
+      manifest.version = version;
+      manifest.min_reader_version = version;
+      if (version === "1.0.0") {
+        const notes = new TextDecoder().decode(files.get("notes.jsonl")!).split("\n").filter(Boolean)
+          .map(line => { const note = JSON.parse(line); delete note.deleted_at; return JSON.stringify(note); });
+        const bytes = new TextEncoder().encode(notes.join("\n"));
+        files.set("notes.jsonl", bytes);
+        (manifest.checksums as Record<string, string>)["notes.jsonl"] = sha256(bytes);
+      }
+      files.set("manifest.json", jsonBytes(manifest));
+      const destination = await manager.create(`shard-${version}`);
+      const imported = await importAiwgFortemiKnowledgeShard(destination, packTarGz(files));
+      expect(imported.success, imported.errors.join("; ")).toBe(true);
+    }
+  }, 45_000);
 });

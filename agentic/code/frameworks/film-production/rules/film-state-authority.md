@@ -3,6 +3,12 @@ id: film-state-authority
 name: Film State and Authority
 description: Keep one versioned production truth and separate acceptance evidence from permission to act.
 enforcement: high
+activation: bound
+summary: Keep one versioned production truth and separate acceptance evidence from permission to act.
+bound_to:
+  agents: [film-producer, film-story-director, film-scene-supervisor, film-continuity-supervisor, film-editor-sound-supervisor, film-qc-reviewer]
+  skills: [film-continuity-pack, film-delivery, film-edit-conform, film-intake, film-motion-coverage, film-performance-sound, film-production-quickref, film-provider-preflight, film-reference-edit, film-reference-footage, film-retrospective, film-review-gate, film-shot-plan, film-story-proof, film-storyboard]
+  flows: [film-develop, film-design, film-previs, film-generate, film-finish, film-deliver, film-resume, film-revise-with-impact]
 ---
 
 # Film State and Authority

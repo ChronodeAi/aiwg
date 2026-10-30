@@ -2,13 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { integer, dateTime } from '../schema/zod-validation.mjs';
 import { redactStructured } from '../governance/redaction.js';
 import { resolveProjectAiwgDirForWrite } from '../config/project-artifacts.js';
 
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
 const id = z.string().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/);
 const stableId = z.string().min(1).max(120).regex(/^[a-z0-9][a-z0-9.-]*$/).refine(value => !value.includes('..'));
-const isoDate = z.string().datetime();
+const isoDate = dateTime();
 
 const hash = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
@@ -32,107 +33,107 @@ function rejectSensitiveReceipt(value: unknown): void {
   if (redacted.sensitivity !== 'none') throw new Error('Writing receipt contains a known secret or credential field');
 }
 
-const budgetSchema = z.object({
-  limit: z.number().int().nonnegative(),
-  used: z.number().int().nonnegative(),
+const budgetSchema = z.strictObject({
+  limit: integer().nonnegative(),
+  used: integer().nonnegative(),
   unit: z.enum(['tokens', 'utf8-bytes', 'characters']),
   measurement: z.enum(['exact', 'upper-bound', 'estimated']),
   tokenizerId: z.string().min(1).max(120),
   tokenizerVersion: z.string().min(1).max(120),
-}).strict().refine(value => value.used <= value.limit, 'Budget use cannot exceed limit');
+}).refine(value => value.used <= value.limit, 'Budget use cannot exceed limit');
 
-const operationConfigSchema = z.object({
+const operationConfigSchema = z.strictObject({
   action: z.enum(['plan', 'proofread', 'draft', 'edit', 'continue']),
-  correctionIds: z.array(id).default([]),
+  correctionIds: z.array(id).prefault([]),
   channel: z.enum(['article', 'social', 'email', 'engineering', 'conversation']).optional(),
   configSha256: sha.optional(),
-}).strict();
+});
 
-const receiptInputBaseSchema = z.object({
+const receiptInputBaseSchema = z.strictObject({
   schemaVersion: z.literal('aiwg.writing-receipt.v1').default('aiwg.writing-receipt.v1'),
   id: stableId.optional(),
   createdAt: isoDate.default(() => new Date().toISOString()),
   operation: z.enum(['draft-from-notes', 'edit-existing', 'proofread-only', 'continue-author-text']),
-  profile: z.object({
+  profile: z.strictObject({
     id: stableId,
     version: z.string().regex(/^\d+\.\d+\.\d+$/),
-    revision: z.number().int().positive(),
-    cacheEpoch: z.number().int().nonnegative(),
+    revision: integer().positive(),
+    cacheEpoch: integer().nonnegative(),
     compiledModeSha256: sha.optional(),
     fallback: z.boolean(),
-  }).strict(),
-  examples: z.object({
+  }),
+  examples: z.strictObject({
     receiptSha256: sha.optional(),
     cacheKey: sha.optional(),
-    selections: z.array(z.object({ sampleId: id, sha256: sha }).strict()).default([]),
+    selections: z.array(z.strictObject({ sampleId: id, sha256: sha })).prefault([]),
     budget: budgetSchema.optional(),
     fallback: z.boolean().default(false),
-  }).strict().optional(),
-  modes: z.array(z.object({
+  }).optional(),
+  modes: z.array(z.strictObject({
     id: stableId,
     version: z.string().min(1).max(120),
     profileSha256: sha.optional(),
-  }).strict()).default([]),
-  state: z.object({
-    selected: z.array(stableId).default([]),
-    delivered: z.array(stableId).default([]),
-    applied: z.array(stableId).default([]),
-    validated: z.array(stableId).default([]),
+  })).prefault([]),
+  state: z.strictObject({
+    selected: z.array(stableId).prefault([]),
+    delivered: z.array(stableId).prefault([]),
+    applied: z.array(stableId).prefault([]),
+    validated: z.array(stableId).prefault([]),
     deliveredTo: z.enum(['local-transform-callback', 'none']),
     fallback: z.enum(['none', 'unaltered']),
-  }).strict().optional(),
-  modelPrompt: z.object({
+  }).optional(),
+  modelPrompt: z.strictObject({
     execution: z.enum(['none', 'local-callback', 'hosted']).default('none'),
     provider: z.string().min(1).max(120).optional(),
     model: z.string().min(1).max(120).optional(),
     promptSha256: sha,
     templateSha256: sha.optional(),
-    decoding: z.object({
+    decoding: z.strictObject({
       temperature: z.number().finite().min(0).max(2).optional(),
       topP: z.number().finite().min(0).max(1).optional(),
-      maxOutputTokens: z.number().int().positive().optional(),
-      seed: z.number().int().optional(),
+      maxOutputTokens: integer().positive().optional(),
+      seed: integer().optional(),
       stopSha256: sha.optional(),
-    }).strict().optional(),
+    }).optional(),
     promptConfigSha256: sha.optional(),
-    hostedVersion: z.object({
+    hostedVersion: z.strictObject({
       attested: z.literal(false),
       reason: z.literal('Hosted provider prompt/version cannot be attested from this local receipt.'),
-    }).strict().optional(),
-  }).strict(),
-  inputs: z.array(z.object({
+    }).optional(),
+  }),
+  inputs: z.array(z.strictObject({
     id,
     role: z.enum(['source', 'author-notes', 'existing-draft', 'brief', 'configuration']),
     sha256: sha,
-  }).strict()).min(1),
+  })).min(1),
   operationConfig: operationConfigSchema.optional(),
-  output: z.object({
+  output: z.strictObject({
     sha256: sha,
     path: z.string().min(1).max(2000).optional(),
-  }).strict().optional(),
+  }).optional(),
   budget: budgetSchema,
-  fallback: z.object({
+  fallback: z.strictObject({
     applied: z.boolean(),
     reason: z.string().min(1).max(400).optional(),
-  }).strict(),
-  validators: z.array(z.object({
+  }),
+  validators: z.array(z.strictObject({
     id,
     version: z.string().min(1).max(120),
     sha256: sha.optional(),
     outcome: z.enum(['pass', 'fail', 'uncertain', 'not-run']),
-  }).strict()).default([]),
-  evaluation: z.array(z.object({
+  })).prefault([]),
+  evaluation: z.array(z.strictObject({
     id,
     method: z.string().min(1).max(120),
     sha256: sha,
     outcome: z.enum(['pass', 'fail', 'uncertain', 'not-established']),
-  }).strict()).default([]),
-  authorAcceptance: z.object({
+  })).prefault([]),
+  authorAcceptance: z.strictObject({
     status: z.enum(['accepted', 'pending', 'rejected', 'not-required']),
     acceptedAt: isoDate.optional(),
     acceptedBy: z.string().min(1).max(120).optional(),
-  }).strict(),
-}).strict();
+  }),
+});
 
 const enforceReceiptRules = (value: z.infer<typeof receiptInputBaseSchema>, ctx: z.RefinementCtx): void => {
   if (new Set(value.inputs.map(input => input.id)).size !== value.inputs.length) {
@@ -185,7 +186,7 @@ const enforceReceiptRules = (value: z.infer<typeof receiptInputBaseSchema>, ctx:
 
 const receiptInputSchema = receiptInputBaseSchema.superRefine(enforceReceiptRules);
 
-export const writingReceiptSchema = receiptInputBaseSchema.extend({ id: stableId, operationConfig: operationConfigSchema, receiptSha256: sha }).strict().superRefine(enforceReceiptRules);
+export const writingReceiptSchema = receiptInputBaseSchema.extend({ id: stableId, operationConfig: operationConfigSchema, receiptSha256: sha }).superRefine(enforceReceiptRules);
 export type WritingReceiptInput = z.input<typeof receiptInputSchema>;
 export type WritingReceipt = z.infer<typeof writingReceiptSchema>;
 

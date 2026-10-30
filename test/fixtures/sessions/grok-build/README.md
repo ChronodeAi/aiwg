@@ -15,6 +15,21 @@ lineage, subagents, attachments, snapshots, and tool results. Tests assert that
 AIWG reports those fields as unavailable rather than reconstructing them. These
 synthetic exports do not claim to qualify those omitted native scenarios.
 
-Direct `$GROK_HOME/sessions` fixtures are absent by design. Native parsing stays
-disabled until sanitized files from a released binary establish the complete
-schema and a qualified version range.
+Released-binary `$GROK_HOME/sessions` captures are absent. Native parsing is
+experimental and disabled by default; `AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL=1`
+opts in to the synthetic fixtures below. No released-binary schema or version
+range is qualified.
+
+## Synthetic native store fixtures (unqualified)
+
+`native-layout/` reproduces only the *documented directory layout*
+`<sessions>/<url-encoded cwd>/<uuid>/chat_history.jsonl` (operator observation,
+2026-10-17), never observed record bytes. The `chat_history.jsonl` record shape
+(`schemaVersion: 1` with `sessionId`/`seq`/`role`/`content`, optional
+`timestamp`/`toolName`/`toolCallId`/`id`) and `native-active-sessions.json`
+(`schemaVersion: 1` with `sessionId`/`cwd`/`lastHeartbeatAt`) are AIWG-defined
+synthetic v1 contracts: real stores were never inspected, so anything outside
+these shapes fails closed and no compatibility with released binaries is claimed.
+`session_search.sqlite` is present only as an enumeration decoy (empty, never
+opened). Tests copy or rebuild this layout under `os.tmpdir()/mkdtemp`
+with the encoded cwd derived from the test workspace.

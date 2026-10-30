@@ -9,6 +9,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { deployedSkillRoots } from '../../../../src/providers/deployed-skill-roots.js';
+import * as skillRootModule from '../../../../src/providers/deployed-skill-roots.js';
 import type { HandlerContext } from "../../../../src/cli/handlers/types.js";
 import { researchQueryCommand } from "../../../../src/extensions/commands/definitions.js";
 import { PROJECT_LOCAL_SEARCH_PATHS_ENV } from "../../../../src/extensions/project-local-paths.js";
@@ -285,6 +291,156 @@ describe("Subcommand Handlers", () => {
   });
 
   describe("removeHandler", () => {
+    describe('receipt preview regression (#3472)', () => {
+      let projectDir: string;
+      const original = 'unchanged';
+      const hash = `sha256:${createHash('sha256').update(original).digest('hex')}`;
+      const snapshot = (dir: string): unknown => Object.fromEntries(fs.readdirSync(dir).sort().map(name => {
+        const target = path.join(dir, name);
+        const stat = fs.lstatSync(target);
+        return [name, stat.isSymbolicLink() ? { link: fs.readlinkSync(target) }
+          : stat.isDirectory() ? snapshot(target) : fs.readFileSync(target, 'utf8')];
+      }));
+
+      beforeEach(() => {
+        projectDir = fs.mkdtempSync(path.join(tmpdir(), 'aiwg-3472-test-'));
+        fs.mkdirSync(path.join(projectDir, '.aiwg'));
+        const deployedTo = Object.fromEntries(['claude', 'codex', 'pi'].map(provider =>
+          [provider, { agents: 0, commands: 0, skills: 1, rules: 0 }]));
+        const entry = { version: '1', source: 'bundled', installedAt: '2026-10-23T00:00:00Z', deployedTo };
+        fs.writeFileSync(path.join(projectDir, '.aiwg/aiwg.config'), JSON.stringify({
+          version: '1', providers: ['claude', 'codex', 'pi'], installed: { all: entry, sdlc: entry }, scripts: {},
+        }));
+        for (const provider of ['claude', 'codex', 'pi']) {
+          for (const root of deployedSkillRoots(projectDir, provider)) {
+            const dir = path.join(root, 'demo');
+            if (fs.existsSync(dir)) continue; // Codex and Pi share the kernel skill root.
+            fs.mkdirSync(path.join(dir, 'nested'), { recursive: true });
+            fs.writeFileSync(path.join(dir, 'SKILL.md'), original);
+            fs.writeFileSync(path.join(dir, 'changed.txt'), 'operator edit');
+            fs.writeFileSync(path.join(dir, 'nested/notes.txt'), 'operator addition');
+            fs.symlinkSync('SKILL.md', path.join(dir, 'linked.txt'));
+            fs.writeFileSync(path.join(dir, '.aiwg-managed'), '');
+            fs.writeFileSync(path.join(dir, '.aiwg-manifest.json'), JSON.stringify({
+              managed: { 'SKILL.md': { hash, frameworkSlug: 'sdlc-complete' },
+                'changed.txt': { hash }, 'linked.txt': { hash } },
+            }));
+            const foreign = path.join(root, 'foreign');
+            fs.mkdirSync(foreign);
+            fs.writeFileSync(path.join(foreign, 'SKILL.md'), original);
+            fs.writeFileSync(path.join(foreign, '.aiwg-manifest.json'), JSON.stringify({
+              managed: { 'SKILL.md': { hash, frameworkSlug: 'other' } },
+            }));
+          }
+        }
+      });
+      afterEach(() => fs.rmSync(projectDir, { recursive: true, force: true }));
+
+      it.each(['all', 'sdlc'])('lists paths and reasons for every provider without writing: %s', async id => {
+        const before = snapshot(projectDir);
+        const result = await removeHandler.execute({ ...mockContext, cwd: projectDir, args: [id, '--dry-run'] });
+        expect(result.exitCode).toBe(0);
+        for (const provider of ['claude', 'codex', 'pi']) {
+          expect(result.message).toContain(`Provider ${provider}:`);
+          for (const root of deployedSkillRoots(projectDir, provider)) {
+            const prefix = path.relative(projectDir, path.join(root, 'demo'));
+            expect(result.message).toContain(`Would remove ${prefix}/SKILL.md — unchanged managed file`);
+            expect(result.message).toContain(`Would remove ${prefix}/.aiwg-manifest.json — ownership metadata released`);
+            expect(result.message).toContain(`Would remove ${prefix}/.aiwg-managed — ownership metadata released`);
+            expect(result.message).toContain(`Would preserve ${prefix}/changed.txt — modified or unverifiable managed file`);
+            expect(result.message).toContain(`Would preserve ${prefix}/nested/notes.txt — unrecorded operator file`);
+            expect(result.message).toContain(`Would preserve ${prefix}/linked.txt — symlink preserved`);
+            expect(result.message).toContain(`Would preserve ${path.relative(projectDir, root)}/foreign/SKILL.md — foreign or unverifiable ownership receipt`);
+          }
+        }
+        expect(result.message).toContain('Would update .aiwg/aiwg.config');
+        expect(snapshot(projectDir)).toEqual(before);
+        expect(mockRun).not.toHaveBeenCalled();
+      });
+
+      it('preserves unchanged recorded files beneath a symlinked directory in preview and removal', async () => {
+        const skillDir = path.join(deployedSkillRoots(projectDir, 'claude')[0], 'demo');
+        const backing = path.join(projectDir, 'backing');
+        fs.mkdirSync(backing);
+        fs.writeFileSync(path.join(backing, 'recorded.txt'), original);
+        fs.symlinkSync(backing, path.join(skillDir, 'linked-dir'));
+        const manifestPath = path.join(skillDir, '.aiwg-manifest.json');
+        const receipt = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        receipt.managed['linked-dir/recorded.txt'] = { hash };
+        fs.writeFileSync(manifestPath, JSON.stringify(receipt));
+        const args = ['sdlc', '--provider', 'claude'];
+        const before = snapshot(projectDir);
+        const preview = await removeHandler.execute({ ...mockContext, cwd: projectDir, args: [...args, '--dry-run'] });
+        const display = path.relative(projectDir, path.join(skillDir, 'linked-dir/recorded.txt'));
+        expect(preview.message).toContain(`Would preserve ${display} — symlink preserved`);
+        expect(preview.message).not.toContain(`Would remove ${display}`);
+        expect(snapshot(projectDir)).toEqual(before);
+        const result = await removeHandler.execute({ ...mockContext, cwd: projectDir, args });
+        expect(result.exitCode).toBe(0);
+        expect(fs.readFileSync(path.join(skillDir, 'linked-dir/recorded.txt'), 'utf8')).toBe(original);
+        expect(fs.lstatSync(path.join(skillDir, 'linked-dir')).isSymbolicLink()).toBe(true);
+      });
+
+      it('filters providers, previews keep-registry, and agrees with actual removal', async () => {
+        const args = ['sdlc', '--provider', 'codex', '--keep-registry'];
+        const before = snapshot(projectDir);
+        const preview = await removeHandler.execute({ ...mockContext, cwd: projectDir, args: [...args, '--dry-run'] });
+        expect(preview.message).toContain('Provider codex:');
+        expect(preview.message).not.toContain('Provider claude:');
+        expect(preview.message).not.toContain('Provider pi:');
+        expect(preview.message).toContain('Registry preserved (--keep-registry)');
+        expect(snapshot(projectDir)).toEqual(before);
+        const configBefore = fs.readFileSync(path.join(projectDir, '.aiwg/aiwg.config'), 'utf8');
+        const result = await removeHandler.execute({ ...mockContext, cwd: projectDir, args });
+        expect(result.exitCode).toBe(0);
+        for (const root of deployedSkillRoots(projectDir, 'codex')) {
+          for (const name of ['SKILL.md', '.aiwg-manifest.json', '.aiwg-managed']) {
+            expect(fs.existsSync(path.join(root, 'demo', name))).toBe(false);
+          }
+          expect(fs.readFileSync(path.join(root, 'demo/changed.txt'), 'utf8')).toBe('operator edit');
+          expect(fs.lstatSync(path.join(root, 'demo/linked.txt')).isSymbolicLink()).toBe(true);
+          expect(fs.existsSync(path.join(root, 'foreign/SKILL.md'))).toBe(true);
+        }
+        expect(fs.readFileSync(path.join(projectDir, '.aiwg/aiwg.config'), 'utf8')).toBe(configBefore);
+      });
+
+      it('does not report nested bulk-root files as preserved in the kernel-root scan', async () => {
+        const kernel = path.join(projectDir, 'hermes/skills');
+        const bulk = path.join(kernel, '.aiwg');
+        fs.mkdirSync(bulk, { recursive: true });
+        fs.cpSync(path.join(projectDir, '.claude/skills/demo'), path.join(bulk, 'demo'), { recursive: true });
+        const configPath = path.join(projectDir, '.aiwg/aiwg.config');
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        config.providers.push('hermes');
+        config.installed.sdlc.deployedTo.hermes = { agents: 0, commands: 0, skills: 1, rules: 0 };
+        fs.writeFileSync(configPath, JSON.stringify(config));
+        const roots = vi.spyOn(skillRootModule, 'deployedSkillRoots').mockReturnValue([bulk, kernel]);
+        try {
+          const before = snapshot(projectDir);
+          const result = await removeHandler.execute({ ...mockContext, cwd: projectDir,
+            args: ['sdlc', '--provider', 'hermes', '--dry-run'] });
+          expect(result.exitCode).toBe(0);
+          expect(result.message).toContain('Would remove hermes/skills/.aiwg/demo/SKILL.md');
+          expect(result.message).not.toContain('Would preserve hermes/skills/.aiwg/demo/SKILL.md');
+          expect(result.message?.match(/hermes\/skills\/\.aiwg\/demo\/SKILL\.md/g)).toHaveLength(1);
+          expect(snapshot(projectDir)).toEqual(before);
+        } finally {
+          roots.mockRestore();
+        }
+      });
+
+      it('provides detailed help without invoking removal', async () => {
+        const before = snapshot(projectDir);
+        const result = await removeHandler.help!({ ...mockContext, cwd: projectDir, args: ['--help'] });
+        expect(result.exitCode).toBe(0);
+        for (const term of ['Usage: aiwg remove <id>', '--dry-run', '--keep-registry', '--provider', '--scope user', '--force', '--target', 'source is never deleted', 'modified files']) {
+          expect(result.message).toContain(term);
+        }
+        expect(snapshot(projectDir)).toEqual(before);
+        expect(mockRun).not.toHaveBeenCalled();
+      });
+    });
+
     it("should have correct metadata and delegate to uninstaller", async () => {
       mockContext.args = ["sdlc"];
       expect(removeHandler.id).toBe("remove");

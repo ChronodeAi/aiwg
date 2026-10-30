@@ -8,6 +8,8 @@
  * @implements #557
  */
 
+import type { SensitiveInputOptions } from '../auth/sensitive-input.js';
+
 /**
  * Parsed reference from user input
  *
@@ -144,6 +146,8 @@ export interface PackageInfo {
  * Options for fetching/installing a package
  */
 export interface FetchOptions {
+  /** References only; credential bytes never enter package records. */
+  tokenInput?: SensitiveInputOptions;
   /** Force re-pull even if cached version exists */
   refresh?: boolean;
 
@@ -185,7 +189,7 @@ export interface PackageRegistryAdapter {
    * Resolve a reference string to a PackageSource.
    * Returns null if the reference cannot be resolved.
    */
-  resolve(ref: PackageRef): Promise<PackageSource | null>;
+  resolve(ref: PackageRef, options?: FetchOptions): Promise<PackageSource | null>;
 
   /**
    * Fetch (clone or pull) the package to the local cache.

@@ -18,7 +18,7 @@ import {
   showNeighbors,
   executeSetQuery,
 } from '../../../src/artifacts/graph-query.js';
-import type { DependencyGraph } from '../../../src/artifacts/types.js';
+import type { DependencyGraph, MetadataEntry } from '../../../src/artifacts/types.js';
 
 // Sample citation graph for testing
 const citationGraph: DependencyGraph = {
@@ -205,6 +205,22 @@ describe('Cross-Graph Set Queries', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       consoleSpy.mockRestore();
       consoleErrorSpy.mockRestore();
+    });
+
+    it('excludes retired, superseded and archived neighbors using indexed memory metadata', async () => {
+      const records = {
+        'citations/REF-029-citations.md': { memoryRecord: { lifecycle: 'retired', placement: 'indexed' } },
+        'citations/REF-009-citations.md': { memoryRecord: { lifecycle: 'superseded', placement: 'indexed' } },
+        'citations/REF-015-citations.md': { memoryRecord: { lifecycle: 'active', placement: 'archived' } },
+        'citations/REF-042-citations.md': { memoryRecord: { lifecycle: 'active', placement: 'indexed' } },
+      } as Record<string, MetadataEntry>;
+      const indexDir = path.join(tmpDir, '.aiwg/.index/citation-network');
+      fs.writeFileSync(path.join(indexDir, 'metadata.json'), JSON.stringify({ entries: records }));
+      await showNeighbors(tmpDir, { graph: 'citation-network', node: 'REF-008', json: true, backend: 'local' });
+      expect(JSON.parse(consoleSpy.mock.calls.at(-1)![0]).neighbors).toEqual(['citations/REF-042-citations.md']);
+      // Explicit identity/history resolution still addresses retained tombstones.
+      expect(resolveNode(citationGraph, 'REF-029')).toBe('citations/REF-029-citations.md');
+      expect(getNeighbors(citationGraph, 'citations/REF-029-citations.md', 'both', undefined, records)).toEqual([]);
     });
 
     it('should output JSON with neighbors', async () => {

@@ -1,0 +1,5 @@
+{
+  "sourcePaths": [".windsurf/rules/obligation.md", ".devin/rules/obligation.md"],
+  "content": "Preserve this synthetic obligation.",
+  "alias": "compatibility:obligation"
+}

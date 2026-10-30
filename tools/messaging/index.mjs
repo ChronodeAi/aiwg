@@ -43,6 +43,7 @@ import { COMMANDS, EventTopic } from './types.mjs';
  * @param {import('./chat-handler.mjs').ChatHandlerOptions} [options.chatHandler] - Chat handler config (enables 2-way AI chat)
  * @param {import('./room-manager.mjs').RoomManager} [options.roomManager] - Room manager for multi-room routing
  * @param {Object} [options.messagingConfig] - Messaging config from daemon.yaml
+ * @param {Object} [options.environment] - Environment for chat workers, excluding daemon credentials
  * @returns {Promise<MessagingHub|null>} null if no adapters enabled
  */
 export async function createMessagingHub(options = {}) {
@@ -109,7 +110,8 @@ export async function createMessagingHub(options = {}) {
   // Wire 2-way AI chat if chatHandler config is provided
   let chatHandler = null;
   if (chatHandlerConfig !== false) {
-    chatHandler = new ChatHandler(chatHandlerConfig || {});
+    chatHandler = new ChatHandler({ ...(chatHandlerConfig || {}),
+      ...(options.environment ? { environment: options.environment } : {}) });
 
     // Register /ask command → forwards to chat handler
     router.registerHandler('ask', async (args, context) => {

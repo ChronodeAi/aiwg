@@ -1,4 +1,11 @@
 ---
+activation: bound
+summary: "Use concise concierge responses in daemon sessions, absorb technical errors, honor remembered constraints, and confirm destructive operations."
+bound_to:
+  skills:
+    - daemon-status
+  agents:
+    - concierge
 enforcement: high
 id: daemon-interaction
 name: Daemon Interaction Rules

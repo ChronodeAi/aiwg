@@ -7,6 +7,10 @@ const SAFE_EVENT_NAMES = new Set(['retry.scheduled', 'attempt.terminated', 'brea
 // plausible custom key can still carry body text or PII in its value.
 const SAFE_ATTRIBUTE_KEYS = new Set(`
   aiwg.run.id aiwg.invocation.id aiwg.workflow.status aiwg.evaluation.count
+  aiwg.conductor.id aiwg.task.id aiwg.worker.transport aiwg.worker.identity_confidence
+  aiwg.worker.termination aiwg.otel.gen_ai_semconv_revision aiwg.usage.quality
+  aiwg.usage.input_tokens_provenance aiwg.usage.output_tokens_provenance
+  aiwg.worker.observed_model_provenance
   aiwg.decision.id aiwg.decision.version aiwg.decision.alias aiwg.decision.status aiwg.decision.reason
   aiwg.ruleset.id aiwg.ruleset.version aiwg.binding.id aiwg.binding.version
   aiwg.adapter.id aiwg.adapter.version aiwg.attempt.ordinal aiwg.attempt.count
@@ -40,7 +44,8 @@ for (const prefix of ['aiwg.definition', 'aiwg.policy', 'aiwg.calibration']) {
 // Declared keys whose names match PROTECTED_KEY but carry only fixed metadata.
 // `aiwg.link.state` is the deletion tombstone marker; dropping it would turn an
 // explicit tombstone into an unexplained link in exports.
-const PROTECTED_KEY_EXEMPTIONS = new Set(['gen_ai.response.model', 'http.response.status_code', 'aiwg.link.state']);
+const PROTECTED_KEY_EXEMPTIONS = new Set(['gen_ai.response.model', 'http.response.status_code', 'aiwg.link.state',
+  'aiwg.usage.input_tokens_provenance', 'aiwg.usage.output_tokens_provenance']);
 export const DEFAULT_ATTRIBUTE_VALUE_LIMIT = 256;
 
 export function sanitizeOpaqueValue(value: string, maximum = DEFAULT_ATTRIBUTE_VALUE_LIMIT): string {

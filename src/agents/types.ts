@@ -70,7 +70,7 @@ export interface AgentMetadata {
   prewalk?: boolean | string;
   advisor?: boolean | string;
   modelRole?: 'reasoning' | 'coding' | 'efficiency';
-  modelTier?: 'economy' | 'standard' | 'premium' | 'max-quality';
+  modelTier?: 'economy' | 'standard' | 'premium' | 'flagship' | 'max-quality';
   tools?: string[];
   dependencies?: string[];
   version?: string;

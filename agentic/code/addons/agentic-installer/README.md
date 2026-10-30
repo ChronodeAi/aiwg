@@ -1,5 +1,7 @@
 # Agentic Installer
 
+Evidence status: design intent.
+
 An AIWG addon that defines the `setup.aiwg.io/v1` SetupManifest language for
 cross-platform deterministic and provider-orchestrated installation workflows.
 
@@ -24,6 +26,25 @@ unexpected environment states. A manifest with
 `metadata.execution_mode: provider-orchestrated` is instead interpreted by a
 capable AI provider and may use reasoning steps as the workflow. The CLI
 validates that mode but does not execute it through `setup-run`.
+
+## AIWG installation entry point
+
+The public `https://aiwg.io/setup.aiwg.yaml` remains provider-orchestrated.
+After inspecting and repairing the CLI, follow the guided sequence:
+
+```bash
+aiwg setup --scope project --providers claude
+aiwg setup --review
+aiwg setup --apply
+```
+
+The interview writes a redacted saved plan; review writes nothing; apply uses
+existing owners and persists per-action receipts. Explicit opt-in controls Jev
+and worker dispatch. Reapply after a partial run to resume unfinished actions.
+Use [the runbook](../../../../docs/agentic-install-runbook.md) and
+[guided setup reference](../../../../docs/getting-started/guided-setup.md) for
+scope, headless flags, credentials, and readiness interpretation. `setup-run`
+is the deterministic manifest runner, not the guided installer.
 
 ## Quick Start
 

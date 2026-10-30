@@ -13,6 +13,7 @@
  */
 
 import * as fs from 'fs';
+import { refFilesForId } from './ref-files.js';
 import * as path from 'path';
 import { load as loadYaml } from 'js-yaml';
 import { DEFAULT_AFFILIATION_MAP, buildAffiliationReverse } from '../corpus-views/corpus-config.js';
@@ -141,7 +142,7 @@ export function parseAuthors(citation: string): string[] {
 function findAnalysisDoc(root: string, ref: string): string | null {
   const dir = path.join(root, ...REFS_DIR);
   if (!fs.existsSync(dir)) return null;
-  const match = fs.readdirSync(dir).find((f) => f.startsWith(`${ref}-`));
+  const match = refFilesForId(dir, ref)[0];
   return match ? path.join(dir, match) : null;
 }
 

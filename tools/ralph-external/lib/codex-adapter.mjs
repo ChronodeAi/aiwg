@@ -44,7 +44,7 @@ const MODEL_MAP = {
  *
  *   codex --no-daemon exec --ignore-user-config -m M \
  *     -c model_reasoning_effort="E" -s S -C W -c approval_policy="never" \
- *     --skip-git-repo-check -o F --json - < briefPath
+ *     --skip-git-repo-check -o F.last-message --json - < briefPath
  *
  * `--no-daemon` is a root-level flag and `--ignore-user-config` is an
  * `exec`-level flag (root `--help` lists no `--ignore-user-config`;
@@ -75,7 +75,7 @@ const MODEL_MAP = {
  */
 export const CODEX_SUPPORTED_VERSIONS = Object.freeze(['0.161.0']);
 export const CODEX_DIRECT_EFFORT_VALUES = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh']);
-export const CODEX_DIRECT_SANDBOX_MODES = Object.freeze(['read-only', 'workspace-write']);
+export const CODEX_DIRECT_SANDBOX_MODES = Object.freeze(['read-only', 'workspace-write', 'external']);
 /** Non-prompting execution only: a requested `on-request` is refused. */
 export const CODEX_DIRECT_APPROVAL_POLICIES = Object.freeze(['never']);
 /** Brief transport for the direct profile: piped stdin, never argv. */
@@ -195,6 +195,10 @@ export class CodexAdapter extends ProviderAdapter {
     };
   }
 
+  // Worker envNames come from the recorded installation environment, filtered
+  // through both registry allowlists. PATH must survive env -i so Codex can
+  // find the host's AppArmor-approved bwrap and system shell tools.
+
   /**
    * Driver-owned argv after the binary for the version-bound direct-shell
    * profile. Every control is explicit: `--ignore-user-config` (user
@@ -202,7 +206,7 @@ export class CodexAdapter extends ProviderAdapter {
    * model, explicit effort as one `-c model_reasoning_effort="E"` token
    * (TOML `"E"` quoting via `JSON.stringify`; there is no shell in argv),
    * explicit sandbox/approval (`never` only), the conductor workdir as
-   * `-C`, the final file as `-o`, the JSONL event stream as `--json` and
+   * `-C`, a separate last-message capture as `-o`, the JSONL stream as `--json` and
    * `-` as the prompt argument so the brief arrives on stdin
    * (`stdin: 'brief-text'`). Permission flags from the legacy Ralph loop
    * (`--dangerously-bypass-approvals-and-sandbox`), guessed step caps and
@@ -252,11 +256,11 @@ export class CodexAdapter extends ProviderAdapter {
       '--ignore-user-config',
       '-m', model,
       '-c', `model_reasoning_effort=${JSON.stringify(effort)}`,
-      '-s', sandbox,
+      '-s', sandbox === 'external' ? 'danger-full-access' : sandbox,
       '-C', cwd,
       '-c', `approval_policy=${JSON.stringify(approval)}`,
       '--skip-git-repo-check',
-      '-o', finalPath,
+      '-o', `${finalPath}.last-message`,
       '--json',
       '-',
     ];

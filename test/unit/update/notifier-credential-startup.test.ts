@@ -11,9 +11,9 @@
  * value lives only in a local JS variable from the moment it is read — so
  * there is no plausible path for either to reach a bootstrap child's copied
  * environment regardless of start order. The two commands below
- * (`mcp profile login --api-key-env`, `decision setup jev` without
- * `--token-stdin`) are exactly the two places a *named environment
- * variable* carries the secret, which is the vector this fix closes.
+ * (`mcp profile login --api-key-env`, `decision setup jev --token-env`,
+ * `auth secret --value-env`) carry a named environment variable, the
+ * startup inheritance vector this fix closes.
  *
  * Runs the real `bin/aiwg.mjs → router → mcp/cli.mjs` path end to end
  * (isolated `HOME`/`XDG_CONFIG_HOME`/`CODEX_HOME`, a stub `codex` that
@@ -46,6 +46,8 @@ beforeEach(async () => {
   // Never a real `codex` — the `mcp profile login` case below must not
   // depend on, or touch, a real Codex installation.
   await writeExecutable(join(stubBinDir, 'codex'), `#!/bin/sh\nexit 0\n`);
+  const storeHelper = process.platform === 'darwin' ? 'security' : process.platform === 'win32' ? 'powershell.exe' : 'secret-tool';
+  await writeExecutable(join(stubBinDir, storeHelper), `#!/bin/sh\ncat >/dev/null\nexit 0\n`);
 });
 
 afterEach(() => {
@@ -94,14 +96,22 @@ describe('go/no-go review blocker 1: no bootstrap subprocess before a credential
     expect(result.stderr).not.toContain('notifier:bootstrap-complete');
   });
 
-  it('decision setup jev (no --token-stdin, env fallback): the token never reaches the parent\'s own output, and the notifier never starts', () => {
+  it('decision setup jev --token-env: the token never reaches the parent\'s own output, and the notifier never starts', () => {
     const result = run(
-      ['decision', 'setup', 'jev'],
+      ['decision', 'setup', 'jev', '--token-env', 'JEV_API_KEY'],
       { JEV_API_KEY: 'sk-test-jev-startup-secret' },
     );
     expect(result.stdout).not.toContain('sk-test-jev-startup-secret');
     expect(result.stderr).not.toContain('sk-test-jev-startup-secret');
     expect(result.stderr).toMatch(/notifier:skip \(credential-handling command\)/);
+    expect(result.stderr).not.toContain('notifier:bootstrap-complete');
+  });
+
+  it('auth secret --value-env skips startup children and saves without diagnostic exposure', () => {
+    const result = run(['auth', 'secret', 'set', 'fixture', '--value-env', 'AIWG_TEST_VALUE'], { AIWG_TEST_VALUE: 'fixture-sensitive-startup-value' });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain('fixture-sensitive-startup-value');
+    expect(result.stderr).toContain('notifier:skip (credential-handling command)');
     expect(result.stderr).not.toContain('notifier:bootstrap-complete');
   });
 

@@ -34,6 +34,27 @@ const FRAMEWORKS = {
   'media-marketing-kit': path.join(AIWG_ROOT, 'agentic/code/frameworks/media-marketing-kit')
 };
 
+/** Keep the published object contracts stable across native Zod converters. */
+function retainToolJsonSchema(schema, seen = new Set()) {
+  if (!(schema instanceof z.ZodType) || seen.has(schema)) return;
+  seen.add(schema);
+  const definition = schema._zod.def;
+  if (schema instanceof z.ZodObject) {
+    const catchall = definition.catchall;
+    if ((!catchall && Object.keys(schema.shape).length > 0) || catchall instanceof z.ZodNever || catchall instanceof z.ZodUnknown) {
+      z.globalRegistry.add(schema, { ...z.globalRegistry.get(schema), additionalProperties: catchall instanceof z.ZodUnknown });
+    }
+  }
+  if (schema instanceof z.ZodRecord && definition.keyType instanceof z.ZodString && !definition.keyType._zod.def.checks?.length) {
+    z.globalRegistry.add(schema, { ...z.globalRegistry.get(schema), propertyNames: undefined });
+  }
+  for (const value of Object.values(definition)) {
+    if (value instanceof z.ZodType) retainToolJsonSchema(value, seen);
+    else if (Array.isArray(value)) for (const child of value) retainToolJsonSchema(child, seen);
+    else if (value && typeof value === 'object') for (const child of Object.values(value)) retainToolJsonSchema(child, seen);
+  }
+}
+
 /**
  * Create and configure the AIWG MCP Server
  */
@@ -42,6 +63,18 @@ export async function createServer() {
     name: 'aiwg',
     version: '1.0.0'
   });
+
+  const registerTool = server.registerTool.bind(server);
+  server.registerTool = (name, config, handler) => {
+    const schemas = {};
+    for (const key of ['inputSchema', 'outputSchema']) {
+      if (!config[key]) continue;
+      const schema = config[key] instanceof z.ZodType ? config[key] : z.object(config[key]);
+      retainToolJsonSchema(schema);
+      schemas[key] = schema;
+    }
+    return registerTool(name, { ...config, ...schemas }, handler);
+  };
 
   // ============================================
   // TOOLS
@@ -248,7 +281,7 @@ export async function createServer() {
     description: 'Render AIWG template with provided variables',
     inputSchema: {
       template: z.string().describe('Template path (e.g., "sdlc/intake/project-intake-template.md")'),
-      variables: z.record(z.string()).optional().describe('Template variable substitutions')
+      variables: z.record(z.string(), z.string()).optional().describe('Template variable substitutions')
     }
   }, async ({ template, variables = {} }) => {
     try {
@@ -658,17 +691,8 @@ If retry fails, prepare structured escalation:
 export async function startServer() {
   const server = await createServer();
   const transport = new StdioServerTransport();
-
-  console.error('[AIWG MCP] Starting server...');
-  await server.connect(transport);
-  console.error('[AIWG MCP] Server connected via stdio transport');
-
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    console.error('[AIWG MCP] Shutting down...');
-    await server.close();
-    process.exit(0);
-  });
+  const { serveStdioUntilClosed } = await import('./stdio-lifecycle.mjs');
+  await serveStdioUntilClosed(server, transport);
 }
 
 // Run if executed directly

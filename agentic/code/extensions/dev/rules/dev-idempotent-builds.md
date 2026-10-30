@@ -1,4 +1,5 @@
 ---
+activation: on-demand
 enforcement: medium
 ---
 

@@ -4,6 +4,9 @@
   "verifiedAt": "2026-07-20",
   "providers": {
     "antigravity": {
+      "sessionEnvAllowlist": [
+        "GEMINI_API_KEY"
+      ],
       "agent": "native",
       "skill": "native",
       "globalChild": "inherited",
@@ -19,7 +22,7 @@
       "invalidPinFallback": "Provider validation/error; never assume fallback",
       "configTarget": "agy launch arguments; custom-agent model tiers are not projected from generic AIWG model ids",
       "artifactFormat": "YAML frontmatter plus Markdown; runtime --model and --effort flags",
-      "verification": "Pinned offline contract (--help/--version only); authenticated model selection was not executed",
+      "verification": "Pinned offline contract (--help/--version only); authenticated model selection was not executed. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://antigravity.google/docs/cli/subagents/",
       "verifiedAt": "2026-09-04",
       "workerHealthAdapter": {
@@ -53,7 +56,8 @@
           "cwd": "${workspace}",
           "envAllowlist": [
             "GEMINI_API_KEY",
-            "HOME"
+            "HOME",
+            "PATH"
           ],
           "versionArgv": [
             "--version"
@@ -144,7 +148,8 @@
             },
             "envAllowlist": [
               "GEMINI_API_KEY",
-              "HOME"
+              "HOME",
+              "PATH"
             ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
@@ -152,7 +157,7 @@
               "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
               "--dangerously-skip-permissions and --remote-control are never part of the direct profile; neither was ever shipped as a new argv-prompt path.",
               "A soft-denied tool permission request (exit 0, stderr notice naming the allow-rule needed) is NOT the same as success; its exact stderr wording is not evidenced from help or changelog, so this is an open, honestly-marked detection gap rather than an invented check (tools/ralph-external/lib/antigravity-adapter.mjs ANTIGRAVITY_SOFT_DENY_RISK_NOTE).",
-              "GEMINI_API_KEY in envAllowlist is a strings-sourced GUESS, not confirmed to authenticate this CLI. Live fix-round-1 probes (D/E, no login present) show a bare run stops at \"Error: authentication required. Run 'agy' to log in, then retry.\" — this is an interactive Google-account login, not a documented env-key or OpenRouter-style flag. The manual smoke run is BLOCKED until an operator completes an interactive `agy` login on the target host.",
+              "GEMINI_API_KEY is documented at https://antigravity.google/docs/install/ (reviewed 2026-10-26): settings.json must also set modelProvider to gemini; the key alone has no effect. Earlier 1.3.3 probes only exercised missing account login. This documentation confirms the credential name, not authenticated execution or qualification of this version-bound worker profile.",
               "The 1.3.3 --effort enum (low|medium|high|xhigh|max) supersedes the stale 1.1.26-pinned three-value set in tools/providers/antigravity-transport.mjs (a separate, unedited legacy transport used by the MCP/doctor bridge, not this direct-shell profile).",
               "Flag validation happens BEFORE auth: live probe F, `agy --print=x --input-format bogus --output-format stream-json`, returned \"Error: unknown --input-format \\\"bogus\\\" (want text or stream-json)\" without reaching the auth stop, confirming --input-format is validated against exactly {text, stream-json} independent of login state.",
               "The brief reaches agy through adapter-frame: the installed buildWorkerStdinFrame hook supplies exactly one NDJSON user message and EOF. The stdin control stays unqualified pending one authenticated smoke run."
@@ -508,7 +513,7 @@
             "approval_policy=\"${approval}\"",
             "--skip-git-repo-check",
             "-o",
-            "${final}",
+            "${final}.last-message",
             "--json",
             "-"
           ],
@@ -516,7 +521,8 @@
           "cwd": "${workspace}",
           "envAllowlist": [
             "CODEX_HOME",
-            "HOME"
+            "HOME",
+            "PATH"
           ],
           "versionPattern": "^codex-cli ([0-9A-Za-z.+-]{1,128})$",
           "versionArgv": [
@@ -572,7 +578,7 @@
               },
               "finalOutput": {
                 "support": "unqualified",
-                "mapping": "[-o/--output-last-message F] last-message file; --json carries the JSONL thread/turn/item/error event stream on stdout",
+                "mapping": "[-o/--output-last-message F.last-message] launcher-owned last-message capture, separate from worker-written workerClaims JSON at F (brief output.resultPath / --final-output); --json carries the JSONL thread/turn/item/error event stream on stdout",
                 "evidence": "H: codex-cli 0.161.0 exec --help documents -o/--output-last-message and --json; unqualified until live evidence"
               },
               "stdin": {
@@ -608,7 +614,8 @@
             },
             "envAllowlist": [
               "CODEX_HOME",
-              "HOME"
+              "HOME",
+              "PATH"
             ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
@@ -721,7 +728,7 @@
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": ["PATH"],
           "versionArgv": [
             "--version"
           ],
@@ -809,7 +816,7 @@
                 "evidence": "H: copilot 1.0.95 --help / `copilot help <topic>`, captured 2026-10-10 (.aiwg/working/s1-scratch/cli-help/copilot-1.0.95.txt; never live qualification) ('--auto-tier <preference> Set the Auto routing profile')"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": ["PATH"],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
@@ -861,6 +868,9 @@
       }
     },
     "cursor": {
+      "sessionEnvAllowlist": [
+        "CURSOR_API_KEY"
+      ],
       "agent": "native",
       "skill": "unsupported",
       "globalChild": "inherited",
@@ -869,7 +879,7 @@
       "invalidPinFallback": "Plan/admin fallback may apply; record observed result",
       "configTarget": ".cursor/agents/*.md",
       "artifactFormat": "YAML frontmatter plus Markdown",
-      "verification": "Schema fixture and entitled Cursor invocation",
+      "verification": "Schema fixture and entitled Cursor invocation. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://cursor.com/docs/subagents",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -904,7 +914,8 @@
           "cwd": "${workspace}",
           "envAllowlist": [
             "CURSOR_API_KEY",
-            "HOME"
+            "HOME",
+            "PATH"
           ],
           "versionPattern": "^([0-9A-Za-z.+-]{1,128})$",
           "versionArgv": [
@@ -996,7 +1007,8 @@
             },
             "envAllowlist": [
               "CURSOR_API_KEY",
-              "HOME"
+              "HOME",
+              "PATH"
             ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
@@ -1110,7 +1122,7 @@
           ],
           "stdin": "brief-text",
           "cwd": "${workspace}",
-          "envAllowlist": ["FACTORY_API_KEY", "HOME"],
+          "envAllowlist": ["FACTORY_API_KEY", "HOME", "PATH"],
           "versionArgv": [
             "--version"
           ],
@@ -1198,7 +1210,7 @@
                 "evidence": "H: droid-cli 0.238.0 exec --help scopes --spec-model/--worker-model/--validator-model to --mission/--use-spec; unknown controls block tasks requiring them"
               }
             },
-            "envAllowlist": ["FACTORY_API_KEY", "HOME"],
+            "envAllowlist": ["FACTORY_API_KEY", "HOME", "PATH"],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
@@ -1314,7 +1326,7 @@
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": ["PATH"],
           "versionArgv": [
             "--version"
           ],
@@ -1402,7 +1414,7 @@
                 "evidence": "H: opencode 2.0.26 `opencode run --help`"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": ["PATH"],
             "pitfalls": [
               "Stdin is confirmed unsupported (conductor disassembly of the installed opencode 2.0.26 binary: no stdin/isTTY handling in the compiled 'run' chunk, host 'noodle', 2026-10-09). The brief travels as an attached file via -f/--file; the positional argv message is a fixed, content-free instruction and never carries brief text.",
               "There is no positive session-terminal JSON event in any compatibility mode: binary disassembly shows the run loop returns silently on session.execution.succeeded. A live 2.0.26 smoke run (one complete `text` event, nothing else) confirms this is a genuine success shape, not truncation; parseOutput accepts a complete text part OR a step_finish reason \"stop\" as the positive signal, never exit code alone.",
@@ -1459,6 +1471,9 @@
       }
     },
     "warp": {
+      "sessionEnvAllowlist": [
+        "WARP_API_KEY"
+      ],
       "agent": "global-only",
       "skill": "unsupported",
       "globalChild": "native",
@@ -1467,7 +1482,7 @@
       "invalidPinFallback": "Profile availability dependent",
       "configTarget": "Warp agent profile or run configuration",
       "artifactFormat": "Saved profile / run control plane",
-      "verification": "Inspect active profile and run metadata",
+      "verification": "Inspect active profile and run metadata. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.warp.dev/agent-platform/capabilities/agent-profiles-permissions",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -1501,7 +1516,8 @@
           "stdin": "closed",
           "cwd": "${workspace}",
           "envAllowlist": [
-            "WARP_API_KEY"
+            "WARP_API_KEY",
+            "PATH"
           ],
           "versionArgv": [
             "--version"
@@ -1591,14 +1607,15 @@
               }
             },
             "envAllowlist": [
-              "WARP_API_KEY"
+              "WARP_API_KEY",
+              "PATH"
             ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification; the host used for probes (noodle) has no `warp-terminal login`/`WARP_API_KEY`, so every probe stopped at the auth check and never reached a model.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
               "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
               "There is NO `oz` symlink on the evidenced host: the real executable is `warp-terminal`, with `agent run` etc. as its subcommands; `runtimeDriver`/`executable` are pinned to that, not to a bare `oz`.",
-              "BRIEF TRANSPORT IS BLOCKED PENDING A SHARED CHANGE: `--prompt` places the brief on argv (never emitted by this profile); `-f/--file` is NOT a member of the required `<--prompt|--saved-prompt|--task-id|--skill>` group (live probe, 2026-10-11) and its own config-file schema is undocumented, so it cannot be assumed to carry the brief; `--skill` is the only remaining required-group member that can carry free text (`agent run --help`: 'Use a skill as the base prompt for the agent' when given without `--prompt`), but its search root relative to `--cwd` and behavior when the skill is missing are UNVERIFIED behind the login gate. The pure adapter derives a distinct `aiwg-brief-<invocationId>` path without writes and refuses unsafe IDs. `buildWarpBriefSkillFile()` (tools/ralph-external/lib/warp-adapter.mjs) exports the exact path/content an execution-time file-generation primitive would need to write before this argv runs; that primitive does not exist in the shared session-launcher today (the same class of gap as #2998 for Antigravity's stdin frame). Needed shared change: an execution-time generated-artifact primitive the session-launcher can call with the adapter-exported `{ relativePath, content }` immediately before spawning the worker process, with invocation identity supplied to the adapter, refusal to overwrite an existing path, cleanup afterward, and no commits of generated skills (pending #3002). Brief transport is NOT available today.",
+              "Brief delivery is wired through buildWorkerArtifacts and the shared session launcher: one bounded workspace-relative .agents/skills/aiwg-brief-<invocationId>/SKILL.md file, exclusive creation, no symlink components, collision preservation and cleanup on failure, completion or stop. The same invocation ID binds --skill and the artifact path; brief text never rides argv. Real skill search relative to --cwd and missing-skill behavior remain UNVERIFIED behind authentication; synthetic file-delivery tests do not qualify the profile.",
               "`--environment`/`-e` (cloud environment/runner) and `--harness claude|codex` (third-party harness mode) are documented but NEVER emitted by this profile; the cloud subcommand is also never emitted. Execution location is unverified until an authenticated run.",
               "`--no-snapshot` is always emitted: `agent run --help` documents it as disabling the end-of-run workspace snapshot upload. This flag does not establish execution location or absence of other uploads.",
               "No live success/error output was observed (no login on the evidenced host): `finalOutput`/`structuredOutput` support is grade H/R only, never upgraded past `unqualified`."
@@ -1716,7 +1733,7 @@
           ],
           "stdin": "brief-text",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": ["PATH"],
           "versionArgv": [
             "--version"
           ],
@@ -1804,7 +1821,7 @@
                 "evidence": "H: omp/18.8.7 --help (noodle, 2026-10-10) documents a single --model flag with no fallback list"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": ["PATH"],
             "pitfalls": [
               "--approval-mode is never omitted: the installed binary's compiled-in default is yolo (a full bypass), so an omitted flag is the most dangerous outcome, not a safe one.",
               "--approval-mode is fixed to write; always-ask (prompts for write AND exec) and yolo (bypasses everything) are never rendered. write only auto-approves read/write-tier tools; an exec-tier tool (bash) still resolves to a required-approval decision with no confirmed headless resolution -- an open S1 gap.",
@@ -1928,7 +1945,7 @@
           ],
           "stdin": "brief-text",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": ["PATH"],
           "versionArgv": [
             "--version"
           ],
@@ -2016,7 +2033,7 @@
                 "evidence": "H: pi 1.1.0 --help (titan, 2026-10-09) documents a single --model flag with no fallback list"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": ["PATH"],
             "pitfalls": [
               "--no-approve alone does not stop context loading: ancestor AGENTS.md/CLAUDE.md load independently of trust unless --no-context-files is also set (R: installed bundle chunk-OIM2DMFI.js). --no-context-files, --no-extensions, --no-skills and --no-mcp (1.1.0 adds built-in MCP support, on by default) are always rendered alongside it.",
               "--approve is never rendered, which would trust arbitrary project-local extension/config files.",
@@ -2124,7 +2141,8 @@
           "stdin": "brief-text",
           "cwd": "${workspace}",
           "envAllowlist": [
-            "DEEPSEEK_API_KEY"
+            "DEEPSEEK_API_KEY",
+            "PATH"
           ],
           "versionArgv": [
             "--version"
@@ -2214,7 +2232,8 @@
               }
             },
             "envAllowlist": [
-              "DEEPSEEK_API_KEY"
+              "DEEPSEEK_API_KEY",
+              "PATH"
             ],
             "pitfalls": [
               "buildWorkerArgs emits ${artifact:dsh-patch}; buildWorkerArtifacts declares the pure overlay. The launcher owns exclusive/no-follow private file creation and cleanup. Controls remain unqualified pending an authenticated run.",
@@ -2274,6 +2293,7 @@
       }
     },
     "windsurf": {
+      "sessionEnvAllowlist": [],
       "agent": "unsupported",
       "skill": "unsupported",
       "globalChild": "inherited",
@@ -2282,7 +2302,7 @@
       "invalidPinFallback": "No portable custom-child selector",
       "configTarget": "No supported portable artifact field",
       "artifactFormat": "Informational policy only",
-      "verification": "Assert unsupported fields are omitted",
+      "verification": "Assert unsupported fields are omitted. Session environment is explicitly empty: desktop/cloud login owns authentication; no CLI credential variable is evidenced. Coverage-only: no worker execution or qualified worker adapter. See $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.devin.ai/desktop/cascade/skills",
       "verifiedAt": "2026-07-20",
       "workerHealthCoverage": {
@@ -2302,6 +2322,22 @@
       }
     },
     "openclaw": {
+      "sessionEnvAllowlist": [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MISTRAL_API_KEY",
+        "XAI_API_KEY",
+        "OPENCLAW_HOME",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_GATEWAY_URL",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_PASSWORD"
+      ],
       "agent": "native",
       "skill": "unsupported",
       "globalChild": "native",
@@ -2310,7 +2346,7 @@
       "invalidPinFallback": "Provider/account fallback must be observed",
       "configTarget": "OpenClaw subagent configuration",
       "artifactFormat": "JSON/JSONC runtime configuration",
-      "verification": "Inspect resolved subagent metadata",
+      "verification": "Inspect resolved subagent metadata. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.openclaw.ai/tools/subagents",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -2346,7 +2382,8 @@
           "stdin": "closed",
           "cwd": "${workspace}",
           "envAllowlist": [
-            "OPENROUTER_API_KEY"
+            "OPENROUTER_API_KEY",
+            "PATH"
           ],
           "versionArgv": [
             "--version"
@@ -2436,7 +2473,8 @@
               }
             },
             "envAllowlist": [
-              "OPENROUTER_API_KEY"
+              "OPENROUTER_API_KEY",
+              "PATH"
             ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
@@ -2496,6 +2534,7 @@
       }
     },
     "grokbot": {
+      "sessionEnvAllowlist": [],
       "agent": "unsupported",
       "skill": "unsupported",
       "globalChild": "informational",
@@ -2504,7 +2543,7 @@
       "invalidPinFallback": "Report unsupported; do not fabricate xAI/Grok model pins as native",
       "configTarget": "Grok Bot has no verified AIWG-owned model config path",
       "artifactFormat": "Informational only",
-      "verification": "Confirm steward models --route --provider grokbot emits unsupported/informational",
+      "verification": "Confirm steward models --route --provider grokbot emits unsupported/informational. Session environment is explicitly empty: desktop/cloud login owns authentication; no CLI credential variable is evidenced. Coverage-only: no worker execution or qualified worker adapter. See $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://github.com/jmagly/aiwg/blob/main/docs/architecture/adr-grokbot-provider-target.md",
       "verifiedAt": "2026-09-15",
       "workerHealthCoverage": {
@@ -2524,6 +2563,10 @@
       }
     },
     "grok-build": {
+      "sessionEnvAllowlist": [
+        "XAI_API_KEY",
+        "GROK_HOME"
+      ],
       "agent": "inherited",
       "skill": "inherited",
       "globalChild": "native",
@@ -2532,7 +2575,7 @@
       "invalidPinFallback": "Report the unavailable alias; use the sole discovered model only when exactly one is available",
       "configTarget": "$GROK_HOME/config.toml [models] and [model.<alias>] (read-only discovery)",
       "artifactFormat": "Grok Build model alias",
-      "verification": "grok inspect --json plus bounded parsing of model fields from reported config layers",
+      "verification": "grok inspect --json plus bounded parsing of model fields from reported config layers. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://docs.x.ai/build/settings",
       "verifiedAt": "2026-09-21",
       "workerHealthAdapter": {
@@ -2574,7 +2617,8 @@
           "cwd": "${workspace}",
           "envAllowlist": [
             "XAI_API_KEY",
-            "HOME"
+            "HOME",
+            "PATH"
           ],
           "versionArgv": [
             "--version"
@@ -2666,7 +2710,8 @@
             },
             "envAllowlist": [
               "XAI_API_KEY",
-              "HOME"
+              "HOME",
+              "PATH"
             ],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
@@ -2722,6 +2767,25 @@
       }
     },
     "hermes": {
+      "sessionEnvAllowlist": [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
+        "XAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "OPENROUTER_BASE_URL",
+        "CUSTOM_BASE_URL",
+        "HERMES_HOME",
+        "HERMES_INFERENCE_PROVIDER"
+      ],
       "agent": "global-only",
       "skill": "unsupported",
       "globalChild": "native",
@@ -2730,7 +2794,7 @@
       "invalidPinFallback": "Provider resolution is global; report actual model",
       "configTarget": "Hermes delegation configuration",
       "artifactFormat": "Global CLI/config setting",
-      "verification": "Inspect Hermes delegation configuration",
+      "verification": "Inspect Hermes delegation configuration. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -2767,7 +2831,7 @@
           ],
           "stdin": "brief-text",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": ["PATH"],
           "versionPattern": "^Hermes Agent v([0-9A-Za-z.+-]{1,128}) [^\\r\\n]{1,128}$",
           "versionArgv": [
             "--version"
@@ -2812,7 +2876,7 @@
               },
               "approval": {
                 "support": "unqualified",
-                "mapping": "--ignore-user-config always emitted: falls back to the safe built-in defaults (approvals.mode: \"smart\", approvals.single_query_mode: \"deny\"; config_defaults.py:1679,1682) regardless of the host's config.yaml, defeating single_query_mode: approve/off/allow/yes (approval_context.py:298-304,313-315) and approvals.mode: off (approval.py:967). HERMES_YOLO_MODE is a process env var frozen at import (approval.py:46); defeated structurally by the empty envAllowlist and env -i renderer, not by a flag, and proven by an explicit assertion (HD10). Re-verified against hermes 0.21.6 (~/.hermes/hermes-agent): same semantics, refactored into tools/approval_context.py's _binary_approval_mode helper.",
+                "mapping": "--ignore-user-config always emitted: falls back to the safe built-in defaults (approvals.mode: \"smart\", approvals.single_query_mode: \"deny\"; config_defaults.py:1679,1682) regardless of the host's config.yaml, defeating single_query_mode: approve/off/allow/yes (approval_context.py:298-304,313-315) and approvals.mode: off (approval.py:967). HERMES_YOLO_MODE is a process env var frozen at import (approval.py:46); defeated structurally by the PATH-only envAllowlist and env -i renderer, not by a flag, and proven by an explicit assertion (HD10). Re-verified against hermes 0.21.6 (~/.hermes/hermes-agent): same semantics, refactored into tools/approval_context.py's _binary_approval_mode helper.",
                 "evidence": "D: hermes 0.21.6 installed source (~/.hermes/hermes-agent: tools/approval.py:46,967; tools/approval_context.py:298-304,313-315; hermes_cli/config_defaults.py:1679,1682); never live-qualified"
               },
               "workdir": {
@@ -2852,21 +2916,21 @@
               },
               "fallback": {
                 "support": "unqualified",
-                "mapping": "--provider PROVIDER pins the inference provider for this call; always emitted by this profile (never omitted) because --ignore-user-config removes the config.yaml provider fallback and the empty envAllowlist removes the HERMES_INFERENCE_PROVIDER fallback, so an omitted --provider resolves to the literal \"auto\" (resolve_requested_provider, runtime_provider.py:490-499) and silently picks whatever ambient credential Hermes finds; hermes fallback/moa subcommands configure persistent chains, not a per-call override",
+                "mapping": "--provider PROVIDER pins the inference provider for this call; always emitted by this profile (never omitted) because --ignore-user-config removes the config.yaml provider fallback and the PATH-only envAllowlist removes the HERMES_INFERENCE_PROVIDER fallback, so an omitted --provider resolves to the literal \"auto\" (resolve_requested_provider, runtime_provider.py:490-499) and silently picks whatever ambient credential Hermes finds; hermes fallback/moa subcommands configure persistent chains, not a per-call override",
                 "evidence": "H: hermes 0.21.6+387.gdce1e9b `hermes chat --help` (installed per-user, ~/.hermes/hermes-agent, titan, 2026-10-10 observation); confirmed by TWO live conductor smoke runs: 0.20.6 on 2026-10-09 (omitted --provider failed with \"No inference provider configured\" under --ignore-user-config) and 0.21.6 on 2026-10-10 (`--provider openrouter -m anthropic/claude-sonnet-4.6 --reasoning low` exited 0 with the exact instructed stdout) — still unqualified pending a repeatable, authorized live-qualification pass"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": ["PATH"],
             "pitfalls": [
               "Documentation/help and installed-source reading are not authenticated live qualification.",
               "This profile deliberately does NOT use the top-level -z/--oneshot PROMPT path: that dest is argv-only (no stdin/file option) and oneshot.py unconditionally sets HERMES_YOLO_MODE=1 with no override, and its exit code can be 0 even when its own usage-file failed flag is true.",
               "Exit code 0 alone is still not treated as completion evidence by this profile, even though hermes 0.21.6 fixed the specific 0.20.6 bug this guarded against: on 0.20.6, reasoning-budget exhaustion (then agent/conversation_loop.py:3902) returned completed:false/partial:true with no \"failed\" key and still exited 0; on 0.21.6 the same case (now agent/turn_truncation.py:95-180's partial_result()) correctly exits 1 via _single_query_exit_code (cli_single_query.py:152-194). parseWorkerFinal keeps requiring a strict workerClaims JSON parse in addition to the exit-derived status, now as defense in depth against a completed turn whose model output simply isn't valid JSON.",
               "Approval policy is host config (approvals.mode, approvals.single_query_mode in config.yaml), not an argv flag; --ignore-user-config pins it to the safe built-in defaults, but this is read from source, not live-qualified, so the approval control stays unqualified.",
-              "HERMES_YOLO_MODE (and any HERMES_* override) must never reach the worker process; this relies on the empty envAllowlist and the renderer's env -i, not on a CLI flag.",
+              "HERMES_YOLO_MODE (and any HERMES_* override) must never reach the worker process; this relies on the PATH-only envAllowlist and the renderer's env -i, not on a CLI flag.",
               "chat --query-file - --oneshot --quiet has no --usage-file/JSON-report equivalent; final-output extraction is stdout-text-on-exit-0 PLUS a strict workerClaims parse, never exit code or stdout non-emptiness alone.",
               "A partial response can still print to stdout before a failed turn; only the exit code (not stdout non-emptiness) distinguishes that case from success, and even exit 0 is not sufficient (see above).",
               "Native MCP/client, MSP/ACP, gateway and conversation capabilities do not establish worker authority.",
-              "--provider defaults to \"auto\" (hermes_cli/runtime_provider.py:490-499) when omitted; under --ignore-user-config and the empty envAllowlist both of its fallbacks (config.yaml model.provider, HERMES_INFERENCE_PROVIDER) are unreachable, so this profile always emits an explicit --provider from the resolved selection and refuses a missing value or the literal \"auto\". Confirmed by live smoke runs on both 0.20.6 (failure) and 0.21.6 (success with --provider openrouter).",
+              "--provider defaults to \"auto\" (hermes_cli/runtime_provider.py:490-499) when omitted; under --ignore-user-config and the PATH-only envAllowlist both of its fallbacks (config.yaml model.provider, HERMES_INFERENCE_PROVIDER) are unreachable, so this profile always emits an explicit --provider from the resolved selection and refuses a missing value or the literal \"auto\". Confirmed by live smoke runs on both 0.20.6 (failure) and 0.21.6 (success with --provider openrouter).",
               "On hermes 0.20.6, --quiet --oneshot could still print a startup diagnostic to stdout before the final response (that build's _ensure_tirith_security, the tirith-scanner-unavailable warning). On hermes 0.21.6 the tirith scanner was removed entirely (hermes_cli/config_migrations.py:686-702, \"the bundled tirith scanner left Hermes\") and a 2026-10-10 conductor smoke run on 0.21.6 confirmed the line no longer appears; a broader source grep across ~/.hermes/hermes-agent found no other bare-\"⚠\" _cprint site reachable from this profile's --quiet dispatch. parseWorkerFinal still strips that exact leading diagnostic shape as defensive, forward-compatible tolerance (harmless no-op on 0.21.6), and still fails on unrecognized preamble or a diagnostic appearing after the real final."
             ],
             "health": {
@@ -2913,6 +2977,19 @@
       }
     },
     "openhuman": {
+      "sessionEnvAllowlist": [
+        "OPENHUMAN_CORE_TOKEN",
+        "OPENHUMAN_CORE_RPC_URL",
+        "OPENHUMAN_CORE_HOST",
+        "OPENHUMAN_CORE_PORT",
+        "OPENHUMAN_WORKSPACE",
+        "OPENHUMAN_DOTENV_PATH",
+        "OPENHUMAN_KEYRING_MASTER_KEY",
+        "OPENHUMAN_KEYRING_MASTER_KEY_FILE",
+        "OPENHUMAN_APP_ENV",
+        "BACKEND_URL",
+        "OPENHUMAN_MODEL"
+      ],
       "agent": "compiled",
       "skill": "unsupported",
       "globalChild": "inherited",
@@ -2921,7 +2998,7 @@
       "invalidPinFallback": "Exact pins validate; semantic hints route dynamically",
       "configTarget": "OpenHuman agent TOML",
       "artifactFormat": "Standalone TOML agent definition",
-      "verification": "Parse against OpenHuman definition schema",
+      "verification": "Parse against OpenHuman definition schema. Session credential evidence: $AIWG_ROOT/docs/cli/sensitive-values.md#provider-recipient-exceptions (#3624).",
       "sourceUrl": "https://github.com/tinyhumansai/openhuman/blob/main/src/openhuman/agent/harness/definition.rs",
       "verifiedAt": "2026-07-20",
       "workerHealthAdapter": {
@@ -2949,7 +3026,7 @@
           ],
           "stdin": "brief-json",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": ["PATH"],
           "versionArgv": [
             "--help"
           ],
@@ -3037,7 +3114,7 @@
                 "evidence": "D: openhuman-core 0.64.14 source @216ea32; live qualification required"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": ["PATH"],
             "pitfalls": [
               "Documentation/help and synthetic observations are not authenticated live qualification.",
               "Unknown model, effort, permission or required step mappings block dispatch.",
@@ -3120,7 +3197,7 @@
         "provider": "muse",
         "adapterVersion": "1",
         "supportedVersions": ">=1.4.4-R5419.1 <2.0.0",
-        "runtimeDriver": "tools/ralph-external/lib/muse-adapter.mjs",
+        "runtimeDriver": "installed:muse",
         "catalogAdapter": {
           "kind": "file",
           "locator": "agentic/code/providers/model-catalog.v1.json",
@@ -3140,6 +3217,7 @@
             "${effort}",
             "--workspace",
             "${workspace}",
+            "--trust-workspace",
             "--approval-mode",
             "never",
             "--approval-judge",
@@ -3153,7 +3231,10 @@
           ],
           "stdin": "closed",
           "cwd": "${workspace}",
-          "envAllowlist": [],
+          "envAllowlist": [
+            "HOME",
+            "PATH"
+          ],
           "versionPattern": "^Muse Code ([0-9A-Za-z.+-]{1,128}) \\([0-9A-Za-z.+-]{1,128}\\)$",
           "versionArgv": [
             "--version"
@@ -3161,13 +3242,14 @@
           "maxOutputBytes": 10485760
         },
         "capabilities": {
-          "output": "native-schema",
+          "output": "text",
           "modelPin": "requested",
           "effort": "explicit",
           "cancel": "none",
           "resume": false,
           "sandboxModes": [
-            "external"
+            "read-only",
+            "workspace-write"
           ],
           "nestedAgentsControllable": false,
           "nativeFallbackControllable": false,
@@ -3184,52 +3266,52 @@
               "model": {
                 "support": "unqualified",
                 "mapping": "--model",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "effort": {
                 "support": "unqualified",
                 "mapping": "--reasoning-effort",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "sandbox": {
                 "support": "unqualified",
-                "mapping": "qualified external boundary; native sandbox remains enabled",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "mapping": "native sandbox enabled; read-only adds --disable-write and --disable-shell",
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "approval": {
                 "support": "unqualified",
                 "mapping": "[\"--approval-mode\",\"never\",\"--approval-judge\",\"off\"]",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "workdir": {
                 "support": "unqualified",
                 "mapping": "--workspace",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "finalOutput": {
                 "support": "unqualified",
                 "mapping": "bounded stdout capture; strict Muse terminal normalization pending shared owner",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "stdin": {
                 "support": "unqualified",
                 "mapping": "closed EOF",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "structuredOutput": {
                 "support": "unqualified",
-                "mapping": "--output-schema",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "mapping": "[]",
+                "evidence": "Direct Tier 0 output is text; structured output requires a host-bound schema and separate qualification."
               },
               "stepCap": {
                 "support": "unqualified",
                 "mapping": "--max-model-steps",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation."
               },
               "trust": {
                 "support": "unqualified",
-                "mapping": "[]",
-                "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
+                "mapping": "[\"--trust-workspace\"]",
+                "evidence": "Installed muse exec --help (Muse Code 1.4.12, 2026-10-23); bounded renderer checked on operator qualification; no backend attestation. Tier 0 workspaces are conductor-prepared worker trees the conductor owns, so the profile binds --trust-workspace by default (#3685: untrusted Muse loads project_sources=0 with user skills only and empty hook admission; trusted loads project_sources=1, project skills and hooks)."
               },
               "children": {
                 "support": "unqualified",
@@ -3242,16 +3324,22 @@
                 "evidence": "H/R: Muse Code 1.4.4-R5419.1 help (2026-10-09) and muse-direct synthetic fixtures; needs authorized version/account qualification"
               }
             },
-            "envAllowlist": [],
+            "envAllowlist": [
+              "HOME",
+              "PATH"
+            ],
             "pitfalls": [
               "Live qualification is an open S1 blocker; installed help and synthetic/echo mechanics are not paid inference qualification.",
               "Configured-model events provide runtime-configured identity only, never backend attestation.",
               "Contributor data policy is explicit; shared policy denies contributor models and never silently selects the CLI default.",
-              "Workspace trust defaults off; only a host-qualified trust mapping may load rules/skills. Approval-mode never and approval-judge off retain the sandbox. Muse requires a qualified external boundary.",
+              "Workspace trust is bound on for conductor-prepared worker trees (the conductor owns the worktree), so project rules/skills/hooks load; only a host-qualified trust mapping may change it. Approval-mode never and approval-judge off retain the sandbox. Muse requires a qualified external boundary.",
               "Host qualification must bind an absolute output-schema mapping and include that schema in runtimeFiles.",
               "Muse JSONL strict normalization needs the shared strict-parser hook; the MCP bridge must consume the selected provider parser. MSP is not MCP.",
               "Semantic step/tool completion grammar and native session-log layout remain unavailable; unrelated logs, deltas and CPU cannot establish progress.",
-              "Shared version gate: installation requires the raw trimmed banner Muse Code 1.4.4 (1.4.4-R5419.1), but semver selection requires 1.4.4-R5419.1. No normalization exists; keep unqualified until the shared owner binds raw and normalized versions."
+              "Shared version gate: installation requires the raw trimmed banner Muse Code 1.4.4 (1.4.4-R5419.1), but semver selection requires 1.4.4-R5419.1. No normalization exists; keep unqualified until the shared owner binds raw and normalized versions.",
+              "Operator qualification approves the installed direct renderer, not authenticated inference or backend model identity.",
+              "Workspace trust is on for conductor-prepared worker trees. Only never approval is supported. Explicit unsupported controls block dispatch.",
+              "Self-delegation must be explicitly allowed by policy; no native child-denial flag is assumed."
             ],
             "health": {
               "version": 1,
@@ -3296,6 +3384,200 @@
                 "effort": null,
                 "authorizedLive": false
               }
+            }
+          }
+        }
+      }
+    }
+  },
+  "workerAdapters": {
+    "local-http": {
+      "version": 1,
+      "id": "local-http",
+      "provider": "ollama",
+      "adapterVersion": "1",
+      "supportedVersions": "8.18.0",
+      "runtimeDriver": "installed:local-http",
+      "catalogAdapter": {
+        "kind": "http",
+        "locator": "/api/tags",
+        "parser": "ollama-model-list-v1",
+        "timeoutSeconds": 10,
+        "maxBytes": 65536
+      },
+      "invocation": {
+        "kind": "process",
+        "executable": "curl",
+        "argv": [
+          "-q",
+          "-sS",
+          "--max-redirs",
+          "0",
+          "--proto",
+          "=http",
+          "--noproxy",
+          "*",
+          "--connect-timeout",
+          "10",
+          "--max-time",
+          "300",
+          "--max-filesize",
+          "10485760",
+          "--fail-with-body",
+          "-H",
+          "Content-Type: application/json",
+          "-X",
+          "POST",
+          "http://${endpoint}/api/generate",
+          "--data-binary",
+          "@-"
+        ],
+        "stdin": "adapter-frame",
+        "cwd": "${workspace}",
+        "envAllowlist": [
+          "OLLAMA_HOST"
+        ],
+        "versionArgv": [
+          "--version"
+        ],
+        "versionPattern": "^curl ([0-9A-Za-z.+-]{1,128}) [\\s\\S]{1,4096}$",
+        "maxOutputBytes": 10485760
+      },
+      "capabilities": {
+        "output": "validated-file",
+        "modelPin": "requested",
+        "effort": "not-applicable",
+        "cancel": "process-group",
+        "resume": false,
+        "sandboxModes": [
+          "external"
+        ],
+        "nestedAgentsControllable": true,
+        "nativeFallbackControllable": true,
+        "hardBudget": []
+      },
+      "qualification": {
+        "status": "unqualified"
+      },
+      "invocationProfiles": {
+        "direct-http": {
+          "transport": "shell",
+          "supportedVersions": "8.18.0",
+          "controls": {
+            "model": {
+              "support": "native",
+              "mapping": "[\"--data-binary\",\"@-\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "effort": {
+              "support": "not-applicable",
+              "mapping": "unavailable: explicit effort is refused; null effort and empty effort lists only",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "sandbox": {
+              "support": "external",
+              "mapping": "unavailable natively: requires a host OS/executor boundary; local endpoint does not prove local inference",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "approval": {
+              "support": "external",
+              "mapping": "unavailable natively: curl has no approval or permission system; the host authorizes the single text-only POST",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "workdir": {
+              "support": "external",
+              "mapping": "host spawns curl in the resolved absolute workspace; no server-side workspace control",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "finalOutput": {
+              "support": "external",
+              "mapping": "host captures stdout and validates the original envelope and extracted worker claims; no server output-file control",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "stdin": {
+              "support": "native",
+              "mapping": "[\"--data-binary\",\"@-\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "structuredOutput": {
+              "support": "external",
+              "mapping": "unavailable server schema control; host strict claims parser validates the extracted response",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "stepCap": {
+              "support": "unqualified",
+              "mapping": "unavailable: no model step cap; curl time and size bounds are not a step cap",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "trust": {
+              "support": "native",
+              "mapping": "-q",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "children": {
+              "support": "native",
+              "mapping": "[\"--data-binary\",\"@-\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            },
+            "fallback": {
+              "support": "native",
+              "mapping": "[\"--max-redirs\",\"0\"]",
+              "evidence": "curl 8.18.0 installed help; tools/ralph-external/lib/ollama-adapter.mjs and offline Ollama fixtures; server 0.33.3 API assumptions provisional"
+            }
+          },
+          "envAllowlist": [
+            "OLLAMA_HOST"
+          ],
+          "pitfalls": [
+            "One text-only POST /api/generate, stream:false, explicit model and no tools, child-agent API or fallback request. Coding and explicit effort are refused.",
+            "The model control binds the resolved model in the adapter-frame JSON body; argv contains no model or brief.",
+            "No Ollama CLI, server start or weight-download command is invoked, including for disabled members. Server-side downloads, inference locality and backend identity remain unqualified.",
+            "curl 8.18.0 is the executable version; Ollama 0.33.3 response fields and done_reason=stop remain provisional pending the conductor smoke.",
+            "No native sandbox or approval system exists; external workspace/capture/validation controls require an enforcing host boundary.",
+            "No streaming health grammar, progress, session log, server cancellation, resume or model step cap is available. Owned curl exit is not proof of remote server stop."
+          ],
+          "health": {
+            "version": 1,
+            "handshake": "process-only",
+            "outputFraming": "final-json",
+            "signalParser": "unavailable",
+            "sessionLogLocator": null,
+            "progressEvidence": [],
+            "stopEvidence": "owned curl process identity and observed exit only; remote server cancellation unavailable",
+            "fixtureRef": "test/fixtures/providers/local-http/health/manifest.json",
+            "qualifiedAt": null,
+            "statusOperation": null,
+            "cancelOperation": null,
+            "coverage": "degraded",
+            "qualificationTarget": "unobserved",
+            "evidenceGrades": [
+              "H",
+              "R"
+            ],
+            "provenance": [
+              {
+                "kind": "help",
+                "ref": "docs/providers/ollama-direct.md",
+                "observedAt": "2026-10-09T00:00:00Z",
+                "cliVersion": "8.18.0"
+              },
+              {
+                "kind": "repository",
+                "ref": "tools/ralph-external/lib/ollama-adapter.mjs",
+                "observedAt": "2026-10-26T00:00:00Z",
+                "cliVersion": null
+              }
+            ],
+            "qualificationOwner": "B-OG-09",
+            "qualification": {
+              "status": "unqualified",
+              "scopeDigest": null,
+              "cliVersion": null,
+              "accountScope": null,
+              "profileRef": null,
+              "modelKey": null,
+              "effort": null,
+              "authorizedLive": false
             }
           }
         }

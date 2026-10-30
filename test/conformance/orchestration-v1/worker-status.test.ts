@@ -8,6 +8,31 @@ import { sampleWorkerStatus, classifyWorkerStatus, formatWorkerStatus, watchWork
   createStatusObservationOwner } from '../../../tools/ralph-external/process-monitor.mjs';
 import { parseWorkerStatusArgs } from '../../../tools/ralph-external/index.mjs';
 import { resolveWorkerEffectiveHealth } from '../../../src/serve/worker-invocation.js';
+import { projectRecoveryStatus, projectStartupCorrection } from '../../../src/mission-protocol/worker-status.js';
+import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
+
+function recoveryFixture() {
+  let clock = 1_000_000, sequence = 0;
+  const breaker = new ScopedFailureBreaker({ nowMs: () => clock, jitterMs: () => 0 });
+  const scopeKey = 'provider:fixture';
+  const admit = (purpose = 'task') => {
+    const admission = breaker.admit({ invocationId: `status-${++sequence}`, scopeKeys: [scopeKey], purpose });
+    expect(admission.ok).toBe(true);
+    return admission.token;
+  };
+  const failed = (token: any) => breaker.settle(token, { kind: 'failed', reasonCode: 'NETWORK',
+    evidenceSource: 'launcher', inferenceProvider: 'fixture', confirmedStop: true });
+  const open = () => { for (let n = 0; n < 3; n++) failed(admit()); };
+  const due = () => { clock = breaker.getState(scopeKey).nextProbeAtMs; };
+  const probe = () => {
+    due();
+    const token = admit('probe');
+    breaker.settle(token, { kind: 'succeeded', relevant: true, evidenceSource: 'launcher', confirmedStop: true });
+  };
+  const recorded = () => ({ ...breaker.recoveryStatus(), observedAt: new Date(epoch + clock).toISOString() });
+  return { breaker, scopeKey, admit, failed, open, due, probe, recorded,
+    advance: (ms: number) => { clock += ms; } };
+}
 
 const roots: string[] = [];
 const epoch = Date.UTC(2026, 9, 8);
@@ -253,5 +278,180 @@ describe('T-OG-23 ownership, bounds, unknowns and observer gaps', () => {
     expect(health.memory).toBeNull();
     expect(health.uptime).toBeNull();
     expect(health.unavailableReason).toContain('bounded-child-process helper unavailable');
+  });
+});
+
+describe('direct recovery scope status (#3049)', () => {
+  it.each(['invocation-mismatch', 'unsafe-owner', 'missing-owner'])('rejects recovery observations from %s metadata', async kind => {
+    const directory = await fixture();
+    const processRecord: any = { ...records().process, origin: 'launcher', recovery: { observedAtMs: 0,
+      observedAt: new Date(epoch).toISOString(), scopes: [{ scope: 'provider', scopeKey: 'provider:forged',
+        state: 'open', reasons: ['NETWORK'], nextEligibleAtMs: 1, canaryInFlight: false }], transitions: [] } };
+    if (kind === 'invocation-mismatch') processRecord.invocationId = 'another-invocation';
+    else if (kind === 'unsafe-owner') processRecord.supervisor = { ...identity, host: 'DO-NOT-EXPORT\nworker text' };
+    else delete processRecord.supervisor;
+    await writeFile(path.join(directory, 'process.json'), JSON.stringify(processRecord), { mode: 0o600 });
+    const report = await sampleWorkerStatus(options(directory));
+    expect(report.recovery).toMatchObject({ source: 'unavailable', scopes: [], transitions: [] });
+    expect(JSON.stringify(report)).not.toContain('DO-NOT-EXPORT');
+    if (kind === 'invocation-mismatch') expect(report.workers[0].error.code).toBe('INVOCATION_MISMATCH');
+  });
+
+  it('keeps the latest observation per launcher owner without hiding another owner’s active scope', async () => {
+    const directory = await root();
+    const status = (state: string, observedAt: number) => ({ observedAtMs: 10, observedAt: new Date(epoch + observedAt).toISOString(),
+      scopes: [{ scopeKey: 'provider:fixture', scope: 'provider', state, reasons: ['NETWORK'],
+        nextEligibleAtMs: state === 'closed' ? null : 20, canaryInFlight: false }], transitions: [] });
+    for (const [name, supervisor, recovery] of [
+      ['a-old', identity, status('open', 1)],
+      ['b-new', identity, status('closed', 2)],
+      ['c-other', { ...identity, pid: identity.pid + 1 }, status('open', 3)],
+    ] as const) {
+      const run = await fixture(directory, name);
+      await writeFile(path.join(run, 'process.json'), JSON.stringify({ ...records().process, origin: 'launcher', supervisor, recovery }), { mode: 0o600 });
+    }
+    const report = await sampleWorkerStatus({ ...options(directory), runDir: undefined, runsRoot: directory });
+    expect(report.recovery.scopes).toHaveLength(2);
+    expect(report.recovery.scopes.map((scope: any) => scope.state)).toEqual(['open', 'closed']);
+    expect(new Set(report.recovery.scopes.map((scope: any) => scope.owner)).size).toBe(2);
+    expect(formatWorkerStatus(report)).toContain('owner=51718@fixture:100');
+  });
+
+  it('shows bounded mechanical correction records and rejects unknown record fields', async () => {
+    const directory = await fixture();
+    const startupCorrection = { action: 'refresh-executable-binding', reasonCode: 'NOT_FOUND', state: 'stopped',
+      previousInvocationId: 'previous-worker', retryInvocationId: 'retry-worker', stopCode: 'RETRY_FAILED',
+      stdout: 'DO-NOT-EXPORT', argv: ['DO-NOT-EXPORT'] };
+    await writeFile(path.join(directory, 'process.json'), JSON.stringify({ ...records().process,
+      origin: 'launcher', startupCorrection }), { mode: 0o600 });
+    const report = await sampleWorkerStatus(options(directory));
+    expect(report.workers[0].startupCorrection).toMatchObject({ action: 'refresh-executable-binding', state: 'stopped', stopCode: 'RETRY_FAILED' });
+    expect(formatWorkerStatus(report)).toContain('startup correction=refresh-executable-binding state=stopped reason=NOT_FOUND stop=RETRY_FAILED');
+    expect(JSON.stringify(report)).not.toContain('DO-NOT-EXPORT');
+    expect(projectStartupCorrection({ ...startupCorrection, action: 'login' })).toBeNull();
+    expect(projectStartupCorrection({ ...startupCorrection, stopCode: 'DO-NOT-EXPORT' })).not.toHaveProperty('stopCode');
+  });
+
+  it('shows each opening, probe, canary and successful close in recorded text and JSON without writes', async () => {
+    const f = recoveryFixture();
+    try {
+      expect(f.breaker.recoveryStatus().scopes).toEqual([]);
+      f.open();
+      const directory = await fixture();
+      const publish = async () => writeFile(path.join(directory, 'process.json'), JSON.stringify({
+        ...records().process, origin: 'launcher', recovery: f.recorded(),
+      }), { mode: 0o600 });
+      await publish();
+      const before = await readFile(path.join(directory, 'process.json'), 'utf8');
+      const modified = (await stat(path.join(directory, 'process.json'))).mtimeMs;
+      const report = await sampleWorkerStatus(options(directory));
+      expect(report.recovery).toMatchObject({ source: 'recorded', scopes: [{ scopeKey: f.scopeKey,
+        state: 'open', reasons: ['NETWORK'], nextEligibleAtMs: 1_120_000,
+        nextEligibleAt: new Date(epoch + 1_120_000).toISOString(), canaryInFlight: false }] });
+      expect(formatWorkerStatus(report)).toContain('provider:fixture state=open reasons=NETWORK next eligible=');
+      expect(JSON.parse(JSON.stringify(report)).recovery.transitions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ from: 'closed', to: 'open', reasons: ['NETWORK'] }),
+      ]));
+      expect(await readFile(path.join(directory, 'process.json'), 'utf8')).toBe(before);
+      expect((await stat(path.join(directory, 'process.json'))).mtimeMs).toBe(modified);
+      f.due();
+      const probe = f.admit('probe');
+      expect(f.breaker.recoveryStatus().scopes[0]).toMatchObject({ state: 'half-open', canaryInFlight: true });
+      f.breaker.settle(probe, { kind: 'succeeded', relevant: true, evidenceSource: 'launcher', confirmedStop: true });
+      expect(f.breaker.recoveryStatus().scopes[0]).toMatchObject({ state: 'canary-ready', canaryInFlight: false });
+      const canary = f.admit();
+      expect(f.breaker.recoveryStatus().scopes[0]).toMatchObject({ state: 'canary', canaryInFlight: true });
+      f.breaker.settle(canary, { kind: 'succeeded', confirmedStop: true });
+      await publish();
+      const closed = await sampleWorkerStatus(options(directory));
+      expect(closed.recovery.scopes[0]).toMatchObject({ state: 'closed', nextEligibleAt: null, canaryInFlight: false });
+      expect(closed.recovery.transitions.map((event: any) => event.to))
+        .toEqual(['open', 'half-open', 'canary-ready', 'canary', 'closed']);
+      expect(formatWorkerStatus(closed)).toContain('canary -> closed');
+      expect(formatWorkerStatus(closed)).toContain('provider:fixture state=closed');
+    } finally { f.breaker.destroy(); }
+  });
+
+  it.each(['probe', 'task'])('records a failed %s reopening without advancing recovery while status is read', purpose => {
+    const f = recoveryFixture();
+    try {
+      f.open(); f.due();
+      if (purpose === 'task') f.probe();
+      const token = f.admit(purpose);
+      f.failed(token);
+      const snapshot = f.breaker.recoveryStatus();
+      expect(snapshot.scopes[0]).toMatchObject({ state: 'open', canaryInFlight: false });
+      expect(snapshot.transitions.at(-1)).toMatchObject({ from: purpose === 'probe' ? 'half-open' : 'canary', to: 'open' });
+      f.due();
+      const deadlineToken = f.admit('probe');
+      f.advance(1_000_000);
+      const before = f.breaker.recoveryStatus();
+      for (let n = 0; n < 3; n++) expect(f.breaker.recoveryStatus()).toEqual(before);
+      expect(before.scopes[0]).toMatchObject({ state: 'half-open', canaryInFlight: true });
+      f.breaker.settle(deadlineToken, { kind: 'uncertain', confirmedStop: true });
+      expect(f.breaker.recoveryStatus().scopes[0].state).toBe('open');
+    } finally { f.breaker.destroy(); }
+  });
+
+  it('retains operator intervention and reset transitions without copying arbitrary operator text', () => {
+    const f = recoveryFixture();
+    try {
+      f.open();
+      f.breaker.requireOperatorIntervention([f.scopeKey], 'DO-NOT-EXPORT-worker-text');
+      expect(f.breaker.recoveryStatus().scopes[0].state).toBe('operator-intervention');
+      expect(JSON.stringify(f.breaker.recoveryStatus())).not.toContain('DO-NOT-EXPORT');
+      expect(f.breaker.reset(f.scopeKey).ok).toBe(true);
+      const snapshot = f.breaker.recoveryStatus();
+      expect(snapshot.scopes[0].state).toBe('closed');
+      expect(snapshot.transitions.at(-1)).toMatchObject({ from: 'operator-intervention', to: 'closed' });
+    } finally { f.breaker.destroy(); }
+  });
+
+  it('caps owner history and scope projections at 32 and reports omitted scopes', () => {
+    const f = recoveryFixture();
+    try {
+      for (let n = 0; n < 40; n++) {
+        const scopeKey = `installation:fixture-${n}`;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const { token } = f.breaker.admit({ invocationId: `bounded-${n}-${attempt}`, scopeKeys: [scopeKey] });
+          f.breaker.settle(token, { kind: 'failed', reasonCode: 'NOT_FOUND', evidenceSource: 'launcher',
+            cli: `fixture-${n}`, confirmedStop: true });
+        }
+      }
+      const snapshot = f.breaker.recoveryStatus();
+      expect(snapshot.scopes).toHaveLength(32);
+      expect(snapshot.transitions).toHaveLength(32);
+      expect(snapshot.omittedScopeCount).toBe(8);
+      expect(snapshot.transitions[0].scopeKey).toBe('installation:fixture-8');
+      expect(projectRecoveryStatus(snapshot).truncated).toBe(true);
+      snapshot.scopes[0].reasons.push('DO-NOT-EXPORT');
+      snapshot.transitions[0].reasons.push('DO-NOT-EXPORT');
+      expect(JSON.stringify(f.breaker.recoveryStatus())).not.toContain('DO-NOT-EXPORT');
+    } finally { f.breaker.destroy(); }
+  });
+
+  it('bounds and sanitizes persisted metadata, rejecting captures, actions and malformed scope labels', () => {
+    const scope = { scopeKey: 'provider:fixture', scope: 'provider', state: 'open', reasons: ['NETWORK', 'worker outage text'],
+      nextEligibleAtMs: Infinity, canaryInFlight: true, action: 'DO-NOT-EXPORT', stdout: 'DO-NOT-EXPORT' };
+    const transition = { ...scope, from: 'closed', to: 'open', atMs: 100, summary: 'DO-NOT-EXPORT' };
+    const projected = projectRecoveryStatus({ observedAtMs: 100, observedAt: new Date(epoch).toISOString(),
+      scopes: Array(100).fill(scope), transitions: Array(100).fill(transition) });
+    expect(projected.scopes).toHaveLength(32);
+    expect(projected.transitions).toHaveLength(32);
+    expect(projected.scopes[0]).toMatchObject({ reasons: ['NETWORK'], nextEligibleAtMs: null, nextEligibleAt: null });
+    expect(projected).toMatchObject({ omittedScopeCount: 68, truncated: true });
+    expect(JSON.stringify(projected)).not.toContain('DO-NOT-EXPORT');
+    expect(JSON.stringify(projected)).not.toContain('worker outage text');
+    expect(projectRecoveryStatus({ scopes: [{ ...scope, scopeKey: 'provider:bad\nlabel' }] }).scopes).toEqual([]);
+    expect(projectRecoveryStatus(null).source).toBe('unavailable');
+  });
+
+  it('reports unavailable recovery explicitly and never infers scope state from health or observer scratch', async () => {
+    const directory = await fixture();
+    await writeFile(path.join(directory, 'health.json'), JSON.stringify({ ...records().health,
+      recovery: { scopes: [{ scopeKey: 'provider:forged', state: 'open' }] } }), { mode: 0o600 });
+    const report = await sampleWorkerStatus(options(directory));
+    expect(report.recovery).toMatchObject({ source: 'unavailable', scopes: [], transitions: [] });
+    expect(formatWorkerStatus(report)).toContain('Recovery scope status unavailable');
   });
 });

@@ -1,0 +1,642 @@
+{
+  "issue": 2942,
+  "scope": "Wave 2 canonical workflow rule activation and concrete bindings; offline validation only",
+  "prerequisites": {
+    "measurement_fixture": {
+      "base": "test/fixtures/rule-binding/project",
+      "extra_files": {
+        ".aiwg/aiwg.config": {
+          "version": "1",
+          "rules": {
+            "inline_budget_tokens": 0
+          }
+        }
+      },
+      "note": "Comparable Wave 1 fixture; guard disabled only for measurement, not the real deploy."
+    }
+  },
+  "rules": [
+    {
+      "name": "delivery-policy",
+      "source": "agentic/code/addons/aiwg-utils/rules/delivery-policy.md",
+      "activation": "summary",
+      "summary": "Read the target repository delivery and tracker configuration before git, issue, PR, or release work; follow its branch, signing, actor, CI, and closure policy.",
+      "bound_to": {
+        "skills": [
+          "address-issues",
+          "aiwg-delivery-pr",
+          "aiwg-issue",
+          "aiwg-pr",
+          "commit-and-push",
+          "dev-release-coordinate",
+          "flow-delivery-track",
+          "flow-release",
+          "issue-audit",
+          "issue-auto-sync",
+          "issue-close",
+          "issue-comment",
+          "issue-create",
+          "issue-driven-al",
+          "issue-list",
+          "issue-planner",
+          "issue-sync",
+          "issue-update",
+          "release-publication-verify",
+          "steward",
+          "steward-prep-delivery"
+        ],
+        "agents": [
+          "aiwg-steward"
+        ],
+        "flows": [
+          "flow-delivery-track",
+          "flow-release"
+        ]
+      },
+      "before_native_bytes": 14325,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "sdlc-right-sizing",
+      "source": "agentic/code/addons/aiwg-utils/rules/sdlc-right-sizing.md",
+      "activation": "summary",
+      "summary": "Choose the smallest SDLC workflow and artifact set justified by the change; reserve intake and phase ceremony for work whose scope warrants them.",
+      "bound_to": {
+        "skills": [
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "intake-from-campaign",
+          "intake-from-codebase",
+          "intake-start",
+          "intake-start-campaign",
+          "intake-wizard",
+          "sdlc-accelerate"
+        ],
+        "flows": [
+          "flow-agentloop-lfd-controls",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-guided-implementation",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-release",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "before_native_bytes": 8723,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "vague-discretion",
+      "source": "agentic/code/addons/aiwg-utils/rules/vague-discretion.md",
+      "activation": "bound",
+      "summary": "Define measurable completion and gate criteria with explicit thresholds or checks; cap every loop with a maximum iteration count and a fallback.",
+      "bound_to": {
+        "skills": [
+          "aiwg-mission",
+          "complexity-gate",
+          "flow-gate-check",
+          "gate-evaluation",
+          "infer-completion-criteria",
+          "mission-control",
+          "ralph",
+          "ralph-config",
+          "ralph-external",
+          "ralph-resume",
+          "security-gate"
+        ],
+        "agents": [
+          "ralph-loop",
+          "ralph-verifier"
+        ],
+        "flows": [
+          "flow-gate-check"
+        ]
+      },
+      "before_native_bytes": 4728,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "respect-repo-access-manifest",
+      "source": "agentic/code/addons/aiwg-utils/rules/respect-repo-access-manifest.md",
+      "activation": "summary",
+      "summary": "Check the workspace repository access manifest and the target member configuration before repo or service actions; deny unlisted writes and obtain operator authorization for registration.",
+      "bound_to": {
+        "skills": [
+          "address-issues",
+          "aiwg-delivery-pr",
+          "aiwg-issue",
+          "aiwg-pr",
+          "aiwg-setup-project",
+          "commit-and-push",
+          "dev-builder-audit",
+          "dev-ci-builder",
+          "dev-pipeline-audit",
+          "dev-release-coordinate",
+          "git-mirror-audit",
+          "issue-audit",
+          "issue-auto-sync",
+          "issue-close",
+          "issue-comment",
+          "issue-create",
+          "issue-driven-al",
+          "issue-list",
+          "issue-planner",
+          "issue-sync",
+          "issue-update",
+          "it-asset-sync",
+          "it-deployment-lifecycle",
+          "it-dr-test",
+          "it-identity-audit",
+          "it-network-state",
+          "it-provision",
+          "net-connectivity-test",
+          "net-dns-check",
+          "net-vlan-audit",
+          "ops",
+          "ops-audit-trail",
+          "ops-quickref",
+          "ops-verify",
+          "pr-review",
+          "pr-reviewer",
+          "repo-analyzer",
+          "repo-maintainer",
+          "sec-access-snapshot",
+          "sec-cert-scan",
+          "sec-luks-verify",
+          "steward",
+          "steward-prep-delivery",
+          "stream-deploy",
+          "stream-health",
+          "sys-cert-check",
+          "sys-fleet-inventory",
+          "sys-host-audit"
+        ]
+      },
+      "before_native_bytes": 4178,
+      "after_native_bytes": 0
+    },
+    {
+      "name": "native-ux-tools",
+      "source": "agentic/code/addons/aiwg-utils/rules/native-ux-tools.md",
+      "activation": "summary",
+      "summary": "Before asking an interactive question, check for an available native question or elicitation tool and use it; otherwise present one clearly formatted question with options.",
+      "bound_to": {
+        "skills": [
+          "add-agent",
+          "add-behavior",
+          "add-command",
+          "add-skill",
+          "add-template",
+          "address-issues",
+          "aiwg-init",
+          "aiwg-kb",
+          "aiwg-setup-project",
+          "aiwg-setup-warp",
+          "aiwg-update-agents-md",
+          "aiwg-update-claude",
+          "aiwg-update-warp",
+          "analyze-artist",
+          "asset-production",
+          "brand-audit",
+          "brand-review",
+          "browser-reset",
+          "browser-setup",
+          "budget-review",
+          "build-artifact-index",
+          "build-poc",
+          "campaign-analytics",
+          "campaign-kickoff",
+          "check-traceability",
+          "commit-and-push",
+          "competitive-analysis",
+          "content-planning",
+          "create-prd",
+          "creative-brief",
+          "crisis-response",
+          "devkit-create-addon",
+          "devkit-create-agent",
+          "devkit-create-command",
+          "devkit-create-extension",
+          "devkit-create-framework",
+          "devkit-create-skill",
+          "email-campaign",
+          "eval-loop",
+          "event-marketing",
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution",
+          "generate-realization",
+          "generate-tests",
+          "infer-completion-criteria",
+          "intake-from-campaign",
+          "intake-from-codebase",
+          "intake-start",
+          "intake-start-campaign",
+          "intake-wizard",
+          "issue-audit",
+          "issue-comment",
+          "issue-driven-al",
+          "issue-planner",
+          "legal-compliance",
+          "marketing-intake",
+          "marketing-intake-wizard",
+          "marketing-retrospective",
+          "marketing-status",
+          "mention-wire",
+          "orchestrate-project",
+          "pipeline-design",
+          "pr-launch",
+          "pr-review",
+          "project-timeline-simulator",
+          "prompt-engineer",
+          "ralph",
+          "ralph-abort",
+          "ralph-resume",
+          "ralph-status",
+          "research-quality",
+          "research-workflow",
+          "run",
+          "sales-enablement",
+          "scaffold-addon",
+          "scaffold-extension",
+          "scaffold-framework",
+          "sdlc-accelerate",
+          "security-gate",
+          "security-report",
+          "setup-generate",
+          "setup-tdd",
+          "smith-agenticdef",
+          "smith-mcpdef",
+          "smith-sysdef",
+          "social-strategy",
+          "soul-enhance",
+          "soul-to-voice",
+          "star-prompt",
+          "template-engine",
+          "theme-manager",
+          "troubleshooting-guide",
+          "uat-generate",
+          "video-production",
+          "voice-to-soul",
+          "workspace-prune-working",
+          "workspace-realign"
+        ],
+        "flows": [
+          "flow-architecture-evolution",
+          "flow-change-control",
+          "flow-compliance-validation",
+          "flow-concept-to-inception",
+          "flow-construction-to-transition",
+          "flow-cross-team-sync",
+          "flow-delivery-track",
+          "flow-deploy-to-production",
+          "flow-discovery-track",
+          "flow-elaboration-to-construction",
+          "flow-gate-check",
+          "flow-handoff-checklist",
+          "flow-hypercare-monitoring",
+          "flow-inception-to-elaboration",
+          "flow-incident-response",
+          "flow-iteration-dual-track",
+          "flow-knowledge-transfer",
+          "flow-performance-optimization",
+          "flow-requirements-evolution",
+          "flow-retrospective-cycle",
+          "flow-risk-management-cycle",
+          "flow-security-review-cycle",
+          "flow-team-onboarding",
+          "flow-test-strategy-execution"
+        ]
+      },
+      "before_native_bytes": 6621,
+      "after_native_bytes": 0
+    }
+  ],
+  "binding_decisions": {
+    "kernel_retained": [],
+    "missing_named_targets": [
+      {
+        "family": "gate authoring",
+        "gap": "No dedicated gate-authoring skill exists.",
+        "bound_existing": [
+          "gate-evaluation",
+          "flow-gate-check",
+          "complexity-gate",
+          "security-gate",
+          "infer-completion-criteria"
+        ]
+      }
+    ],
+    "command_projection": "The schema binds skills, agents and flows. The only explicitly interactive canonical Markdown command, issue-audit, has a bound same-name skill. Command-only issue-show/issue-index use the closest existing issue-list skill; address-issues has its own bound skill.",
+    "family_expansion": "Concrete IDs cover every indexed issue-* Markdown skill, intake-* skill, flow-* skill and flow playbook; repository release skills flow-release, release-publication-verify and dev-release-coordinate; operational skills in ops-complete and dev/it/net/repo-maintainer/sec/stream/sys extensions.",
+    "interactive_selection": "119 canonical Markdown skills declaring --interactive, AskUserQuestion or request_user_input, plus their 24 flow counterparts. Indexed JSON skill manifests are excluded.",
+    "other_waves": "rlm-* binding belongs to Wave 3; no Wave 3 rule sources were changed."
+  },
+  "gates": {
+    "U1": {
+      "passed": true,
+      "before_rule_bytes": 265307,
+      "after_rule_bytes": 227789,
+      "saved_bytes": 37518,
+      "before_behavior_bytes": 0,
+      "after_behavior_bytes": 0,
+      "wave1_limit_bytes": 265307,
+      "release_ceiling_bytes": 110000,
+      "release_ceiling_met": false,
+      "codex_native_rule_surface_bytes_before": 0,
+      "codex_native_rule_surface_bytes_after": 0,
+      "codex_context_file_bytes_before": 4611,
+      "codex_context_file_bytes_after": 5609,
+      "codex_context_file_delta_bytes": 998,
+      "provider_comparison": "Claude comparable full deployment measured before/after; Codex uses supplied Wave 1 comparison. Six provider binding/deploy fixtures pass; other complete-provider baselines not measured."
+    },
+    "U2": {
+      "activation_lint": "pass",
+      "errors": 0,
+      "explicit_wave2_rules": 5,
+      "remaining_migration_warnings": 149,
+      "complete_corpus_coverage": false
+    },
+    "U3": {
+      "passed": true,
+      "declared_rule_artifact_pairs": 288,
+      "distinct_artifacts": 198,
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "hermes",
+        "warp",
+        "openclaw"
+      ],
+      "delivered_pair_checks": 1728
+    },
+    "U4": {
+      "passed": true,
+      "default_cli_bound_rule_pair_checks": 288,
+      "distinct_cli_json_responses": 198,
+      "mcp_parity_cases": 3,
+      "note": "Actual CLI JSON checks every declared pair; shared CLI/MCP parity and Fortemi round-trip tests pass in the neighbor lane."
+    },
+    "U5": {
+      "status": "not run; conductor on titan",
+      "rollback": "Set a failing rule activation to kernel and remove bound_to; revert each rule independently."
+    },
+    "U6": {
+      "passed": true,
+      "results": [
+        {
+          "name": "delivery-policy",
+          "phrase": "how does this project deliver changes",
+          "rank": 1,
+          "top3": [
+            "delivery-policy",
+            "sdlc-right-sizing",
+            "it-change-control"
+          ]
+        },
+        {
+          "name": "sdlc-right-sizing",
+          "phrase": "how much SDLC process does this change need",
+          "rank": 1,
+          "top3": [
+            "sdlc-right-sizing",
+            "delivery-policy",
+            "diagram-generation"
+          ]
+        },
+        {
+          "name": "vague-discretion",
+          "phrase": "write measurable loop completion criteria",
+          "rank": 1,
+          "top3": [
+            "vague-discretion",
+            "no-attribution",
+            "respect-repo-access-manifest"
+          ]
+        },
+        {
+          "name": "respect-repo-access-manifest",
+          "phrase": "am I allowed to write to this repo",
+          "rank": 1,
+          "top3": [
+            "respect-repo-access-manifest",
+            "human-authorization",
+            "no-attribution"
+          ]
+        },
+        {
+          "name": "native-ux-tools",
+          "phrase": "ask the user an interactive question",
+          "rank": 1,
+          "top3": [
+            "native-ux-tools",
+            "ops-safety",
+            "instruction-comprehension"
+          ]
+        }
+      ]
+    },
+    "U7": {
+      "status": "not run; conductor on titan"
+    },
+    "U8": {
+      "status": "not run; full-deploy steward/mission model dispatch requires conductor validation"
+    },
+    "U9": {
+      "passed": true,
+      "provider_fixture_count": 6,
+      "codex_full_sdlc_deployment_exit_code": 0,
+      "codex_agents_md_bytes": 1196,
+      "codex_agents_md_limit_bytes": 32768
+    }
+  },
+  "real_deploy": {
+    "root": "/tmp/aiwg-2942-real-jEuIjA",
+    "command": "env -u AIWG_HOME AIWG_CONFIG=<isolated-config> node <worktree>/bin/aiwg.mjs use sdlc --provider claude",
+    "exit_code": 0,
+    "default_budget": true,
+    "ci": false,
+    "channel": {
+      "channel": "edge",
+      "edgePath": "/home/roctinam/dev/jmagly/aiwg-wt/2942",
+      "devMode": true,
+      "checkOnStartup": false
+    },
+    "passed": true,
+    "git_repository_initialization": "Empty .git objects/refs/HEAD/config created directly in system temp; no git commands used.",
+    "strict_ci_extra_check": {
+      "exit_code": 1,
+      "selected_context_bytes": 284624,
+      "limit_tokens": 64000,
+      "note": "An additional CI=1 run fails the existing migration budget during initial deployment. The requested ordinary deploy uses the unchanged default report-only guard and must not be interpreted as strict-budget conformance."
+    }
+  },
+  "validation": {
+    "typecheck": "pass",
+    "build_cli": "pass",
+    "package_plugins": "pass",
+    "plugin_copies": "pass",
+    "rule_triggers": "pass",
+    "unit_tests": {
+      "passed": 343,
+      "files": 18,
+      "neighbor_passed": 334,
+      "wave2_passed": 9
+    },
+    "orchestration_conformance": {
+      "passed": 932,
+      "files": 36,
+      "config": "config/vitest.config.js",
+      "maxWorkers": 4,
+      "note": "Vitest API loads the required base config and overrides only orchestration lane include/exclude ownership, as in Wave 1."
+    },
+    "ci_lints": [
+      {
+        "script": "lint:dep-sources",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:eval-imports",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:package-license-boundary",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:agent-sizes",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-registration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:test-process-timeouts",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:orchestration-packs",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:rule-activation",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:schemas",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:ops-templates",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-inventory",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:mission-contract",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:plugin-copies",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:vault-migration",
+        "exit_code": 0
+      },
+      {
+        "script": "lint:session-fixtures",
+        "exit_code": 0
+      }
+    ],
+    "omitted_ci_lints": [
+      {
+        "script": "lint:audit-signatures",
+        "reason": "Requires prohibited npm registry network access."
+      },
+      {
+        "script": "lint:generated-artifacts",
+        "reason": "Invokes git ls-files, prohibited by task."
+      },
+      {
+        "script": "lint:affected-packages",
+        "reason": "Conditional operator CSV source is outside permitted worktree/temp scope; no feed was accessed."
+      }
+    ],
+    "constraints": "Only worktree/system temp writes; no explicit git commands, installs, tracker writes, network requests or model calls; one Vitest process at a time, nice -n 19, maxWorkers=4"
+  },
+  "evidence": {
+    "before": "wave2-measurement-before.json",
+    "after": "wave2-measurement-after.json",
+    "temporary_logs": "/tmp/aiwg-2942-evidence"
+  }
+}

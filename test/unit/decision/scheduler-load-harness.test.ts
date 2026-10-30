@@ -179,13 +179,13 @@ describe('offline D05 load harness', () => {
     expect(decisionLoadEvidenceFlags(records, `sha256:${'0'.repeat(64)}`)['load-manifest-offline-passed']).toBe(false);
   });
 
-  it('CNC-LOAD-004 lets only a passing staged-provider record bound to its manifest qualify G5', () => {
+  it('CNC-LOAD-004 requires the v3 staged artifact rather than a v2 mode label for G5', () => {
     const staged: DecisionLoadManifestV2 = { ...manifest, mode: 'staged-provider' };
     const digest = decisionLoadManifestDigest(JSON.stringify(staged));
     const retained = committed('admission-controller');
     const record = decisionLoadResultRecord({ manifest: staged, manifestDigest: digest, target: 'admission-controller',
       windowSeconds: retained.window.seconds, observations: retained.observations, resources: retained.resources });
-    expect(decisionLoadEvidenceFlags([record], digest)['load-manifest-qualified']).toBe(true);
+    expect(decisionLoadEvidenceFlags([record], digest)['load-manifest-qualified']).toBe(false);
     const failing = decisionLoadResultRecord({ manifest: staged, manifestDigest: digest, target: 'admission-controller',
       windowSeconds: retained.window.seconds, observations: { ...retained.observations, maximumActiveCalls: 99 }, resources: retained.resources });
     expect(failing.passed).toBe(false);

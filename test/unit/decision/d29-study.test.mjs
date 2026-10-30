@@ -17,7 +17,7 @@ import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js'
 import { heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
 import { evaluateSdlcEvidenceScreening, applySdlcScreeningToGateOutcome } from '../../../src/decision/sdlc-screening.js';
-import { freezeAdmissionClock, preparedOnce, PREPARE_HOOK_TIMEOUT, ADMISSION_CLOCK } from './d29-test-support.mjs';
+import { offlineD29GateInputs, freezeAdmissionClock, preparedOnce, PREPARE_HOOK_TIMEOUT, ADMISSION_CLOCK } from './d29-test-support.mjs';
 
 freezeAdmissionClock();
 
@@ -115,7 +115,7 @@ function reportFixture() {
   const metadata = integrity();
   const build = (gate = {}) => buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout, integrity: metadata,
     trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(heldout.evaluatedAt),
-    firstTestAccessAt: '2026-10-02T00:00:00.000Z', projectRoot: PROJECT_ROOT, ...gate });
+    ...offlineD29GateInputs(prepared, analysis, '2026-10-02T00:00:00.000Z'), projectRoot: PROJECT_ROOT, ...gate });
   return { analysis, heldout, metadata, build };
 }
 
@@ -802,7 +802,7 @@ describe('D29 collector integration', () => {
     const fixture = reportFixture();
     const withheld = buildReport({ analysis: fixture.analysis, trustedAnalysisDigest: heldoutDigest(fixture.analysis),
       heldout: null, integrity: fixture.metadata, trustedIntegrityDigest: heldoutDigest(fixture.metadata),
-      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt), firstTestAccessAt: '2026-10-02T00:00:00.000Z', projectRoot: PROJECT_ROOT });
+      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt), ...offlineD29GateInputs(prepared, fixture.analysis, '2026-10-02T00:00:00.000Z'), projectRoot: PROJECT_ROOT });
     expect(withheld.native.heldout).toBeNull();
     expect(withheld.gateReport.decision).toBe('HOLD');
     expect(withheld.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
@@ -834,10 +834,9 @@ describe('D29 collector integration', () => {
       agreed: true, overridden: false, rationale: 'Offline fixture only',
       unblindedAt: item.phase === 'development' ? '2026-09-30T00:30:00Z' : item.phase === 'delayed-repeat' ? '2026-10-02T03:00:00Z' : '2026-10-02T01:00:00Z' });
     reviews.preregistrationReview = 'offline-fixture'; reviews.finalDispositionReview = 'offline-fixture';
-    const analysisDigest = heldoutDigest(analysis), access = { schemaVersion: 'decision-d29-access/v1', analysisDigest,
-      anchoredAt: '2026-09-30T01:00:00Z', firstTestAccessAt: '2026-10-02T00:00:00Z', reference: 'offline-fixture' };
+    const analysisDigest = heldoutDigest(analysis), gateInputs = offlineD29GateInputs(prepared, analysis, '2026-10-02T00:00:00Z', '2026-09-30T01:00:00Z'), { access } = gateInputs;
     const metadata = integrity(), context = { trustedIntegrityDigest: heldoutDigest(metadata), trustedAnalysisDigest: analysisDigest,
-      access, trustedAccessDigest: heldoutDigest(access), mapping, trustedMappingDigest: mappingDigest,
+      access, keyring: gateInputs.keyring, trustedAccessDigest: heldoutDigest(access), mapping, trustedMappingDigest: mappingDigest,
       reviews, trustedReviewsDigest: heldoutDigest(reviews), trustedCalibrationDigest: artifact.digest, projectRoot: PROJECT_ROOT,
       nowEpochMs: Date.parse('2026-10-03T00:00:00Z'), calibration: { registry,
         request: { runId: 'offline-d29', requestedAlias: 'jev-1.13.0', actualIdentity: identity,
@@ -846,7 +845,8 @@ describe('D29 collector integration', () => {
     const approvedCalibration = { mode: 'staged', phase: 'test', calibrationArtifactDigest: artifact.digest,
       calibrationPhaseRecordDigest: heldoutDigest('offline-seal'), priorApprovalDigest: heldoutDigest('offline-approval') };
     const report = await score({ corpus: prepared.corpus, preregistration: prepared.preregistration, gold: prepared.gold,
-      attempts: [], integrity: metadata, approvedCalibration }, context);
+      attempts: [], integrity: metadata, approvedCalibration,
+      frozen: gateInputs.frozen }, context);
     expect(report.heldout).toBeNull(); expect(report.native.heldout).toBeNull();
     expect(report.failureAsError).toMatchObject({ denominator: 1500, missingCandidateErrors: 1300, promotable: false });
     expect(report.completeCase.n).toBe(200); expect(report.decision).toBe('HOLD');

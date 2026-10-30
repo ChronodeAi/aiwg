@@ -70,7 +70,7 @@ This classification is what the `link-check` skill and Section 4 of `dev-doctor`
 
 ### Normalized .aiwg/ Paths
 
-A "normalized" `.aiwg/` path is one that exists (or will exist) in every project that installs AIWG — specifically paths listed in `memory.creates` fields in `manifest.json` files, plus the Tier 1 allowlist (`.aiwg/AIWG.md`, `.aiwg/frameworks/`). Non-normalized paths are repo-local and will break for any user who installs the addon.
+A "normalized" `.aiwg/` path is one that exists (or will exist) in every project that installs AIWG — specifically paths listed in `memory.creates` fields in `manifest.json` files, plus the Tier 1 allowlist (root `AIWG.md`, `.aiwg/frameworks/`; `.aiwg/AIWG.md` is optional operator notes only). Non-normalized paths are repo-local and will break for any user who installs the addon.
 
 ## Audience
 

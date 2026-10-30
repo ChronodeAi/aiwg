@@ -1,0 +1,91 @@
+{
+  "schema_version": "aiwg.fortemi.full-v1-consumer-receipt.v1",
+  "consumer": {
+    "repository": "https://git.integrolabs.net/roctinam/aiwg.git",
+    "commit": "2543b1137e16de6c810dace65f395ea73b4e87c2",
+    "package": {
+      "name": "aiwg",
+      "version": "2026.10.10"
+    }
+  },
+  "converter": {
+    "repository": "https://git.integrolabs.net/Fortemi/fortemi-react.git",
+    "commit": "9f8fa2d4b9b5d864c2d0c4fd730958e2a964341d",
+    "tag": "v2026.7.15",
+    "entrypoint": "@fortemi/core/aiwg-index-shard",
+    "package": {
+      "name": "@fortemi/core",
+      "version": "2026.7.15",
+      "shasum": "77d49fdb9eb389388c864052f00b7323d39d8aa0",
+      "integrity": "sha512-49GThHQHzLFD2BbjgXB7AUznRrwtWo8MsH6IcFMhSmCKj/h+Q5j18EBpkwPHJfC5E7crp+rVzy/GcrT/PF1SXA=="
+    },
+    "release_signing_fingerprint": "26CB074F65E89E5F4DFD7C71F410C8C763C90CC9",
+    "upstream_producer_receipt": {
+      "path": "packages/core/src/__tests__/shard/fixtures/aiwg-full-v1/aiwg-full-v1.shard.receipt.json",
+      "sha256": "9b23aa6db841c76eb5898bbdc6c818cc5ac845d38b414de87acbde3466530a6c"
+    }
+  },
+  "authority": {
+    "repository": "https://git.integrolabs.net/Fortemi/fortemi.git",
+    "commit": "6343bd899958445bbc7e7e87b0dc92a8429d5a06",
+    "contract_revision": "20",
+    "contract_sha256": "5bf8d2fd8147d8df92599b1a3ce6b405ce022c83893f37547aefa7ca659f0783",
+    "schema_version": "2.0.0",
+    "schema_bundle_sha256": "66dee80876c73fdc8756541c72e96ae189c098113a831c849d619381c4121c02"
+  },
+  "source": {
+    "path": "test/fixtures/sessions/claude/web-export.json",
+    "sha256": "f04eba225590ca07111aefb52646deb123727b334332d660f1e000704f09cf24"
+  },
+  "archive": {
+    "path": "test/fixtures/fortemi-shard/aiwg-session-full-v1.shard",
+    "sha256": "b23d51920068c71f757302425a88fb348d910d88e96472009f2c338f16a2bb3e",
+    "bytes": 5267,
+    "manifest": {
+      "format": "matric-shard",
+      "version": "2.0.0",
+      "profile": "full-v1",
+      "components": 33,
+      "manifest_sha256": "355a8ccbfeb04e5a6d6a6b1bbb834412d27b6eba2625c95f8cd643b1011d236e"
+    }
+  },
+  "conversion": {
+    "schema_version": "fortemi.aiwg-full-v1-conversion-receipt.v1",
+    "source_schema_version": "aiwg.fortemi.index.export.v2",
+    "contract_valid": true,
+    "lossless": true,
+    "losses": []
+  },
+  "consumers": {
+    "session": {
+      "phase": "producer",
+      "clock": "2026-08-03T12:00:00.000Z",
+      "producer_sources": [
+        {
+          "path": "src/sessions/fortemi-export-mapping.ts",
+          "sha256": "100ca8eb9ec076250449ecb455d4f1d737c3aae575e88ba9e73de6899083dcd5"
+        },
+        {
+          "path": "src/sessions/fortemi-shard-recovery.ts",
+          "sha256": "26ab06f7667f1f198d00e203949fe1b5f6574b44e11ffee63fe40749f0a9fa39"
+        }
+      ],
+      "session_count": 2,
+      "event_count": 3
+    },
+    "fortemi": {
+      "repository": "https://git.integrolabs.net/Fortemi/fortemi.git",
+      "commit": "2e812aa66ba108a824475a97b1ddba4d1412dec7",
+      "status": "pending",
+      "reason": "Native Docker consumer verification and the main CI run are pending; no consumer success is claimed."
+    }
+  },
+  "advertisement": {
+    "advertised": false,
+    "default_profile": "full-v1",
+    "reason": "Verified (CI job producer-consumer-receipt) applies only once the job main run passes."
+  },
+  "coordination": {
+    "aiwg_issue": "https://git.integrolabs.net/roctinam/aiwg/issues/2570"
+  }
+}

@@ -1,3 +1,4 @@
+import { GateDecisionUpgradeError } from '../../../src/gates/lattice.js';
 import { describe, expect, it } from 'vitest';
 import { CalibrationRegistry, type CalibrationIdentity, type PromotionEligibility } from '../../../src/decision/calibration/index.js';
 import type { QualificationIntegrityMetadata } from '../../../src/decision/qualification/release.js';
@@ -145,4 +146,19 @@ describe('ENS D17 eval-integrity report extension (#2037/#2048)', () => {
     const { rollbackTarget: _rollbackTarget, ...withoutRollback } = cc;
     expect(rejection(() => buildEnsembleIntegrityReport({ record: withoutRollback, integrity: integrity('PROMOTE'), pairedDeltas: deltas, eligibility })).layer).toBe('schema');
   });
+});
+
+it('attaches a typed shared-lattice cause while retaining ensemble contract diagnostics (#2829)', () => {
+  // Construct a valid report with the established ensemble fixtures before forging its verdict.
+  const record = records<DecisionChampionChallenger>('champion-challenger.v1.valid.json').get('triage-champion-challenger-2026-09')!;
+  const report = buildEnsembleIntegrityReport({ record, pairedDeltas: [], eligibility: null, integrity: {
+    sample_n: 0, uncertainty: null, paired_baseline: null, integrity_mode: 'standard', fresh_workspace_required: false,
+    fresh_workspace_verified: false, integrity_state: 'unverified', trusted_score_source: 'local-unverified',
+    compromise_labels: [], weak_signal_reason: null, release_gate: { decision: 'ROLLBACK', reasons: ['fixture'] },
+  } });
+  const { digest: _old, ...fields } = report;
+  const forged = { ...fields, decision: 'PROMOTE' as const };
+  const error = rejection(() => validateEnsembleIntegrityReport({ ...forged, digest: ensembleContractDigest(forged) }));
+  expect(error.cause).toBeInstanceOf(GateDecisionUpgradeError);
+  expect(error.details).toContain('D17 cannot upgrade ROLLBACK to PROMOTE');
 });

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
+import { runResourceDoctor } from './doctor-resources.mjs';
+import { parseDoctorArgsOrExit } from './doctor-args.mjs';
 /**
  * AIWG Doctor Command
  * Checks installation health and diagnoses common issues
  */
 
+import { collectDecisionOffloadReport, formatDecisionOffloadReport } from './decision-offload-report.mjs';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import os from 'os';
@@ -15,13 +18,17 @@ import { isMain } from '../_is-main.mjs';
 
 const { boundedExecFileSync } = await importImpl(import.meta.url, 'process/bounded-child-process.mjs');
 const { cliCommand } = await importImpl(import.meta.url, 'process/cli-command.mjs');
+const { resolveAiwgProbeCommand, probeNotOnPathDetail } = await importImpl(import.meta.url, 'process/aiwg-probe-command.mjs');
 import { scanStartupContext,
   subagentDispatchHeadroom,
   SUBAGENT_AGENT_DEF_TOKENS,
   SUBAGENT_SYSTEM_PROMPT_TOKENS,
   SUBAGENT_MIN_WORKING_TOKENS,
 } from '../lint/claude-context-inventory.mjs';
-import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
+import { checkContextMemoryFirewall } from './doctor-context-firewall.mjs';
+import { runWorkerApprovalManagement, runWorkerProbe, toWorkerProbeRecord, WORKER_PROBE_EMPTY_MESSAGE } from './doctor-worker-probe.mjs';
+
+const { measureDeployedCoreRules } = await importImpl(import.meta.url, 'rules/activation.mjs');
 
 const { getFrameworkRoot, getPackageRoot, getVersionInfo, loadConfig, resolveMcpServerEntrypointPath } = await importImpl(
   import.meta.url,
@@ -64,6 +71,9 @@ const { readAiwgConfig, getProviderParallelismDefaults, validateParallelismConfi
   import.meta.url,
   'config/aiwg-config.js'
 );
+const { nativeSandboxWarnings, readNativeSandboxWarnings } = await importImpl(
+  import.meta.url, 'config/native-sandbox-warnings.js'
+);
 
 export function checkNodeVersion(version) {
   const major = parseInt(version.replace(/^v/, '').split('.')[0]);
@@ -76,13 +86,7 @@ export function checkNodeVersion(version) {
 // so this resolves through importImpl like every other src/ import above:
 // dist/src/cli/flag-parsing.js when installed, src/cli/flag-parsing.ts in a
 // checkout (Node's type stripping handles the erasable-syntax-only module).
-const {
-  requireFlagValue: requireDoctorFlagValue,
-  hasPositionalOrSwitch: hasDoctorFlagSwitch,
-  argsTerminatorIndex: doctorArgsTerminatorIndex,
-  valueTokenIndexes: doctorValueTokenIndexes,
-  MissingFlagValueError: DoctorMissingFlagValueError,
-} = await importImpl(import.meta.url, 'cli/flag-parsing.js');
+
 const { validateThreatAssessmentConfig } = await importImpl(
   import.meta.url,
   'security/threat-assessment-config.js'
@@ -102,7 +106,9 @@ const { auditProjectArtifactHealth } = await importImpl(
 
 // AIWG_ROOT: env override > channel-manager resolved path > legacy edge path
 // getFrameworkRoot() resolves correctly for npm global installs, edge, and dev channels.
-const AIWG_ROOT = process.env.AIWG_ROOT || await getFrameworkRoot();
+const AIWG_ROOT = process.env.AIWG_ROOT || await getFrameworkRoot({
+  createIfMissing: !process.argv.includes('--decision-offload') && !process.argv.includes('--resources'),
+});
 
 // Installation identity drift, when present, is published by bin/aiwg.mjs for
 // read-only commands that keep running against a stale canonical install
@@ -144,14 +150,15 @@ const PROVIDER_LABELS = {
   openclaw: 'OpenClaw',
   openhuman: 'OpenHuman',
   omp: 'Oh My Pi',
+  pi: 'Pi Coding Agent',
   hermes:   'Hermes',
   grokbot:  'Grok Bot',
   'grok-build': 'Grok Build',
   muse:     'Muse Code',
 };
 
-// Quick-detect dirs (agents-only) — used when no --provider flag is given.
-// Mirrors the agents path each provider exports. Kept literal here so the
+// Quick-detect managed dirs — used when no --provider flag is given.
+// Mirrors agent paths, or .pi for its prompt/skill-only deployment. Kept literal so the
 // check is fast and string-greppable without loading every provider module.
 const PROVIDER_AGENT_DIRS = {
   antigravity: '.agents/agents',
@@ -165,107 +172,9 @@ const PROVIDER_AGENT_DIRS = {
   windsurf: '.windsurf/agents',
   openhuman: '.agents/agents',
   omp: '.omp/agents',
+  pi: '.pi',
   // openclaw/hermes deploy to ~/.{provider}/ — handled separately
 };
-
-// Parse doctor-specific flags through the shared strict parser
-// (src/cli/flag-parsing.ts, #3062) instead of a hand-rolled loop: value
-// flags accept `--flag value` and `--flag=value`, stop at a bare `--`
-// terminator, and a present-but-valueless flag is a usage error rather than
-// a silent default. Unknown `--flags` are rejected (exit 2, naming the
-// flag) instead of being silently ignored — previously an extra `--json`
-// was swallowed here with no effect.
-//
-// Known flags are the union of what this script parses and what `aiwg
-// doctor` (src/cli/handlers/utilities.ts) consumes upstream and passes
-// through: --deployment/--bundle/--scope/--user/--verbose/-v/--project-local/
-// --quiet/--help/-h never change this script's behavior but remain accepted
-// so existing invocations keep working.
-const DOCTOR_VALUE_FLAGS = ['--provider', '--bundle', '--scope', '--context-baseline', '--context-budget-tokens', '--cli'];
-const DOCTOR_KNOWN_FLAGS = new Set([
-  ...DOCTOR_VALUE_FLAGS,
-  '--all-providers', '--probe-workers', '--qualify', '--yes', '--dry-run', '--no-budget-check', '--strict-context', '--json',
-  '--deployment', '--user', '--verbose', '-v', '--project-local', '--quiet', '--help', '-h',
-]);
-
-// Refuse the first unknown `--flag` before the `--` terminator, skipping
-// the consumed values of known value-taking flags. The `--flag=value`
-// one-token form can never collide with a separate token, so only its flag
-// part is checked.
-function assertNoUnknownDoctorFlags(argv) {
-  const consumed = doctorValueTokenIndexes(argv, DOCTOR_VALUE_FLAGS);
-  const limit = doctorArgsTerminatorIndex(argv);
-  for (let i = 0; i < limit; i += 1) {
-    if (consumed.has(i)) continue;
-    const token = argv[i];
-    if (token === undefined || !token.startsWith('-')) continue;
-    const name = token.includes('=') ? token.slice(0, token.indexOf('=')) : token;
-    if (!DOCTOR_KNOWN_FLAGS.has(name) || (token.includes('=') && !DOCTOR_VALUE_FLAGS.includes(name))) {
-      throw new Error(`Unknown flag: ${name}. See 'aiwg doctor --help'.`);
-    }
-  }
-}
-
-function parseDoctorArgs(argv) {
-  const out = {
-    provider: null,
-    allProviders: false,
-    probeWorkers: false,
-    json: false,
-    noBudgetCheck: false,
-    strictContext: false,
-    contextBaseline: '.aiwg/context-memory-firewall-baseline.json',
-    contextBudgetTokens: 200_000,
-  };
-  // Strict value flags (#3062 review item 11): present without a usable
-  // value is a usage error, raised before any check, spawn, or write.
-  // --bundle/--scope are validated here for the same reason but otherwise
-  // handled upstream by `aiwg doctor --deployment` / `--scope user`.
-  try {
-    // Preserve the previous parser's last-occurrence-wins behavior.
-    const valueOptions = { rejectEmpty: true, precedence: 'last' };
-    out.cli = requireDoctorFlagValue(argv, valueOptions, '--cli');
-    out.provider = requireDoctorFlagValue(argv, valueOptions, '--provider') ?? null;
-    requireDoctorFlagValue(argv, valueOptions, '--bundle');
-    requireDoctorFlagValue(argv, valueOptions, '--scope');
-    const baseline = requireDoctorFlagValue(argv, valueOptions, '--context-baseline');
-    if (baseline !== undefined) out.contextBaseline = baseline;
-    const budget = requireDoctorFlagValue(argv, valueOptions, '--context-budget-tokens');
-    if (budget !== undefined) out.contextBudgetTokens = Number(budget);
-  } catch (error) {
-    if (error instanceof DoctorMissingFlagValueError) throw new Error(`${error.message}. See 'aiwg doctor --help'.`);
-    throw error;
-  }
-  out.allProviders = hasDoctorFlagSwitch(argv, '--all-providers', DOCTOR_VALUE_FLAGS);
-  out.probeWorkers = hasDoctorFlagSwitch(argv, '--probe-workers', DOCTOR_VALUE_FLAGS);
-  out.qualify = hasDoctorFlagSwitch(argv, '--qualify', DOCTOR_VALUE_FLAGS);
-  out.yes = hasDoctorFlagSwitch(argv, '--yes', DOCTOR_VALUE_FLAGS);
-  out.dryRun = hasDoctorFlagSwitch(argv, '--dry-run', DOCTOR_VALUE_FLAGS);
-  out.json = hasDoctorFlagSwitch(argv, '--json', DOCTOR_VALUE_FLAGS);
-  out.noBudgetCheck = hasDoctorFlagSwitch(argv, '--no-budget-check', DOCTOR_VALUE_FLAGS);
-  out.strictContext = hasDoctorFlagSwitch(argv, '--strict-context', DOCTOR_VALUE_FLAGS);
-  assertNoUnknownDoctorFlags(argv);
-  // --json only shapes the worker-probe report; without --probe-workers
-  // there is nothing machine-readable to emit.
-  if (out.json && !out.probeWorkers) {
-    throw new Error('Unknown flag combination: --json requires --probe-workers. See \'aiwg doctor --help\'.');
-  }
-  if ((out.qualify || out.cli || out.dryRun || out.yes) && !out.probeWorkers) {
-    throw new Error('--qualify, --cli, --yes and --dry-run require --probe-workers');
-  }
-  return out;
-}
-
-// Parse-or-exit wrapper: usage errors name the flag on stderr and exit 2
-// (EXIT_CODES.USAGE), before any check, spawn, or write.
-function parseDoctorArgsOrExit(argv) {
-  try {
-    return parseDoctorArgs(argv);
-  } catch (error) {
-    process.stderr.write(`aiwg doctor: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(2);
-  }
-}
 
 // ---- Skill listing budget check (#1150) -------------------------------
 //
@@ -584,6 +493,18 @@ async function checkSubagentDispatchHeadroom(provName, label) {
   );
 }
 
+// Core rules slice (#3450): reserved, never-demoted startup budget reported
+// separately from the aggregate startup-context check below.
+function checkCoreRulesSlice(provName, label, provider) {
+  const rulesDir = provider?.paths?.rules
+    ? (path.isAbsolute(provider.paths.rules) ? provider.paths.rules : path.join(process.cwd(), provider.paths.rules))
+    : undefined;
+  const core = measureDeployedCoreRules(process.cwd(), provName, rulesDir);
+  if (core.bodies.length === 0) return;
+  const detail = `${core.bytes} / ${core.limit} bytes used by core rules (${core.bodies.map((b) => b.name).join(', ')})`;
+  check(`${label} Core Rules`, core.bytes > core.limit ? 'warn' : 'ok', detail);
+}
+
 // Startup-context budget (#1673). The skill-listing budget above covers skill
 // names/descriptions; this measures the aggregate context Claude Code inlines at
 // session start — memory files + every `.claude/rules/*.md` (full body, no
@@ -641,6 +562,7 @@ async function checkStartupContextBudget(provName, label) {
 }
 
 async function loadProvider(name) {
+  if (!Object.hasOwn(PROVIDER_LABELS, name)) return null;
   try {
     const providerPath = path.join(AIWG_ROOT, 'tools/agents/providers', `${name}.mjs`);
     const mod = await import(pathToFileURL(providerPath).href);
@@ -661,10 +583,10 @@ function resolveProviderPath(p) {
   return path.isAbsolute(p) ? p : path.join(process.cwd(), p);
 }
 
-async function detectDeployedProviders() {
-  const detected = [];
+async function detectDeployedProviders(config) {
+  const detected = [...(config?.providers ?? [])];
   for (const [name, dir] of Object.entries(PROVIDER_AGENT_DIRS)) {
-    if (await fileExists(path.join(process.cwd(), dir))) detected.push(name);
+    if (!detected.includes(name) && await fileExists(path.join(process.cwd(), dir))) detected.push(name);
   }
   // Aggregated providers (Windsurf / Hermes) leave a project-root AGENTS.md.
   if (await fileExists(path.join(process.cwd(), 'AGENTS.md')) && !detected.includes('windsurf')) {
@@ -675,90 +597,6 @@ async function detectDeployedProviders() {
 
 function check(name, status, message) {
   checks.push({ name, status, message });
-}
-
-// Empty-state guidance for the worker-probe report (#3066). Names the real
-// configuration command and key: `aiwg config set --project` writes dotted
-// keys into .aiwg/aiwg.config (src/config/cli.ts projectConfigSet), and
-// each parallelism.clis entry binds a provider adapter reference
-// (src/config/aiwg-config.ts validation).
-const WORKER_PROBE_EMPTY_MESSAGE =
-  `No worker CLIs are configured (parallelism.clis in .aiwg/aiwg.config is empty); add a complete cli entry, e.g. \`aiwg config set --project parallelism.clis.codex '{"adapter":"providers:codex","accountScope":"local-account","quotaScope":"local-quota"}'\`, then rerun with --probe-workers.`;
-const WORKER_PROBE_DISABLED_MESSAGE =
-  'Group dispatch is disabled (parallelism.worker_dispatch is not true); no version probes were run. Enable it with `aiwg config set --project parallelism.worker_dispatch true`, then rerun with --probe-workers.';
-
-// One machine-readable record per CLI for `aiwg doctor --probe-workers
-// --json`, mapped from the install-kind readiness finding (one per
-// configured cli, untruncated — see buildDirectWorkerDoctorSection's
-// installFindings):
-// - installed: the executable ran and produced output (a matched version,
-//   an out-of-range version, or an unmatched banner from something present);
-// - version: the identified version, or null when none was identified;
-// - inRange: true/false once a version was identified, else null;
-// - ready: true only for WORKER_DIRECT_READY;
-// - reason: the stable finding code (see src/models/worker-direct-readiness.ts).
-function toWorkerProbeRecord(finding) {
-  const version = finding.installedVersion ?? null;
-  return {
-    cli: finding.cli,
-    installed: version !== null || finding.code === 'WORKER_DIRECT_BANNER_UNMATCHED',
-    version,
-    inRange: finding.code === 'WORKER_DIRECT_READY' ? true : (version !== null ? false : null),
-    ready: finding.code === 'WORKER_DIRECT_READY',
-    reason: finding.code,
-  };
-}
-
-// Machine-readable worker-probe report (#3066). Prints exactly one JSON
-// document on stdout and nothing else: no announce lines (announce is
-// omitted), no buffered checks, no footer. Dispatch eligibility comes from
-// the binding-level fallback (no resolver snapshot is resolved here) — the
-// records only speak to installation readiness, so the snapshot would add
-// resolution cost without changing them.
-async function runWorkerProbeJson(projectDir, options = {}) {
-  let workerConfig;
-  try {
-    workerConfig = await readAiwgConfig(projectDir);
-  } catch (error) {
-    process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  }
-  const parallelism = workerConfig?.parallelism;
-  if (options.cli) {
-    const ids = new Set([...Object.keys(parallelism?.clis ?? {}), ...Object.values(parallelism?.groups ?? {}).flatMap(group => group.members.map(member => member.cli))]);
-    if (!ids.has(options.cli)) throw new Error(`Unknown configured worker CLI: ${options.cli}`);
-  }
-  const workerDispatch = parallelism?.worker_dispatch === true;
-  const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
-  const { buildDirectWorkerDoctorSection } = await importImpl(import.meta.url, 'models/worker-direct-readiness.js');
-  const registry = loadProviderModelCapabilities();
-  const section = await buildDirectWorkerDoctorSection({
-    parallelism,
-    registry,
-    cli: options.cli,
-    probeWorkers: true,
-    projectRoot: projectDir,
-  });
-  const workers = section.installFindings.map(toWorkerProbeRecord);
-  const payload = {
-    probeWorkers: true,
-    workerDispatch,
-    workersConfigured: section.workersConfigured,
-    workers,
-  };
-  if (!section.workersConfigured) payload.message = WORKER_PROBE_EMPTY_MESSAGE;
-  else if (!workerDispatch) payload.message = WORKER_PROBE_DISABLED_MESSAGE;
-  if (options.qualify) {
-    const { qualifyProbedWorkers } = await import('./worker-qualification.mjs');
-    payload.qualification = await qualifyProbedWorkers({ projectDir, packageRoot: getPackageRoot(), config: workerConfig,
-      registry, section, ...options });
-    if (['failed', 'partial'].includes(payload.qualification.status)) process.exitCode = 1;
-  }
-  if (options.json !== false) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  else {
-    for (const worker of workers) console.log(`Direct Worker ${worker.cli}: ${worker.reason}`);
-    if (payload.qualification) console.log(`Worker qualification: ${JSON.stringify(payload.qualification)}`);
-  }
 }
 
 function hasSigningMaterial(signing) {
@@ -876,8 +714,6 @@ async function checkOpenHumanHarnessTier2() {
 const BRAND_HEX = '#818CF8';
 
 export async function runDoctor() {
-  // Usage errors (unknown flags, valueless value flags, --json without
-  // --probe-workers) exit 2 here, before any check, spawn, or write.
   const options = parseDoctorArgsOrExit(process.argv.slice(2));
   const {
     provider: providerArg,
@@ -890,15 +726,64 @@ export async function runDoctor() {
     contextBudgetTokens,
   } = options;
 
-  // Machine-readable worker probes: exactly one JSON document on stdout
-  // and nothing else — the full diagnostic run (and its footer) is skipped.
-  if (jsonMode || options.qualify || options.cli || options.dryRun) {
-    try { await runWorkerProbeJson(process.cwd(), { ...options, json: jsonMode }); }
+  if (options.listApprovals || options.forgetApproval) {
+    try { return await runWorkerApprovalManagement(process.cwd(), options); }
     catch (error) {
       process.stderr.write(`aiwg doctor: ${error.message}\n`);
       process.exitCode = 1;
+      return 1;
+    }
+  }
+
+  if (options.resources) return runResourceDoctor(process.cwd(), options);
+  if (options.decisionOffload) {
+    const decisionOffload = await collectDecisionOffloadReport(process.cwd());
+    const warnings = await readNativeSandboxWarnings(process.cwd()).catch(() => []);
+    if (jsonMode) console.log(JSON.stringify({ decisionOffload, nativeSandboxWarnings: warnings }, null, 2));
+    else {
+      for (const warning of warnings) console.log(`Warning: ${warning.message}`);
+      for (const line of formatDecisionOffloadReport(decisionOffload)) console.log(line);
     }
     return;
+  }
+
+  // All explicit worker-probe modes require project configuration, including
+  // plain text probes and --cli filters. Reject a missing config before any
+  // probe or qualification can mistake null for usable worker inputs.
+  let workerProbeConfig;
+  if (probeWorkers) {
+    try {
+      workerProbeConfig = await readAiwgConfig(process.cwd());
+      if (!workerProbeConfig) {
+        throw new Error(`OG_CONFIG_REFERENCE: Missing project config at ${path.join(process.cwd(), '.aiwg', 'aiwg.config')}. Run \`aiwg init\` to create it, then rerun doctor.`);
+      }
+    } catch (error) {
+      // readAiwgConfig also validates models.json, before qualification gets
+      // a chance to report its coded policy diagnostics.
+      const { WorkerRoleEffortError } = await importImpl(import.meta.url, 'models/provider-policy.js');
+      if (jsonMode && error instanceof WorkerRoleEffortError) {
+        const { workerInvocationDiagnostic } = await importImpl(import.meta.url, 'serve/worker-invocation.js');
+        process.stdout.write(`${JSON.stringify({ probeWorkers: true,
+          qualification: { status: 'failed', results: [], diagnostics: [workerInvocationDiagnostic(error)] },
+        }, null, 2)}\n`);
+        process.exitCode = 1;
+        return 1;
+      }
+      process.stderr.write(`aiwg doctor: cannot read .aiwg/aiwg.config: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+      return 1;
+    }
+  }
+
+  // Machine-readable worker probes: exactly one JSON document on stdout
+  // and nothing else — the full diagnostic run (and its footer) is skipped.
+  if (jsonMode || options.qualify || options.cli || options.dryRun) {
+    try { return await runWorkerProbe(process.cwd(), { ...options, json: jsonMode }, workerProbeConfig); }
+    catch (error) {
+      process.stderr.write(`aiwg doctor: ${error.message}\n`);
+      process.exitCode = 1;
+      return 1;
+    }
   }
 
   const isTTY = Boolean(process.stdout.isTTY);
@@ -1083,6 +968,27 @@ export async function runDoctor() {
     check('External Artifact Corpus', 'error', `health audit failed: ${error.message}`);
   }
 
+  // Shared config read for deployment inventory, worker-health (#2913), and
+  // direct-worker (#2894) offline readiness sections: read once so an invalid
+  // `gates` section (or
+  // any other non-fatal read-time warning) is not printed a second time, and
+  // so a project with no workers configured sees byte-identical output
+  // whether the read succeeds, has unrelated warnings, or fails outright —
+  // this feature must never add a finding in that case. `workerSnapshot*`
+  // are populated only when worker_dispatch is on and parallelism validates
+  // cleanly, so the direct-worker dispatch check below can reuse the exact
+  // same offline models/catalog/registry instead of resolving a second one.
+  let workerSectionsConfig = null;
+  let workerSectionsConfigFailed = false;
+  try {
+    workerSectionsConfig = probeWorkers ? workerProbeConfig : await readAiwgConfig(process.cwd());
+  } catch {
+    workerSectionsConfigFailed = true;
+  }
+  for (const warning of nativeSandboxWarnings(workerSectionsConfig, process.cwd())) {
+    check('Native sandbox isolation', 'warn', warning.message);
+  }
+
   // 4-5. Provider-aware agents + commands check (#1057).
   // Determine which providers to inspect:
   //   --provider <name>  → just that one
@@ -1094,10 +1000,16 @@ export async function runDoctor() {
   } else if (allProviders) {
     providersToCheck = Object.keys(PROVIDER_LABELS);
   } else {
-    providersToCheck = await detectDeployedProviders();
+    providersToCheck = await detectDeployedProviders(workerSectionsConfig);
     // Always include claude as a baseline so existing single-provider users
     // still get the "Claude Code Agents" line they're used to.
     if (!providersToCheck.includes('claude')) providersToCheck.unshift('claude');
+  }
+
+  if (providersToCheck.includes('claude')) {
+    const { checkClaudeAttribution } = await importImpl(import.meta.url, 'extensions/claude-attribution.js');
+    const attribution = await checkClaudeAttribution(process.cwd());
+    check('Claude attribution', attribution.status, attribution.message);
   }
 
   // Compare deployed agent findings with the package that this Doctor process
@@ -1123,23 +1035,35 @@ export async function runDoctor() {
     // #2506: track the per-class artifact counts so a provider tree that was
     // pruned to a half-deployed shape (commands/rules present, zero agents)
     // is reported instead of rendering as healthy.
-    let deployedAgentCount = null;
+    // Deployment receipts describe the selected surface, including kernel-only
+    // installs. Source/index inventory is not a count of deployed agent files.
+    const deployments = Object.entries(workerSectionsConfig?.installed ?? {})
+      .filter(([, entry]) => entry?.deployedTo?.[provName]);
+    const claimingAgents = deployments
+      .filter(([, entry]) => entry.deployedTo[provName].agents > 0);
+    const expectedZeroAgents = deployments.length > 0 && deployments.every(
+      ([, entry]) => entry.deployedTo[provName].agents === 0,
+    );
+    let deployedAgentCount = 0;
     let deployedCommandCount = null;
     const agentsPathRel = provider.paths.agents;
     const agentsPath = resolveProviderPath(agentsPathRel);
-    if (agentsPath && await fileExists(agentsPath)) {
+    if (!agentsPath) {
+      check(`${label} Agents`, 'ok', '0 agents deployed on disk — no native agent surface; agents are indexed; use `aiwg discover` / `aiwg show`');
+    } else if (await fileExists(agentsPath)) {
       try {
         const stat = await fs.stat(agentsPath);
         if (stat.isDirectory()) {
-          const files = await fs.readdir(agentsPath);
+          const entries = await fs.readdir(agentsPath, { withFileTypes: true });
+          const files = entries.filter(entry => entry.isFile()).map(entry => entry.name);
           const agentCount = files.filter(
-            f => f.endsWith('.md') || f.endsWith('.agent.md') || f.endsWith('.toml'),
+            f => (f.endsWith('.md') && !f.endsWith('.soul.md')) || f.endsWith('.toml'),
           ).length;
           deployedAgentCount = agentCount;
           check(
             `${label} Agents`,
-            agentCount > 0 ? 'ok' : 'info',
-            `${agentCount} agents deployed (${agentsPathRel})`,
+            agentCount > 0 || expectedZeroAgents ? 'ok' : 'info',
+            `${agentCount} agents deployed (${agentsPathRel})${agentCount === 0 && expectedZeroAgents ? ' — expected: installed deployments provide no agents' : ''}`,
           );
 
           // Agent-def size ceiling (#1587). A deployed agent definition is loaded
@@ -1207,16 +1131,16 @@ export async function runDoctor() {
             check(`${label} Agent def sizes`, 'ok', `All ${agentFiles.length} agent defs ≤ 16 KB`);
           }
         } else {
-          // Aggregated single-file (e.g. Hermes/Windsurf AGENTS.md)
-          check(`${label} Agents`, 'ok', `Aggregated at ${agentsPathRel}`);
+          // Context bridges are not standalone agent definitions.
+          deployedAgentCount = null;
+          check(`${label} Agents`, 'ok', `Aggregated context at ${agentsPathRel} (no standalone agent file count)`);
         }
       } catch {
+        deployedAgentCount = null; // Unreadable is unknown, not evidence of missing files.
         check(`${label} Agents`, 'info', `No agents deployed at ${agentsPathRel}`);
       }
-    } else if (provName === 'muse' && (providerArg || allProviders)) {
-      // Muse Code has no file-based agent surface by design: agents, commands,
-      // and rules stay indexed and are reached via `aiwg discover` / `aiwg show`.
-      check(`${label} Agents`, 'info', 'No native agent surface — agents are indexed; use `aiwg discover` / `aiwg show`');
+    } else if (expectedZeroAgents) {
+      check(`${label} Agents`, 'ok', `0 agents deployed (${agentsPathRel}) — expected: installed deployments provide no agents`);
     } else if (providerArg || allProviders) {
       // User explicitly asked about this provider — be explicit when missing.
       check(`${label} Agents`, 'info', `No agents deployed (run: aiwg use sdlc --provider ${provName})`);
@@ -1231,8 +1155,8 @@ export async function runDoctor() {
       const commandsPath = resolveProviderPath(commandsPathRel);
       if (commandsPath && await fileExists(commandsPath)) {
         try {
-          const files = await fs.readdir(commandsPath);
-          const cmdCount = files.filter(f => f.endsWith('.md') || f.endsWith('.prompt.md')).length;
+          const files = await fs.readdir(commandsPath, { withFileTypes: true });
+          const cmdCount = files.filter(f => f.isFile() && f.name.endsWith('.md')).length;
           deployedCommandCount = cmdCount;
           check(`${label} Commands`, 'ok', `${cmdCount} commands deployed (${commandsPathRel})`);
         } catch {
@@ -1251,10 +1175,9 @@ export async function runDoctor() {
     }
 
     // Deployment consistency (#2506). A provider tree holding commands or
-    // rules but no agents is half-deployed: commands and rules reference
-    // agents that are no longer on disk. This is the shape a cross-provider
-    // prune used to leave behind, and a bare "0 agents deployed" check mark
-    // is the line most likely to stop someone investigating.
+    // rules but missing agents may be half-deployed after a cross-provider
+    // prune. Kernel-only receipts explicitly record zero agents and must not
+    // trigger framework advice.
     {
       const rulesPathRel = provider.paths.rules;
       const rulesPath = rulesPathRel ? resolveProviderPath(rulesPathRel) : null;
@@ -1263,8 +1186,8 @@ export async function runDoctor() {
         try {
           const stat = await fs.stat(rulesPath);
           if (stat.isDirectory()) {
-            const files = await fs.readdir(rulesPath);
-            deployedRuleCount = files.filter(f => f.endsWith('.md') || f.endsWith('.mdc')).length;
+            const files = await fs.readdir(rulesPath, { withFileTypes: true });
+            deployedRuleCount = files.filter(f => f.isFile() && (f.name.endsWith('.md') || f.name.endsWith('.mdc'))).length;
           }
         } catch {
           /* unreadable rules dir — treat as unknown */
@@ -1273,7 +1196,8 @@ export async function runDoctor() {
       const companions = [];
       if (deployedCommandCount > 0) companions.push(`${deployedCommandCount} command(s)`);
       if (deployedRuleCount > 0) companions.push(`${deployedRuleCount} rule(s)`);
-      if (deployedAgentCount === 0 && companions.length > 0) {
+      if (agentsPath && deployedAgentCount === 0 && companions.length > 0
+        && !expectedZeroAgents) {
         check(
           `${label} Deployment consistency`,
           'warn',
@@ -1287,11 +1211,9 @@ export async function runDoctor() {
       // #2506: recorded deployment state that claims agents against an empty
       // directory is unambiguous drift. Only the zero-on-disk case is flagged;
       // per-bundle counts legitimately differ from a raw directory listing.
-      if (deployedAgentCount === 0) {
+      if (agentsPath && deployedAgentCount === 0) {
         try {
-          const cfg = await readAiwgConfig(process.cwd());
-          const claiming = Object.entries(cfg?.installed ?? {})
-            .filter(([, entry]) => (entry?.deployedTo?.[provName]?.agents ?? 0) > 0)
+          const claiming = claimingAgents
             .map(([name, entry]) => `${name} (${entry.deployedTo[provName].agents})`);
           if (claiming.length > 0) {
             check(
@@ -1321,6 +1243,7 @@ export async function runDoctor() {
       await checkSkillBudgetForProvider(provName, label, budgetPath);
       await checkTotalDeployedSkillBudgetForProvider(provName, label, provider);
       await checkStartupContextBudget(provName, label);
+      checkCoreRulesSlice(provName, label, provider);
       await checkSubagentDispatchHeadroom(provName, label);
     }
 
@@ -1329,49 +1252,10 @@ export async function runDoctor() {
     }
   }
 
-  // Provider context and persistent-memory firewall (#2040). This complements
-  // per-provider listing/startup estimates with one cross-category inventory,
-  // deployment-manifest drift checks, reviewed digests, and poisoning labels.
-  // The default doctor is advisory; --strict-context promotes any violation or
-  // missing review baseline to an error and therefore a non-zero doctor exit.
-  if (!noBudgetCheck) {
-    try {
-      const supported = providersToCheck.filter((name) =>
-        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'grok-build', 'muse'].includes(name),
-      );
-      const firewall = await scanContextMemoryFirewall({
-        rootDir: process.cwd(),
-        packageRoot: AIWG_ROOT,
-        providers: supported,
-        baselinePath: contextBaseline,
-        budgetTokens: contextBudgetTokens,
-      });
-      const stale = firewall.trust.stale;
-      const quarantined = firewall.trust.quarantined;
-      const external = firewall.trust.external;
-      const changed = firewall.records.filter((record) => record.reviewStatus === 'changed-review-required').length;
-      const categorySummary = Object.entries(firewall.categories)
-        .map(([category, value]) => `${category}=${value.bytes.toLocaleString()}B`)
-        .join(', ');
-      const summary =
-        `${firewall.totals.files} file(s), ~${firewall.totals.approxTokens.toLocaleString()} / `
-        + `${firewall.budget.tokens.toLocaleString()} tokens; ${categorySummary}; `
-        + `stale=${stale}, quarantined=${quarantined}, external=${external}, changed=${changed}`;
-      const baselineMissing = !firewall.baseline.exists;
-      const unsafe = firewall.violations.length > 0 || baselineMissing;
-      if (unsafe) {
-        const status = strictContext ? 'error' : 'warn';
-        const baselineMessage = baselineMissing
-          ? ` Review baseline missing at ${firewall.baseline.path}; run \`aiwg context-firewall baseline --plan\`, review every record, then use the confirmed write command it prints.`
-          : '';
-        check('Context/memory firewall', status, `${summary}.${baselineMessage}`);
-      } else {
-        check('Context/memory firewall', 'ok', `${summary}; reviewed baseline ${firewall.baseline.path}`);
-      }
-    } catch (error) {
-      check('Context/memory firewall', strictContext ? 'error' : 'warn', `scan failed: ${error.message}`);
-    }
-  }
+  if (!noBudgetCheck) await checkContextMemoryFirewall({
+    rootDir: process.cwd(), packageRoot: AIWG_ROOT, providers: providersToCheck,
+    baselinePath: contextBaseline, budgetTokens: contextBudgetTokens, strictContext,
+  }, check);
 
   // 5b. CLAUDE.md @AIWG.md hook check (#1437).
   // When claude is in the providers-to-check list AND the workspace has an
@@ -1654,10 +1538,13 @@ export async function runDoctor() {
   // installed system. Surfaces missing surfaces loudly so an operator/agent
   // knows the install is degraded before they try to use it.
   const { spawnSync } = await import('node:child_process');
-  const aiwgBin = process.env.AIWG_BIN || 'aiwg';
+  // Self-probes run the current entrypoint (process.execPath + the invoked
+  // bin/aiwg.mjs) so discovery checks pass for installs that are not on
+  // PATH (#3635). Only a bare-name probe that cannot resolve reports PATH.
+  const aiwgProbe = resolveAiwgProbeCommand({ packageRoot: getPackageRoot() });
   const probeCommand = (name, args, expectStdout = null, validateStdout = null) => {
     try {
-      const r = spawnSync(aiwgBin, args, {
+      const r = spawnSync(aiwgProbe.file, [...aiwgProbe.prefix, ...args], {
         encoding: 'utf-8',
         // Framework discovery can legitimately take longer than ten seconds
         // while the release suite is concurrently packing and rebuilding
@@ -1668,10 +1555,15 @@ export async function runDoctor() {
         killSignal: 'SIGKILL',
       });
       if (r.error || r.status !== 0) {
-        const detail = r.error
-          ? `spawn failed: ${r.error.code || r.error.message}`
-          : `exit=${r.status ?? '?'} ${(r.stderr || '').trim().split('\n')[0] || 'no stderr'}`;
-        return { ok: false, detail };
+        const notOnPath = Boolean(r.error)
+          && r.error.code === 'ENOENT'
+          && aiwgProbe.via === 'path';
+        const detail = notOnPath
+          ? probeNotOnPathDetail()
+          : r.error
+            ? `spawn failed: ${r.error.code || r.error.message}`
+            : `exit=${r.status ?? '?'} ${(r.stderr || '').trim().split('\n')[0] || 'no stderr'}`;
+        return { ok: false, detail, notOnPath };
       }
       if (expectStdout && !(r.stdout || '').includes(expectStdout)) {
         return { ok: false, detail: `stdout missing expected marker '${expectStdout}'` };
@@ -1708,7 +1600,7 @@ export async function runDoctor() {
     },
     {
       label: 'Discovery: aiwg show',
-      args: ['show', 'skill', 'aiwg-doctor'],
+      args: ['show', 'skill', 'aiwg-doctor', '--body'],
       hint: 'aiwg show cannot fetch a known kernel skill body',
     },
     {
@@ -1730,10 +1622,12 @@ export async function runDoctor() {
 
   let discoverOk = false;
   let discoveryDegraded = false;
+  let discoveryNotOnPath = false;
   for (const probe of discoveryProbes) {
     const r = probeCommand(probe.label, probe.args, null, probe.validateStdout);
     if (probe.args[0] === 'discover') discoverOk = r.ok;
     if (r.ok) {
+      discoveryNotOnPath = false;
       check(probe.label, 'ok', `\`aiwg ${probe.args.join(' ')}\` succeeded`);
     } else if (probe.globalTolerant && discoverOk && /No artifact index found/i.test(r.detail || '')) {
       // No project-local index in a global/home-dir context (OpenClaw etc.).
@@ -1744,6 +1638,7 @@ export async function runDoctor() {
     } else {
       // Warn (not error) — discovery is degraded but doctor itself still works.
       discoveryDegraded = true;
+      if (r.notOnPath) discoveryNotOnPath = true;
       check(probe.label, 'warn', `${probe.hint} — ${r.detail}`);
     }
   }
@@ -1752,12 +1647,20 @@ export async function runDoctor() {
   // consumer project, and the two-command repair runs in two different working
   // directories — which is what made it hard to act on (#2530).
   if (discoveryDegraded) {
-    const installRoot = AIWG_ROOT;
-    check('Discovery: repair', 'info',
-      `Rebuild the framework graph at the install root, then sync here: `
-      + `\`cd ${installRoot} && aiwg index build --graph framework --force\` then `
-      + `\`cd ${process.cwd()} && aiwg index sync --backend fortemi-core --graph framework\`. `
-      + `Immediate workaround: \`aiwg discover --backend local\`.`);
+    if (discoveryNotOnPath) {
+      // Every probe failed only because the bare `aiwg` name does not
+      // resolve — rebuilding the index cannot help. Point at PATH instead.
+      check('Discovery: repair', 'info',
+        'Probes cannot resolve the `aiwg` name on PATH; the install itself was not exercised. '
+        + 'Add the npm global bin to PATH (`npm config get prefix`/bin) or invoke the install entrypoint directly.');
+    } else {
+      const installRoot = AIWG_ROOT;
+      check('Discovery: repair', 'info',
+        `Rebuild the framework graph at the install root, then sync here: `
+        + `\`cd ${installRoot} && aiwg index build --graph framework --force\` then `
+        + `\`cd ${process.cwd()} && aiwg index sync --backend fortemi-core --graph framework\`. `
+        + `Immediate workaround: \`aiwg discover --backend local\`.`);
+    }
   }
 
   // 8d. Component-to-driver coverage (#1958).
@@ -2184,86 +2087,10 @@ export async function runDoctor() {
     // Non-fatal — skip silently
   }
 
-  // Shared config read for worker-health (#2913) and direct-worker (#2894)
-  // offline readiness sections: read once so an invalid `gates` section (or
-  // any other non-fatal read-time warning) is not printed a second time, and
-  // so a project with no workers configured sees byte-identical output
-  // whether the read succeeds, has unrelated warnings, or fails outright —
-  // this feature must never add a finding in that case. `workerSnapshot*`
-  // are populated only when worker_dispatch is on and parallelism validates
-  // cleanly, so the direct-worker dispatch check below can reuse the exact
-  // same offline models/catalog/registry instead of resolving a second one.
-  let workerSectionsConfig = null;
-  let workerSectionsConfigFailed = false;
-  let workerSnapshotModels = null;
-  let workerSnapshotCatalog = null;
-  let workerSnapshotDigests = null;
-  let workerSnapshotRegistry = null;
-  try {
-    workerSectionsConfig = await readAiwgConfig(process.cwd());
-  } catch {
-    workerSectionsConfigFailed = true;
-  }
-
-  // #2913 / T-OG-12: offline health readiness, without installing adapters,
-  // reading credentials, probing models, or requiring Mission/admission state.
-  try {
-    if (workerSectionsConfigFailed) throw new Error('worker-sections config unavailable');
-    const config = workerSectionsConfig;
-    if (!config?.parallelism?.worker_dispatch) {
-      check('Worker Health', 'info', 'group dispatch is disabled; legacy worker status remains unchanged');
-    } else {
-      const healthErrors = validateParallelismConfig(config.parallelism);
-      if (healthErrors.length) {
-        for (const message of healthErrors.slice(0, 16)) check('Worker Health Configuration', 'error',
-          `${message}; review parallelism.health and group references before launch`);
-      } else {
-        const { ConfigLoader } = await importImpl(import.meta.url, 'models/config-loader.js');
-        const { loadProviderModelCapabilities } = await importImpl(import.meta.url, 'models/provider-policy.js');
-        const { resolveDynamicModelCatalog } = await importImpl(import.meta.url, 'models/model-discovery.js');
-        const { diagnoseWorkerHealthReadiness } = await importImpl(import.meta.url, 'models/worker-health-readiness.js');
-        const loader = new ConfigLoader(process.cwd());
-        const models = await loader.load(config.parallelism);
-        const catalog = await resolveDynamicModelCatalog({ aiwgRoot: AIWG_ROOT,
-          inventory: { generatedAt: new Date().toISOString(), projectDir: process.cwd(),
-            providers: [], activeProvider: null, activeSource: 'doctor-offline' }, allowNetwork: false });
-        const registry = loadProviderModelCapabilities();
-        // Shared with the direct-worker dispatch-eligibility check below
-        // (#2894): same offline snapshot, no second catalog resolution.
-        workerSnapshotModels = models;
-        workerSnapshotCatalog = catalog;
-        workerSnapshotDigests = loader.getInputDigests();
-        workerSnapshotRegistry = registry;
-        // Catalog observations do not attest a current installation. This offline
-        // projection deliberately withholds bindings; models resolve rechecks them.
-        const report = diagnoseWorkerHealthReadiness({ config, models,
-          modelDigests: workerSnapshotDigests, catalog,
-          registry, installations: {} }, {
-          now: new Date().toISOString(),
-          context: { estimator: 'doctor-offline-context-v1', briefTokens: 0,
-            inputTokens: 0, toolOutputAllowance: 0, reservedOutput: 0 },
-        });
-        if (report.contextDigest) check('Worker Health Context', 'info',
-          `offline context digest=${report.contextDigest}; actual task context must be resolved before launch`);
-        for (const finding of report.findings.slice(0, 32)) {
-          check(`Worker Health${finding.role ? ` (${finding.role})` : finding.roles?.length ? ` (${finding.roles.join(', ')})` : ''}`, finding.status,
-            `${finding.code}: ${finding.message} [next: ${finding.nextAction}]`);
-        }
-        if (report.findings.length > 32) check('Worker Health', 'warn',
-          `${report.findings.length - 32} additional findings; narrow role/group scope with aiwg models resolve`);
-        check('Worker Health Qualification', 'info',
-          'offline doctor cannot authorize onboarding or launch; qualify the installation/profile, then use aiwg models resolve for the actual task');
-      }
-    }
-  } catch {
-    if (!workerSectionsConfigFailed) {
-      check('Worker Health', 'warn',
-        'offline worker health inputs are invalid or unavailable; review models.json and parallelism.health, then qualify the installation/profile');
-    }
-    // else: the shared config read itself failed. There is nothing
-    // worker-health-specific to diagnose beyond the project's other config
-    // checks, which already surface the read failure.
-  }
+  const { checkWorkerHealthReadiness } = await import('./doctor-worker-health.mjs');
+  const { workerSnapshotModels, workerSnapshotCatalog, workerSnapshotDigests, workerSnapshotRegistry } =
+    await checkWorkerHealthReadiness({ config: workerSectionsConfig, configFailed: workerSectionsConfigFailed,
+      AIWG_ROOT, cwd: process.cwd(), check });
 
   // #2894: direct-worker onboarding/readiness. Config-only by default: no
   // subprocess is started unless --probe-workers opts into the bounded
@@ -2318,6 +2145,21 @@ export async function runDoctor() {
         } : {}),
       });
       for (const line of directSection.lines) check(line.name, line.status, line.message);
+      if (probeWorkers && directParallelism?.worker_dispatch) {
+        const { checkRecordedWorkerInvocationBuilds, checkWorkerSandboxLaunches } = await import('./worker-qualification.mjs');
+        const sandboxChecks = await checkWorkerSandboxLaunches({ projectDir: process.cwd(), config: directConfig, registry });
+        for (const result of sandboxChecks) {
+          check(`Launcher Worker Sandbox (${result.cli}/${result.group})`, result.status === 'blocked' ? 'warn' : result.status === 'passed' ? 'ok' : 'info',
+            result.status === 'blocked'
+              ? `systemd-unit launcher only (ralph-external --launch-worker, managed launches); Tier 0 direct shell dispatch is unaffected. ${JSON.stringify(result)}`
+              : JSON.stringify(result));
+        }
+        const invocationChecks = await checkRecordedWorkerInvocationBuilds({ projectDir: process.cwd(), config: directConfig,
+          registry, workers: directSection.installFindings.map(toWorkerProbeRecord) });
+        for (const result of invocationChecks) {
+          check(`Direct Worker Invocation (${result.cli})`, result.status === 'passed' ? 'ok' : 'error', JSON.stringify(result));
+        }
+      }
     }
   } catch {
     if (!workerSectionsConfigFailed) {
@@ -2748,6 +2590,16 @@ export async function runDoctor() {
     // Non-fatal — older installs may not expose the helper yet.
   }
 
+  try {
+    const { rulePinState } = await importImpl(import.meta.url, 'rules/pin-state.js');
+    const pins = rulePinState(process.cwd(), await getPackageRoot());
+    for (const rule of pins.rules) check('Rule pin', 'info', `${rule.name}: pinned kernel (canonical ${rule.canonical_activation}; ${rule.matches.map(match => match.source).join(', ')})`);
+    for (const warning of pins.warnings) check('Rule pins', 'warn', warning);
+  } catch (error) { check('Rule pins', 'warn', error.message); }
+
+  const decisionOffload = await collectDecisionOffloadReport(process.cwd());
+  for (const line of formatDecisionOffloadReport(decisionOffload)) check('Decision offload', 'info', line);
+
   // Print results
   console.log('');
 
@@ -2790,7 +2642,9 @@ export async function runDoctor() {
 }
 
 if (isMain(import.meta.url)) {
-  runDoctor().catch(error => {
+  runDoctor().then(exitCode => {
+    if (exitCode) process.exitCode = exitCode;
+  }).catch(error => {
     console.error('Doctor failed:', error.message);
     process.exit(1);
   });

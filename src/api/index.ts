@@ -8,6 +8,12 @@
 export { run } from '../cli/router.js';
 export * from '../resources/index.js';
 export * from '../sessions/index.js';
+export {
+  AIWG_FULL_V1_SHARD_READER_VERSIONS,
+  validateAiwgFortemiKnowledgeShard,
+  importAiwgFortemiKnowledgeShard,
+  exportAiwgFortemiKnowledgeShardWithReport,
+} from '../artifacts/fortemi-shard-export.js';
 export * from '../memory/index.js';
 export * from '../storage/index.js';
 export * from '../security/threat-assessment-config.js';

@@ -1,5 +1,7 @@
 # Premortem v2
 
+Evidence status: design intent; narratives are labeled hypothetical.
+
 Premortem v2 is a project-local, research-backed replacement for late-stage reviewer fan-out. It expands diverse failure modes first, selects only three to seven high-value risks with recorded rationale, and then applies a blind verifier that scores plausibility and impact separately.
 
 ```bash

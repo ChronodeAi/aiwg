@@ -1,5 +1,7 @@
 # Security Addon
 
+Evidence status: design intent.
+
 **Version**: 1.0.0
 **Status**: Active
 **Last Updated**: 2026-01-13

@@ -1,5 +1,17 @@
 ---
 enforcement: high
+activation: "bound"
+enforcedBy:
+  - aiwg:decision-engine/absolute-screening#blocking-false-ready-events
+summary: "Execute tests before returning generated code; record results and root causes, apply targeted fixes, retry at most three times, and escalate with execution history."
+bound_to:
+  agents: ["ai-ml-engineer", "blockchain-developer", "build-engineer", "code-reviewer", "component-owner", "data-engineer", "database-optimizer", "debugger", "devops-engineer", "django-expert", "frontend-specialist", "integration-engineer", "kubernetes-expert", "legacy-modernizer", "mobile-developer", "performance-engineer", "react-expert", "reliability-engineer", "self-debug", "software-implementer", "spring-boot-expert", "test-architect", "test-engineer", "toolsmith", "toolsmith-dynamic", "toolsmith-provider"]
+  skills: ["address-issues", "agent-loop", "agent-loop-ext", "aiwg-mission", "auto-test-execution", "build-poc", "code-chunker", "decompose-file", "execute-feedback", "flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution", "generate-tests", "mission-control", "ralph", "ralph-external"]
+  flows: ["flow-delivery-track", "flow-guided-implementation", "flow-iteration-dual-track", "flow-test-strategy-execution"]
+triggers:
+  - "run tests before returning generated code"
+  - "retry failing tests with root cause analysis"
+  - "persist executable feedback debug memory"
 ---
 
 # Executable Feedback Loop Rules
@@ -14,6 +26,11 @@ enforcement: high
 Code-generating agents MUST execute tests before returning results (MetaGPT's executable-feedback pattern), and track execution history so failures inform fixes rather than blind retries.
 
 ## Mandatory Rules
+
+Gate coverage is scoped to D29 held-out evidence screening: the
+`aiwg:decision-engine/absolute-screening#blocking-false-ready-events` gate
+rolls back on any false-ready event in the `failed-test` blocking slice. It
+checks screening outcomes; test execution and retry discipline remain guidance.
 
 ### Rule 1: Execute Before Return
 Never return generated code without running its tests. Flow: generate → execute tests → pass? return : debug & retry. Returning untested code is FORBIDDEN.
