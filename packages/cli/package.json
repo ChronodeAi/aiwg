@@ -46,6 +46,7 @@
     "dist/src/resources/web-release.d.ts",
     "dist/src/dataset/**/*.d.ts",
     "tools/_resolve-impl.mjs",
+    "tools/providers/pi-bridge-policy.mjs",
     "tools/daemon/",
     "tools/docker/container-manager.mjs",
     "tools/docker/Dockerfile.daemon",

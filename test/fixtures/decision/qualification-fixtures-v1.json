@@ -2386,11 +2386,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-approval/v1",
-      "digest": "sha256:f5e6a262bed7df57ede3693b5cde7b8211c973aa219fdf4400c22af205e49c2c",
+      "digest": "sha256:b6dfb8a4ed32200e2b88d4e42daebe41334b83e98857a38231323d3b683ece7a",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2418,11 +2420,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:3298efabecf478ad86dafa47cff9ef730f1e28e4cbe63a87e7a63430fe6afba4",
+      "digest": "sha256:fecd63e71e06d845f67ff074303e235025ea20ebab306fb8f6d39063507a394f",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2450,11 +2454,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-preregistration/v1",
-      "digest": "sha256:e3ed88487bc943b8d0388e19067d57bffea3122cbf597bfac172b3d1e6cf4ad4",
+      "digest": "sha256:cd60132f5fd25b315ff04b90ee05d534f59fa431bedde6a1e302b11ea289bd81",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2498,11 +2504,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-approval/v1",
-      "digest": "sha256:ec0da265b48c72df5dce7dd9d8e2af0c582b5234668302412a4c2e32d86ad193",
+      "digest": "sha256:bf487fe2bd07b37ee1837932d435022d4241e3e7728c5a12e829d417498d3946",
       "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2514,11 +2522,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:6666434d92cf87a98c4cbd019fe07f0c2a1ac35e9b38d3c856a169798616686a",
+      "digest": "sha256:d37bd8fa58097e5e2f49acfad789d57170e6ea8478d24459b0143364a39da0e3",
       "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2530,11 +2540,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-preregistration/v1",
-      "digest": "sha256:708cd36a11302531c82f360ea3362cca812d2016966ca9f3aad013d156c3bbbc",
+      "digest": "sha256:c330566486d02edff1fd01327ca68d888476b08ec4de606ebd6813ea94b33df7",
       "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2578,11 +2590,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-approval/v1",
-      "digest": "sha256:c60549011365680e6bc9ecdd753d224c4a040405b0d9e65633df0509623ca89a",
+      "digest": "sha256:18b023235e525433ac8b77845c0ab9ac9dd2733386a2a4f7141a583176db3e82",
       "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2594,11 +2608,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:378769b953f7cea6e2b3cb799debb75e379875b20cc123732a63c7b61229129c",
+      "digest": "sha256:e7cb9207ac18b94068c1885262fbf99f18267cfdff5e5808d49ee65311d5bbb6",
       "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2610,11 +2626,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-preregistration/v1",
-      "digest": "sha256:a3dab498bbf73596d8b82a03bf13bdd735b905317910df63e2707935d9caeb1c",
+      "digest": "sha256:f6b588113ce0e4607af4237cc85448b17831fd2e86f35711bfd7aaf53b4c3a67",
       "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
-        "#2622"
+        "#2622",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     },
     {
@@ -2663,6 +2681,108 @@
       "links": [
         "FR-014",
         "JEV-16"
+      ]
+    },
+    {
+      "id": "DEC-SIGNEDACCESS-01",
+      "path": "test/fixtures/decision/d29-signed-access/README.md",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:699e5c0b89b27cb78fbe600042618ea09d45f69f60826f7ffa9d902b80a2803b",
+      "expectedOutcome": "Documents additive schema fixtures, throwaway runtime signing and the frozen scorer-pin disposition; no committed private keys.",
+      "links": [
+        "JEV-16",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
+      ]
+    },
+    {
+      "id": "DEC-SIGNEDACCESS-02",
+      "path": "test/fixtures/decision/d29-signed-access/valid.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-access/v2",
+      "digest": "sha256:2fde04a86850ca860c36041284323ab514722173a251054559c43f868bc1b901",
+      "expectedOutcome": "Accept the access/v2 schema shape only; the deliberately non-verifying signature must be replaced with a fresh test signature for verification.",
+      "links": [
+        "JEV-16",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
+      ]
+    },
+    {
+      "id": "DEC-SIGNEDACCESS-03",
+      "path": "test/fixtures/decision/d29-signed-access/unsigned.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-access/v2",
+      "digest": "sha256:5bff77d7fcdf5a877204f87e328a54117869b45fad565208114a6b806df71106",
+      "expectedOutcome": "Refuse access/v2 without a signature.",
+      "links": [
+        "JEV-16",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
+      ]
+    },
+    {
+      "id": "DEC-SIGNEDACCESS-04",
+      "path": "test/fixtures/decision/d29-signed-access/missing-bundle.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-access/v2",
+      "digest": "sha256:f56df72448785876f24896154f85e214f8dd6b3122b81973b4800491a260cce4",
+      "expectedOutcome": "Refuse access/v2 without the frozen-bundle digest.",
+      "links": [
+        "JEV-16",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
+      ]
+    },
+    {
+      "id": "DEC-SIGNEDACCESS-05",
+      "path": "test/fixtures/decision/d29-signed-access/bad-time.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-access/v2",
+      "digest": "sha256:68e45a1772767d36f508a52b802360a82a861c94cd3e05d4a4e8762a5db56277",
+      "expectedOutcome": "Refuse an invalid first-test-access timestamp.",
+      "links": [
+        "JEV-16",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
+      ]
+    },
+    {
+      "id": "DEC-SIGNEDACCESS-06",
+      "path": "test/fixtures/decision/d29-signed-access/unknown-field.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-access/v2",
+      "digest": "sha256:233511e31ed0d92db89524a0bc9fe8123e507c30b56d28837decc94643b73091",
+      "expectedOutcome": "Refuse an unknown access/v2 field.",
+      "links": [
+        "JEV-16",
+        "#3747",
+        "docs/decision/d29-signed-access-disposition.md"
       ]
     }
   ]

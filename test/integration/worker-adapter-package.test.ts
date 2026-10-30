@@ -40,6 +40,8 @@ describe('T-OG-14 published package installed adapter paths', () => {
     const result = inspectCliPackageClosure(process.cwd(), [...files]);
     expect(result.visited).toContain('dist/src/mcp/tools/worker-invoke.mjs');
     expect(result.visited).toContain('dist/src/api/index.js');
+    expect(files.has('tools/providers/pi-bridge-policy.mjs')).toBe(true);
+    expect(result.visited).toContain('dist/src/policy/hitl-config.js');
     expect(result.violations).toEqual([]);
     // Preserve the worker environment's constructed data dependency as well.
     expect(files.has('agentic/code/providers/model-capabilities.v1.json')).toBe(true);
@@ -170,6 +172,7 @@ describe('T-OG-14 published package installed adapter paths', () => {
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { SessionLauncher } from './tools/ralph-external/session-launcher.mjs';
+import { loadHitlLayers } from './tools/providers/pi-bridge-policy.mjs';
 import { registerWorkerInvokeToolset } from './dist/src/mcp/tools/worker-invoke.mjs';
 if (typeof SessionLauncher !== 'function' || typeof registerWorkerInvokeToolset !== 'function') throw new Error('Installed worker runtime unavailable');
 import { loadProviderModelCapabilities, resolveWorkerInstallation, requiredWorkerControls } from './dist/src/models/provider-policy.js';
@@ -230,6 +233,7 @@ async function prepareQualified(value, metadata) {
 const prepared = await prepareQualified(invocation, profileAdapter);
 const preparedMcp = await prepareQualified(mcpInvocation, mcpAdapter);
 console.log(JSON.stringify({ name: adapter.getName(), catalog: adapter.catalog(),
+  hitlLayers: (await loadHitlLayers(cwd)).layers.length,
   executable: resolveWorkerInstallation(registry, { adapter: 'workerAdapters:fixture' }).executable,
   builtinNames: listProviders().filter(name => name !== metadata.id).sort(),
   prepared: prepared.selected.model, rendered: prepared.shellCommand.includes('env -i'),
@@ -241,6 +245,7 @@ console.log(JSON.stringify({ name: adapter.getName(), catalog: adapter.catalog()
       env: { PATH: process.env.PATH, AIWG_RESOLVE_IMPL_FROM: 'dist', AIWG_FAKE_WORKER_CONFIG: fixtureConfig },
     });
     expect(JSON.parse(result.stdout)).toEqual({ name: 'third-fixture', catalog: [{ id: 'synthetic-model', provider: 'synthetic-inference' }], executable: 'fixture-worker',
+      hitlLayers: 0,
       builtinNames: ['claude', 'codex', 'deepseek-harness', 'dsh', 'factory', 'muse', 'omp', 'opencode', 'pi'],
       prepared: invocation.selected.model, rendered: true, mcpPrepared: invocation.selected.model });
   }, 120_000);

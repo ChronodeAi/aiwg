@@ -738,6 +738,8 @@ aiwg daemon start --docker
 aiwg daemon start --foreground    # under systemd/docker entrypoint
 ```
 
+The bundled image is built `FROM node:24-slim` (`tools/docker/Dockerfile.daemon`); use Node 24 for custom images, the same runtime the CLI requires.
+
 No systemd or launchd is required — pure Node.js process management. PID file at `.aiwg/daemon.pid`, lock file at `.aiwg/daemon/.lock`, socket at `.aiwg/daemon/daemon.sock`. All paths are project-relative.
 
 For long-lived deployments, use your system's service manager pointing at the daemon entry point (`tools/daemon/daemon-main.mjs`):
