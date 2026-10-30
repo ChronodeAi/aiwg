@@ -95,3 +95,14 @@ test('drift distinguishes the public Git commit from its internal SOURCE_REV', (
   assert.throws(() => verifyUpstreamDrift(contract, 'a'.repeat(40), contract.upstreamSourceRevision), /public commit changed/);
   assert.throws(() => verifyUpstreamDrift(contract, contract.publicSourceCommit, 'b'.repeat(40)), /SOURCE_REV changed/);
 });
+
+test('the gate resolves the Grok Build provider status from the real repository layout', async () => {
+  // The provider definitions are split across a facade and seed modules; the CI gate must still find them.
+  const { execFileSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('../../../tools/providers/grok-build-qualification.mjs', import.meta.url));
+  const out = execFileSync(process.execPath, [script, 'gate'], { encoding: 'utf8' });
+  const result = JSON.parse(out);
+  assert.equal(typeof result.ready, 'boolean');
+  assert.ok(Array.isArray(result.errors));
+});

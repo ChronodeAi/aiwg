@@ -85,7 +85,10 @@ export function verifyPromotion(contract, receipts, providerStatus, repositoryRo
 }
 
 function providerStatus(contract) {
-  const definition = readFileSync(join(root, 'src/providers/provider-definitions.ts'), 'utf8');
+  // provider-definitions.ts is a facade; the provider seeds live in provider-seeds-*.ts beside it.
+  const dir = join(root, 'src/providers');
+  const definition = ['provider-definitions.ts', ...readdirSync(dir).filter(name => /^provider-seeds-.*\.ts$/.test(name)).sort()]
+    .map(name => readFileSync(join(dir, name), 'utf8')).join('\n');
   const match = definition.match(/id: 'grok-build',[\s\S]*?status: '(experimental|stable)',[\s\S]*?version: '([^']+)',[\s\S]*?revision: '([^']+)'/);
   if (!match) fail('Cannot resolve Grok Build provider status');
   if (match[2] !== contract.releasedVersion || match[3] !== contract.publicSourceCommit) fail('Provider inventory and qualification contract release pins differ');
