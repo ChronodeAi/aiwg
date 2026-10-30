@@ -262,7 +262,6 @@
       "issue": 2578,
       "status": "implemented",
       "operations": [
-        "discover",
         "inspect",
         "stream"
       ],
@@ -280,7 +279,7 @@
           "SCHEMA_DRIFT"
         ],
         "exceptions": {
-          "discovery": "native chat_history.jsonl discovery requires an explicitly authorized --grok-root (synthetic v1 schema; real stores never inspected); CLI export ingest remains as the operator-selected fallback"
+          "discovery": "disabled by default; AIWG_GROK_BUILD_NATIVE_EXPERIMENTAL=1 opts in to unqualified synthetic v1 native discovery with an explicitly authorized --grok-root; no released-binary schema or version range is qualified; documented CLI export ingest remains available without opt-in"
         }
       }
     },

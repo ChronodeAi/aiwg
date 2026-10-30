@@ -18,10 +18,12 @@ Options:
   --yes                 Confirm worker qualification or approval removal
   --dry-run             With --probe-workers, preview qualification without writes
   --cli NAME            Limit worker probes, qualification, or approvals to one CLI
+  --group <name>        Apply the named group cap (requires --resources)
+  --resources           Report live host resources, threshold origins and remaining worker slots (supports --json)
   --decision-offload    Show offline advisory decision readiness and adoption report
   --probe-workers       Run bounded worker CLI version probes (default: config-only, no subprocess)
   --project-local       Include project-local artifact diagnostics
-  --json                Emit machine-readable output (with --probe-workers: one worker-probe record per CLI; with --deployment: deployment verification; with --decision-offload: offline snapshot)
+  --json                Emit machine-readable output (with --probe-workers: one worker-probe record per CLI; with --deployment: deployment verification; with --decision-offload: offline snapshot; with --resources: host capacity)
   --verbose, -v         Include verbose diagnostics
   --help, -h            Show this help
 
@@ -29,5 +31,6 @@ Exit status:
   0  Checks completed; ordinary doctor warnings are advisory.
   1  Diagnostic errors, failed or partial explicit worker qualification, or blocked recorded invocations.
   2  Invalid usage.
+  --resources exits 1 when slots are zero.
   --qualify uses the same exit status in text and JSON output.
 `;

@@ -8,9 +8,11 @@ import { emptyConfig } from '../../src/config/aiwg-config.js';
 import { effectSession, openLedger } from '../../src/effects/host.js';
 import { verifyLedger } from '../../src/effects/verify.js';
 import { action, policy } from '../fixtures/policy/hitl.js';
+import { checkHitlAuthorization } from '../../src/policy/hitl-check.js';
 
 type AdapterGate = (dir: string, action: ReturnType<typeof action>, hasUI: boolean,
-  confirm: () => Promise<boolean>, check: () => Promise<any>) => Promise<{ block: true; reason: string } | undefined>;
+  confirm: () => Promise<boolean>, check: () => Promise<any>,
+  verify: (dir: string, input: unknown, receipt: { file: string; effectId: string }) => Promise<any>) => Promise<{ block: true; reason: string } | undefined>;
 export function hitlConsumerCases(name: string, adapterGate?: AdapterGate) {
   describe(`${name} authorization command contract`, () => {
     let dir: string;
@@ -36,7 +38,8 @@ export function hitlConsumerCases(name: string, adapterGate?: AdapterGate) {
       const decision = JSON.parse(String(output.mock.calls.at(-1)![0]));
       if (adapterGate) {
         const confirm = vi.fn(async () => false);
-        const result = await adapterGate(dir, value as ReturnType<typeof action>, true, confirm, async () => decision);
+        const result = await adapterGate(dir, value as ReturnType<typeof action>, true, confirm, async () => decision,
+          (target, input, receipt) => checkHitlAuthorization(target, input, { receipt }));
         if (decision.decision === 'auto-authorized' && decision.receipt) {
           expect(result).toBeUndefined(); expect(confirm).not.toHaveBeenCalled();
         } else {

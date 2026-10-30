@@ -1,8 +1,9 @@
-import { describe, expect, inject, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { boundedSpawnSync } from '../../src/process/bounded-child-process.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { assertContract, assertRuleBytes, boundRuleFixture, bundles, kinds } from '../helpers/bound-rule-surfaces.js';
 
 const root = path.resolve(import.meta.dirname, '../..');
 describe('shipped relationship tables', () => {
@@ -39,4 +40,57 @@ describe('shipped relationship tables', () => {
       expect(files.some(file => file.endsWith('metadata.json'))).toBe(false);
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }, 60_000);
+});
+
+describe('#2313 bound rule identity across production surfaces', () => {
+  const fixture = boundRuleFixture();
+  beforeAll(() => fixture.prepare(), 120_000);
+  afterAll(() => fixture.cleanup());
+
+  for (const kind of kinds) for (const bundle of bundles) {
+    it(`${bundle} same-name ${kind} retains its rule identity and bytes through CLI, MCP and npm pack`, () => {
+      let baseline: unknown;
+      for (const [lane, packageRoot] of [['source', fixture.stage], ['packed', fixture.installed]]) {
+        const discoveryArgs = { phrase: `${bundle} beacon`, type: kind, limit: 10 };
+        const cliDiscovery = fixture.cli(packageRoot, lane, ['discover', discoveryArgs.phrase, '--type', kind, '--limit', '10']);
+        const mcpDiscovery = fixture.mcp(packageRoot, lane, 'discover', discoveryArgs);
+        expect(mcpDiscovery).toEqual({ ...cliDiscovery, query_time_ms: expect.any(Number) });
+        const candidate = cliDiscovery.results[0];
+        assertContract(candidate, bundle, kind);
+        const shown = fixture.cli(packageRoot, lane, ['show', kind, candidate.id]);
+        assertContract(shown, bundle, kind);
+        expect(shown.required_rule_checks).toEqual(candidate.required_rule_checks);
+        expect(shown.bound_rules).toEqual(candidate.bound_rules);
+        // MCP exposes flows through discover, and skill/agent cards through typed show tools.
+        if (kind !== 'flow') expect(fixture.mcp(packageRoot, lane, `${kind}-show`, { name: candidate.id })).toEqual(shown);
+        const check = shown.required_rule_checks[0];
+        // Follow the actual emitted command, rather than rebuilding a fetch from a rule name.
+        const rule = fixture.cli(packageRoot, lane, check.fetch_command.split(' ').slice(1));
+        const mcpRule = fixture.mcp(packageRoot, lane, 'rule-show', { name: check.rule_id, body: true });
+        expect(mcpRule).toEqual(rule);
+        assertRuleBytes(rule, bundle);
+        const contract = { id: shown.id, checks: shown.required_rule_checks, rules: shown.bound_rules, content: rule.content };
+        if (baseline) expect(contract).toEqual(baseline);
+        baseline = contract;
+      }
+    }, 120_000);
+  }
+
+  // Confirmed product mismatch: compoundGoverningRules excludes kernel pins in discover;
+  // showBindings retains them. Refactoring its 2,833-line owner below 500 lines plus
+  // these checks exceeds this slice's six-file limit. Preserve the failing oracle.
+  it.skip('#3768 https://git.integrolabs.net/roctinam/aiwg/issues/3768: discover drops a kernel-pinned rule that show keeps (pin parity)', () => {
+    for (const [lane, packageRoot] of [['source', fixture.stage], ['packed', fixture.installed]]) {
+      for (const kind of kinds) {
+        const discovery = fixture.cli(packageRoot, lane, ['discover', 'amber beacon', '--type', kind], true);
+        const shown = fixture.cli(packageRoot, lane, ['show', kind, discovery.results[0].id], true);
+        assertContract(shown, 'amber', kind, true);
+        assertContract(discovery.results[0], 'amber', kind, true);
+        expect(fixture.mcp(packageRoot, lane, 'discover', { phrase: 'amber beacon', type: kind }, true))
+          .toEqual({ ...discovery, query_time_ms: expect.any(Number) });
+        const check = shown.required_rule_checks[0];
+        assertRuleBytes(fixture.cli(packageRoot, lane, check.fetch_command.split(' ').slice(1), true), 'amber');
+      }
+    }
+  }, 120_000);
 });

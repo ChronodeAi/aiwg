@@ -1,3 +1,4 @@
+import { installedResourceModelsHandler } from './host-resource-handler.js';
 // Offline public doctor fixture: disposable installed code, fake CLI and synthetic signing trust.
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
@@ -58,7 +59,16 @@ else process.exit(90);
       return { code: 0, ...result };
     } catch (error: any) { return { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
   };
-  const resolve = () => run(['models', 'resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
-    '--brief', brief, '--workdir', project, '--final-output', path.join(project, 'result.json'), '--format', 'json']);
+  const modelEntry = path.join(root, 'models.mjs');
+  await writeFile(modelEntry, `const handler = ${installedResourceModelsHandler(installed)};
+const args = process.argv.slice(2);
+const result = await handler.execute({ args, rawArgs: ['models', ...args], cwd: process.cwd(), frameworkRoot: ${JSON.stringify(installed)} });
+process.exitCode = result.exitCode;`);
+  const resolve = async () => {
+    const args = ['resolve', '--role', 'coding', '--task', 'implementation', '--group', 'workers',
+    '--brief', brief, '--workdir', project, '--final-output', path.join(project, 'result.json'), '--format', 'json'];
+    try { return { code: 0, ...await exec(process.execPath, [modelEntry, ...args], { cwd: project, env, timeout: 60_000 }) }; }
+    catch (error: any) { return { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
+  };
   return { root, installed, project, config, run, resolve };
 }

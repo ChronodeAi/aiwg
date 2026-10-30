@@ -15,8 +15,8 @@ import { sanitizeDescription, sanitizeTags } from './sanitizer.js';
 import { checkPathAllowed } from './allowlist.js';
 import { generateAiwgMd } from './aiwg-md.js';
 import { injectSpilloverBlock } from './overflow.js';
-import { writeNormalizedAiwgMd } from './finalization.js';
-import { shouldEmitAgentsMd, shouldEmitAiwgMd, shouldEmitClaudeMdHook } from './provider-policy.js';
+import { migrateAiwgOperatorNotes } from './finalization.js';
+import { shouldEmitAgentsMd, shouldEmitClaudeMdHook } from './provider-policy.js';
 import { ensureClaudeMdHook } from './claude-hook.js';
 import { ensureManagedHook } from './managed-hook.js';
 import { assertSafeContextFile, writeContextFileSync } from './context-file-safety.js';
@@ -313,10 +313,9 @@ async function writeSpilloverBlock(
 /**
  * Generate the canonical graph and provider startup adapters.
  *
- * Skeleton implementation: emits AGENTS.md with link-index sections; AIWG.md
- * generation is wired in commit 3 alongside the first issue closure (#1104).
- * For now AIWG.md emission delegates to a copy of CLAUDE.md when the source
- * is present; otherwise it is skipped with a warning.
+ * Root AIWG.md is the single generated framework context, including optional
+ * operator notes. Provider adapters declare their supported startup loader;
+ * home-only providers can still read the root context explicitly.
  */
 export async function generate(opts: ContextPipelineOptions): Promise<ContextPipelineResult> {
   // Check every startup/context output before writing the first one. A linked
@@ -325,7 +324,7 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
   const plannedFiles = [
     ...(!opts.skip?.workspaceMd ? ['WORKSPACE.md'] : []),
     ...(!opts.skip?.agentsMd && shouldEmitAgentsMd(opts.provider) ? ['AGENTS.md'] : []),
-    ...(!opts.skip?.aiwgMd && shouldEmitAiwgMd(opts.provider) ? ['AIWG.md'] : []),
+    ...(!opts.skip?.aiwgMd ? ['AIWG.md'] : []),
     ...(shouldEmitClaudeMdHook(opts.provider) ? ['CLAUDE.md'] : []),
   ];
   for (const file of plannedFiles) await assertSafeContextFile(path.join(opts.projectPath, file));
@@ -350,8 +349,6 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
     if (workspace.backupPath) result.backupPaths.push(workspace.backupPath);
   }
 
-  const normalizedAiwgPath = await writeNormalizedAiwgMd(opts.projectPath);
-  result.normalizedAiwgMdPath = normalizedAiwgPath;
 
   // AGENTS.md emission is gated on the provider's link-mechanism: codex/copilot/
   // cursor/windsurf/hermes/warp/factory/opencode use AGENTS.md as their bridge
@@ -408,7 +405,7 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
     await writeTwinFiles(opts.provider, opts.projectPath, built.content, opts, result);
   }
 
-  if (!opts.skip?.aiwgMd && shouldEmitAiwgMd(opts.provider)) {
+  if (!opts.skip?.aiwgMd) {
     const aiwgMdPath = path.join(opts.projectPath, 'AIWG.md');
 
     let canWrite = true;
@@ -439,6 +436,8 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
       const content = await generateAiwgMd(opts.projectPath);
       await atomicWrite(aiwgMdPath, content);
       result.aiwgMdPath = aiwgMdPath;
+      result.normalizedAiwgMdPath = aiwgMdPath; // Compatibility alias: there is only one generated context.
+      await migrateAiwgOperatorNotes(opts.projectPath);
     }
   }
 

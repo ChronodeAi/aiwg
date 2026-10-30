@@ -177,7 +177,7 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
     expect(content).toContain('[Project-local quickref](.aiwg/quickref.json)');
     expect(content).not.toContain('../private-corpus/.aiwg/quickref.json');
     expect(content).toContain('run `aiwg artifacts path --json --check-write`');
-    expect(content).toContain('Only `AIWG.md`, `aiwg.config`, and `frameworks/registry.json`');
+    expect(content).toContain('Only `aiwg.config`, `frameworks/registry.json`, and optional operator-only `AIWG.md` notes');
     expect(content).toContain('never fall back to repository-local payload');
   });
 

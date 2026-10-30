@@ -13,4 +13,3 @@ applies-to:
   glob: "**/*.md"
 checks:
   - type: reference-resolves
-    referencePattern: "\\bREF-\\d{3,}\\b"

@@ -1,3 +1,4 @@
+import { idleHostResourceReaders } from '../../../fixtures/host-resources.js';
 import { mkdtempSync } from 'node:fs';
 import { workerSigningFixture } from '../../../helpers/worker-qualification-signing.js';
 import { copyNode } from '../../../helpers/copy-node.js';
@@ -7,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createModelsHandler, loadWorkerInputs, modelsHandler } from '../../../../src/cli/handlers/models.js';
+import { createModelsHandler, loadWorkerInputs as loadHostWorkerInputs } from '../../../../src/cli/handlers/models.js';
 import { ConfigLoader } from '../../../../src/models/config-loader.js';
 import { requiredWorkerControls, WORKER_OPERATOR_APPROVAL } from '../../../../src/models/provider-policy.js';
 import { resolveWorkerPlan } from '../../../../src/models/resolver.js';
@@ -17,6 +18,8 @@ import { ProviderAdapter, workerNegativeFixtureDigest, workerNegativeFixtureSuit
 import { workerResolutionFixture } from '../../../fixtures/worker-resolution.js';
 import { recordedWorkerStdinBytes } from '../../../../src/serve/worker-stdin-frame.mjs';
 
+const loadWorkerInputs = (ctx: Parameters<typeof loadHostWorkerInputs>[0]) => loadHostWorkerInputs(ctx, idleHostResourceReaders());
+const modelsHandler = createModelsHandler({ load: loadWorkerInputs });
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 

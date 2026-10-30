@@ -56,6 +56,15 @@ describe('RateLimiter', () => {
     expect(limiter.getCurrentTokens()).toBe(0);
   });
 
+  it('serializes simultaneous waiters without issuing a burst', async () => {
+    const limiter = new RateLimiter({ maxTokens: 1, refillRate: 1, currentTokens: 0, lastRefill: Date.now() });
+    const times: number[] = [];
+    const start = Date.now();
+    const pending = Promise.all(Array.from({ length: 3 }, () => limiter.acquire().then(() => times.push(Date.now() - start))));
+    await vi.runAllTimersAsync(); await pending;
+    expect(times).toEqual([1000, 2000, 3000]);
+  });
+
   it('should refill tokens over time', async () => {
     const limiter = new RateLimiter({
       maxTokens: 10,
@@ -187,17 +196,73 @@ describe('BaseClient', () => {
       });
     });
 
-    it('should throw on 429 rate limit error', async () => {
-      mockFetch.mockResolvedValueOnce({
+    it('should throw on 429 rate limit error after bounded retries', async () => {
+      mockFetch.mockResolvedValue({
         ok: false,
         status: 429,
       });
 
-      await expect(
-        client.testRequest('https://api.example.com/test')
-      ).rejects.toMatchObject({
-        code: ResearchErrorCode.RF_103,
+      const check = expect(client.testRequest('https://api.example.com/test')).rejects.toMatchObject({ code: ResearchErrorCode.RF_103 });
+      await vi.runAllTimersAsync();
+      await check;
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
+
+    it.each(['seconds', 'date'])('respects Retry-After in %s form beyond maxDelay', async form => {
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      client = new TestClient({ ...config, rateLimit: { ...config.rateLimit, lastRefill: Date.now() } });
+      const value = form === 'seconds' ? '12' : new Date(Date.now() + 12000).toUTCString();
+      mockFetch.mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': value } }))
+        .mockResolvedValueOnce(Response.json({ success: true }));
+      const pending = client.testRequest('https://api.example.com/test');
+      await vi.advanceTimersByTimeAsync(11999);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toEqual({ success: true });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('preserves server cooldown for the next request after exhaustion', async () => {
+      client = new TestClient({ ...config, retry: { ...config.retry, maxRetries: 0 } });
+      mockFetch.mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '15' } }))
+        .mockResolvedValueOnce(Response.json({ success: true }));
+      await expect(client.testRequest('https://api.example.com/test')).rejects.toMatchObject({ code: ResearchErrorCode.RF_103 });
+      const pending = client.testRequest('https://api.example.com/test');
+      await vi.advanceTimersByTimeAsync(14999);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toEqual({ success: true });
+    });
+
+    it.each(['seconds', 'date'])('caps huge Retry-After in %s form at 30 seconds across retries and the next request', async form => {
+      vi.setSystemTime(new Date('2026-10-29T12:00:00Z'));
+      client = new TestClient({ ...config, retry: { ...config.retry, maxRetries: 1 },
+        rateLimit: { ...config.rateLimit, lastRefill: Date.now() } });
+      const start = Date.now(), times: number[] = [];
+      const value = form === 'seconds' ? '3600' : new Date(start + 3600000).toUTCString();
+      mockFetch.mockImplementation(async () => {
+        times.push(Date.now() - start);
+        return times.length <= 2 ? new Response('', { status: 429, headers: { 'Retry-After': value } })
+          : Response.json({ success: true });
       });
+      const check = expect(client.testRequest('https://api.example.com/test')).rejects.toMatchObject({ code: ResearchErrorCode.RF_103 });
+      await vi.runAllTimersAsync(); await check;
+      const next = client.testRequest('https://api.example.com/next');
+      await vi.runAllTimersAsync();
+      await expect(next).resolves.toEqual({ success: true });
+      expect(times).toEqual([0, 30000, 60000]);
+    });
+
+    it('backs off exponentially on repeated throttles without Retry-After', async () => {
+      const start = Date.now(), times: number[] = [];
+      mockFetch.mockImplementation(async () => {
+        times.push(Date.now() - start);
+        return times.length < 4 ? new Response('', { status: 429 }) : Response.json({ success: true });
+      });
+      const pending = client.testRequest('https://api.example.com/test');
+      await vi.runAllTimersAsync();
+      await expect(pending).resolves.toEqual({ success: true });
+      expect(times).toEqual([0, 100, 300, 700]);
     });
 
     it('should throw on 401 unauthorized', async () => {

@@ -1,8 +1,9 @@
 // Validate expansion controls and expose the corpus router's JSON and exit-code contract.
+import { isRefId } from '../../research/identity.js';
 import { AiwgError } from '../../cli/errors.js';
 import { expandCorpus, renderExpansion } from './expand.js';
 
-export const EXPAND_USAGE = 'aiwg corpus expand [--seeds REF-0001,REF-0002 | --since YYYY-MM-DD | --all] [--per-seed 20] [--from recent|all-cs] [--min-year 2018] [--reexplore-after 180d] [--max-seeds N] [--overlap] [--write] [--json]\nA scope (--seeds, --since or --all) is required. Default: dry run. --since uses induction/discovery date, then document mtime.\n--overlap checks at most 20 candidates, after convergence and recency.\nExit codes: 0 complete, 3 incomplete/retryable, 1 usage or storage error.\n';
+export const EXPAND_USAGE = 'aiwg corpus expand [--seeds REF-0001,REF-0002 | --since YYYY-MM-DD | --all] [--per-seed 20] [--from recent|all-cs] [--min-year 2018] [--reexplore-after 180d] [--max-seeds N] [--overlap] [--write] [--json]\nA scope (--seeds, --since or --all) is required. Default: dry run. --since uses induction/discovery date (including citation sidecars), then Git first-add date, then document mtime with a summary warning.\n--overlap checks at most 20 candidates, after convergence and recency.\nExit codes: 0 complete, 3 incomplete/retryable, 1 usage or storage error.\n';
 
 export interface ExpandOptions {
   seeds?: string[];
@@ -54,7 +55,7 @@ export async function expandCli(args: string[], root: string, cwd: string): Prom
     switch (flag) {
       case '--seeds':
         options.seeds = value.split(',').map(ref => ref.trim());
-        if (options.seeds.some(ref => !/^REF-\d+[a-z]?$/.test(ref))) usage('--seeds requires comma-separated REF identifiers');
+        if (options.seeds.some(ref => !isRefId(ref))) usage('--seeds requires comma-separated REF identifiers');
         options.seeds = [...new Set(options.seeds)];
         break;
       case '--since':

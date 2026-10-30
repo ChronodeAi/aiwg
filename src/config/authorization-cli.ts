@@ -12,7 +12,7 @@ import type { HitlPolicy } from '../policy/hitl-types.js';
 export const authorizationUsage = `aiwg config authorization (also aiwg steward authorization)
   inspect | validate [--target DIRECTORY]
   preview --action-file FILE [--target DIRECTORY]
-  check --action-file FILE [--target DIRECTORY]
+  check --action-file FILE [--receipt-file FILE --effect-id ID] [--target DIRECTORY]
   enable --policy-file FILE [--target DIRECTORY]
   revoke [--profile NAME] [--target DIRECTORY]
   receipt --action-file FILE [--target DIRECTORY]
@@ -30,7 +30,8 @@ export async function authorizationCli(args: string[], cwd = process.cwd()): Pro
   const [operation, ...rest] = args;
   const flags: Record<string, string> = {};
   const allowed = ['--target', ...(operation === 'enable' ? ['--policy-file'] : []),
-    ...(['preview', 'receipt', 'check'].includes(operation) ? ['--action-file'] : []), ...(operation === 'revoke' ? ['--profile'] : [])];
+    ...(['preview', 'receipt', 'check'].includes(operation) ? ['--action-file'] : []),
+    ...(operation === 'check' ? ['--receipt-file', '--effect-id'] : []), ...(operation === 'revoke' ? ['--profile'] : [])];
   for (let i = 0; i < rest.length; i += 2) {
     if (!allowed.includes(rest[i]) || !rest[i + 1] || rest[i + 1].startsWith('--') || flags[rest[i]]) throw usageError('Invalid authorization option');
     flags[rest[i]] = rest[i + 1];
@@ -45,7 +46,9 @@ export async function authorizationCli(args: string[], cwd = process.cwd()): Pro
     if (!flags['--action-file']) throw usageError('--action-file is required');
     const action = await jsonFile(resolve(cwd, flags['--action-file']));
     if (operation === 'check') {
-      console.log(JSON.stringify(await checkHitlAuthorization(target, action), null, 2));
+      if (Boolean(flags['--receipt-file']) !== Boolean(flags['--effect-id'])) throw usageError('--receipt-file and --effect-id are required together');
+      const receipt = flags['--receipt-file'] ? { file: resolve(cwd, flags['--receipt-file']), effectId: flags['--effect-id'] } : undefined;
+      console.log(JSON.stringify(await checkHitlAuthorization(target, action, { receipt }), null, 2));
       return;
     }
     const loaded = await loadHitlLayers(target);

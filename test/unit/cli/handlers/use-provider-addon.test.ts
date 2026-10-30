@@ -276,8 +276,8 @@ describe('aiwg use addon requiring aiwg-utils across providers (#3035)', () => {
       }
       if (provider === 'openclaw' || provider === 'openhuman') {
         expect(existsSync(join(project, 'WORKSPACE.md'))).toBe(true);
-        expect(existsSync(join(project, '.aiwg/AIWG.md'))).toBe(true);
-        expect(existsSync(join(project, 'AIWG.md'))).toBe(false);
+        expect(existsSync(join(project, '.aiwg/AIWG.md'))).toBe(false);
+        expect(existsSync(join(project, 'AIWG.md'))).toBe(true);
         expect(result.message).not.toContain('Required canonical context file is missing: AIWG.md');
       }
       expect(process.env.AIWG_ROOT).toBeUndefined();

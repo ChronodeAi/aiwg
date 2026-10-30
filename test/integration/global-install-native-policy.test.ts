@@ -273,7 +273,8 @@ describe('global install native lifecycle-script policy', () => {
     expect(existsSync(path.join(contextProject, 'WORKSPACE.md'))).toBe(true);
     expect(existsSync(path.join(contextProject, 'AIWG.md'))).toBe(true);
     expect(existsSync(path.join(contextProject, 'CLAUDE.md'))).toBe(true);
-    expect(existsSync(path.join(contextProject, '.aiwg', 'AIWG.md'))).toBe(true);
+    // #3762: fresh projects have one generated context, with no operator notes copy.
+    expect(existsSync(path.join(contextProject, '.aiwg', 'AIWG.md'))).toBe(false);
     expect(existsSync(path.join(contextProject, '.claude'))).toBe(false);
     expect(existsSync(path.join(contextProject, '.agents'))).toBe(false);
   });
@@ -295,7 +296,8 @@ describe('global install native lifecycle-script policy', () => {
     expect(existsSync(path.join(globalProject, 'WORKSPACE.md'))).toBe(true);
     expect(existsSync(path.join(globalProject, 'AIWG.md'))).toBe(true);
     expect(existsSync(path.join(globalProject, 'CLAUDE.md'))).toBe(true);
-    expect(existsSync(path.join(globalProject, '.aiwg', 'AIWG.md'))).toBe(true);
+    // #3762: global installs also keep generated framework context at the root.
+    expect(existsSync(path.join(globalProject, '.aiwg', 'AIWG.md'))).toBe(false);
     expect(existsSync(path.join(globalProject, '.claude'))).toBe(false);
     expect(existsSync(path.join(globalProject, '.agents'))).toBe(false);
   }, 180_000);

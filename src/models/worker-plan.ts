@@ -1,3 +1,5 @@
+import { hostResourceReport, type HostResourceReport } from '../config/host-resource-report.mjs';
+import type { HostResourceSample } from '../config/host-resource-runtime.mjs';
 import { workerReviewLineageDiagnostics } from './worker-review-lineage.js';
 // Resolves eligible worker tuples against current config, catalog and installation snapshots.
 import { isFlagshipModel, flagshipElected, normalizeModelTier } from './tiers.js';
@@ -40,6 +42,8 @@ export interface WorkerResolutionBinding {
 
 export interface WorkerPlanSnapshot {
   config: AiwgConfig;
+  /** Fresh host sample supplied by the launch host; never request-controlled. */
+  hostResources?: HostResourceSample;
   /** ConfigLoader.load(parallelism), including restriction origins and wrapper pins. */
   models: MergedModelConfig;
   modelDigests: ModelInputDigests;
@@ -103,6 +107,7 @@ export interface WorkerEligibleTuple extends WorkerChoice {
   verifiedAt: string;
   observationRef: string;
   effectiveMaxParallel: number | null;
+  resources?: HostResourceReport;
   diagnostics: WorkerPolicyDiagnostic[];
 }
 
@@ -120,6 +125,8 @@ export interface WorkerResolutionPlan {
   origins: MergedModelConfig['workerPolicyOrigins'];
   choice: { source: 'conductor' | 'default'; rationale: string; substitution?: WorkerPlanRequest['substitution'] } | null;
   capacity: 'conductor-guidance-only';
+  resources?: HostResourceReport;
+  slots?: number;
   ceilings: WorkerResolutionCeilings;
 }
 
@@ -159,6 +166,10 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
     policy: structuredClone(policy), origins: structuredClone(snapshot.models.workerPolicyOrigins),
     choice: null, capacity: 'conductor-guidance-only', ceilings: {},
   };
+  if (snapshot.hostResources) {
+    plan.resources = hostResourceReport({ config: snapshot.config, live: snapshot.hostResources });
+    plan.slots = plan.resources.slots;
+  }
   const diagnostic = (code: WorkerPolicyDiagnostic['code'], pointer: string, message: string): WorkerPolicyDiagnostic => ({ code, pointer, message });
   const block = (code: WorkerPolicyDiagnostic['code'], pointer: string, message: string): void => {
     plan.diagnostics.push(diagnostic(code, pointer, message));
@@ -345,10 +356,26 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
             defaultTier: guidance.tier === 'economy' ? 1 : 2, requestedPremium: premium || request.authority?.requestedPremium });
           if (authority.requiresConfirmation) deny('OG_MODEL_UNAPPROVED', '/request/authority', `${authority.rationale.join('; ')}; agents may pass --authorize-premium only after the human explicitly confirmed the premium escalation (escalation-discipline rule)`);
           const installation = parallelism.clis?.[member.cli];
-          const caps = [parallelism.max_parallel_subagents, group.maxParallel, parallelism.admission?.groupCaps?.[groupId],
-            parallelism.admission?.memberCaps?.[`${groupId}/${member.id}`], parallelism.admission?.cliCaps?.[member.cli],
-            parallelism.admission?.modelCaps?.[key], installation && parallelism.admission?.quotaCaps?.[installation.quotaScope],
-            snapshot.constraints?.maxParallel, request.maxParallel].filter((value): value is number => value !== undefined);
+          const admission = parallelism.admission;
+          const capEntries = [
+            ['max_parallel_subagents', parallelism.max_parallel_subagents], ['group.maxParallel', group.maxParallel],
+            ['admission.groupCaps', admission?.groupCaps?.[groupId]],
+            ['admission.memberCaps', admission?.memberCaps?.[`${groupId}/${member.id}`]],
+            ['admission.cliCaps', admission?.cliCaps?.[member.cli]], ['admission.modelCaps', admission?.modelCaps?.[key]],
+            ['admission.quotaCaps', installation && admission?.quotaCaps?.[installation.quotaScope]],
+          ] as const;
+          const caps = [...capEntries.map(([, value]) => value), snapshot.constraints?.maxParallel, request.maxParallel]
+            .filter((value): value is number => value !== undefined);
+          // The shared report owns project/group caps; the remaining entries scope the tuple.
+          const resources = snapshot.hostResources && hostResourceReport({ config: snapshot.config, live: snapshot.hostResources, group: groupId,
+            caps: [...capEntries.slice(3).map(([threshold, limit]) => ({ threshold, limit })),
+              { threshold: 'constraints.maxParallel', limit: snapshot.constraints?.maxParallel, running: 0 },
+              { threshold: 'request.maxParallel', limit: request.maxParallel, running: 0 }] });
+          if (resources) {
+            if (!plan.eligible.length) { plan.resources = resources; plan.slots = resources.slots; }
+            if (!resources.ok) deny('OG_ADAPTER_UNQUALIFIED', '/parallelism/admission/hostResources',
+              resources.failures.map(failure => `${failure.signal}: ${failure.reason}`).join('; '));
+          }
           const effectiveMaxParallel = caps.length ? Math.min(...caps) : null;
           if (effectiveMaxParallel === 0) deny('OG_ADAPTER_UNQUALIFIED', '/constraints/maxParallel', 'Current capacity ceiling is zero');
           if (!reasons.some(reason => reason.blocking !== false)) plan.eligible.push({ ...tuple, cli: member.cli,
@@ -356,7 +383,7 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
             profile: binding.profile, transport,
             permissions: structuredClone(permissions), context: workerContextHeadroom(request.context, observation),
             observedAt: observation.observedAt, verifiedAt: observation.verifiedAt, observationRef: observation.recordId,
-            effectiveMaxParallel, diagnostics: reasons });
+            effectiveMaxParallel, ...(resources ? { resources } : {}), diagnostics: reasons });
         }
         if (reasons.some(reason => reason.blocking !== false)) plan.exclusions.push({ ...tuple, diagnostics: reasons });
       }
@@ -369,11 +396,16 @@ export function resolveWorkerPlan(snapshot: WorkerPlanSnapshot, request: WorkerP
   } else plan.selected = plan.eligible[0] ?? null;
   if (plan.diagnostics.length) plan.selected = null;
   if (plan.selected) {
+    if (plan.selected.resources) { plan.resources = plan.selected.resources; plan.slots = plan.resources.slots; }
     plan.policy = groupPolicies.get(plan.selected.group);
     plan.status = 'eligible';
     plan.diagnostics.push(...plan.selected.diagnostics.filter(item => item.code === 'OG_SANDBOX_EXTERNAL'));
     plan.choice = { source: request.choice ? 'conductor' : 'default', rationale: request.choice?.rationale ?? 'Role group order, member priority/declaration order, then qualified effort ladder',
       ...(request.substitution && matchesChoice(plan.selected, request.substitution) ? { substitution: structuredClone(request.substitution) } : {}) };
+  }
+  if (!plan.selected && plan.resources?.slots === 0) {
+    block('OG_ADAPTER_UNQUALIFIED', '/parallelism/admission/hostResources',
+      plan.resources.failures.map(failure => `${failure.signal}: ${failure.reason}`).join('; '));
   }
   plan.alternatives = plan.eligible.filter(tuple => tuple !== plan.selected);
   return plan;

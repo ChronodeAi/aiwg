@@ -14,7 +14,7 @@ describe('use boundary validation', () => {
     expect(result.message).toContain('--bogus');
   });
   it('preserves supported options and values without interpreting them as bundles', () => {
-    expect(validateUseOptions(['all', '--provider', 'pi', '--no-hooks', '--model', 'model/id', '--coding', 'model/id', '--save-user', '--no-context-files', '--copy-all', '-v'])).toBeUndefined();
+    expect(validateUseOptions(['all', '--provider', 'pi', '--no-hooks', '--no-attribution', '--model', 'model/id', '--coding', 'model/id', '--save-user', '--no-context-files', '--copy-all', '-v'])).toBeUndefined();
   });
   it.each(['--quiet', '-q'])('preserves the supported deployer option %s (#3467)', (flag) => {
     expect(validateUseOptions(['sdlc', '--provider', 'claude', flag])).toBeUndefined();

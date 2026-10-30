@@ -12,7 +12,7 @@ it.each(['v6', 'v7', 'v8', 'private-synthetic-fixture'])('pins %s to the current
   expect(await d29ScorerDigest(`d29-study-${version}`)).toBe(digest(await readFile(source)));
 });
 
-it.each(['d29-gates.mjs', 'd29-provenance.mjs'])('refuses edited %s bytes behind an unchanged entry pin', async name => {
+it.each(['d29-gates.mjs', 'd29-provenance.mjs', 'd29-preparation.mjs', 'd29-scoring.mjs'])('refuses edited %s bytes behind an unchanged entry pin', async name => {
   const entry = await readFile(source, 'utf8');
   const pin = entry.match(new RegExp(`'\\./${name.replace('.', '\\.')}'\\s*:\\s*'(sha256:[a-f0-9]{64})'`))[1];
   const bytes = await readFile(new URL(`../../../tools/decision/studies/${name}`, import.meta.url));

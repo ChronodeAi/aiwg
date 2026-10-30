@@ -4,7 +4,7 @@
 AIWG is connected to the target project and your provider session can read the deployed context.
 
 Use this guide when installing AIWG on a Mac, especially if `npm install -g aiwg`
-fails with `EACCES` under `/usr/local/lib/node_modules`.
+fails with `EACCES` under `/usr/local/lib/node_modules`. Each section starts with what you can ask your assistant, then gives the command reference.
 
 For the complete agent/steward setup path after the Mac install succeeds, see
 the [Agentic Install Runbook](../agentic-install-runbook.md).
@@ -23,8 +23,14 @@ Verified against the npm and Node.js documentation on 2026-06-02:
 
 ## Recommended Path: nvm
 
+> "Install Node 24 with nvm on this Mac and then install AIWG globally. Stop if anything needs confirmation."
+
+Your assistant installs Node through the version manager to avoid root-owned global directories, then installs and verifies AIWG.
+
 This avoids root-owned global npm directories and works on both Intel and Apple
 Silicon Macs.
+
+### Command reference
 
 ```bash
 # Install nvm. Check https://github.com/nvm-sh/nvm for the newest command.
@@ -45,6 +51,14 @@ npm --version
 aiwg --version
 ```
 
+```bash
+source ~/.zshrc
+```
+
+```bash
+touch ~/.zshrc
+```
+
 If `nvm: command not found` appears after the install script, open a new terminal
 or run:
 
@@ -58,7 +72,17 @@ If `~/.zshrc` does not exist, create it and rerun the nvm installer:
 touch ~/.zshrc
 ```
 
+Refinement prompt:
+
+> "nvm is still not found after a new terminal. Check my shell startup files and tell me what to source."
+
+Your assistant checks the shell startup files and names the exact source step.
+
 ## If Node Is Already Installed and npm Fails With EACCES
+
+> "npm fails with EACCES under /usr/local/lib/node_modules. Fix it without sudo and verify AIWG installs."
+
+Your assistant applies npm's user-prefix recovery and verifies the global install without using sudo.
 
 This error means npm is trying to write global packages into a directory your
 user does not own, commonly `/usr/local/lib/node_modules`.
@@ -70,6 +94,8 @@ npm ERR! path /usr/local/lib/node_modules/aiwg
 ```
 
 Use npm's current user-prefix recovery:
+
+### Command reference
 
 ```bash
 npm config set prefix ~/.local
@@ -87,9 +113,15 @@ package installs to fail.
 
 ## Homebrew Path
 
+> "I already manage tools with Homebrew. Install Node 24 that way and verify AIWG."
+
+Your assistant checks that the Homebrew prefix is user-writable and first in `PATH`, then installs and verifies.
+
 Homebrew is acceptable if the Homebrew prefix is user-writable and first in
 `PATH`. It is most useful for users who already manage developer tools with
 Homebrew.
+
+### Command reference
 
 ```bash
 brew install node@24
@@ -104,6 +136,10 @@ to `nvm`.
 
 ## Optional native features (Xcode Command Line Tools)
 
+> "Do I need Xcode tools for the base AIWG install, and when would I install them?"
+
+Your assistant explains that the base install needs no build tools and names the opt-in features that would require them.
+
 AIWG's **base install never needs build tools** — its native dependencies
 (`better-sqlite3`, `node-pty`, `hnswlib-node`) are `optionalDependencies` that
 ship prebuilt macOS binaries and are skipped silently if they can't install. The
@@ -115,6 +151,8 @@ A few **opt-in** features use native modules: the SQLite graph backend
 vision extraction (poppler `pdftoppm`). These normally use prebuilt binaries on
 Mac. If one ever fails to build (an unusual Node version, or a module without a
 matching prebuilt), install Apple's Command Line Tools and retry:
+
+### Command reference
 
 ```bash
 xcode-select --install        # one-time; provides the C/C++ toolchain
@@ -130,7 +168,13 @@ brew install poppler
 
 ## After AIWG Installs
 
+> "AIWG installed. Deploy it to my project and audit the result."
+
+Your assistant deploys from the project root, runs the index, context, and readiness checks, and points to the explicit audit when recovery is needed.
+
 Deploy AIWG from the project root:
+
+### Command reference
 
 ```bash
 cd /path/to/your/project
@@ -143,6 +187,8 @@ result identifies a recovery step.
 
 If `npm install -g aiwg` succeeds but `aiwg` is not found, check npm's global
 binary directory:
+
+### Command reference — PATH recovery
 
 ```bash
 npm config get prefix

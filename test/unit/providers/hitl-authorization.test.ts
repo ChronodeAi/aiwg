@@ -10,8 +10,10 @@ hitlConsumerCases('provider-adapter', evaluateAiwgPiAction);
 it('only a consumed decision with receipt suppresses the adapter workflow prompt', async () => {
   const confirm = vi.fn(async () => true);
   const check = vi.fn(async () => ({ decision: 'auto-authorized', receipt: { file: 'synthetic-receipt', effectId: 'synthetic-effect' } }));
-  expect(await evaluateAiwgPiAction('/tmp', action(), true, confirm, check)).toBeUndefined();
+  const verify = vi.fn(check);
+  expect(await evaluateAiwgPiAction('/tmp', action(), true, confirm, check, verify)).toBeUndefined();
   expect(check).toHaveBeenCalledWith('/tmp', action());
+  expect(verify).toHaveBeenCalledWith('/tmp', action(), { file: 'synthetic-receipt', effectId: 'synthetic-effect' });
   expect(confirm).not.toHaveBeenCalled();
   expect(await evaluateAiwgPiAction('/tmp', action(), true, confirm, async () => ({ decision: 'auto-authorized' }))).toBeUndefined();
   expect(confirm).toHaveBeenCalledTimes(1);

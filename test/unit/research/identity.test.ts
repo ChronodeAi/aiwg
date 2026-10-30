@@ -1,9 +1,16 @@
 // Shared identity normalization contract for corpus resolve and expand (#3736/#3735).
 import { describe, expect, it } from 'vitest';
-import { identityKeys, normalizeDoi, normalizeTitle, parseArxivId, parseResearchIdentifier } from '../../../src/research/identity.js';
+import { identityKeys, normalizeDoi, normalizeIdentity, normalizeTitle, parseArxivId, parseResearchIdentifier } from '../../../src/research/identity.js';
 import { parsePartialReference } from '../../../src/research/reference-match.js';
 
 describe('research identities', () => {
+  it.each([
+    { openReviewId: 'AbC-123', aclId: 'P19-1010' },
+    { openreview_id: 'AbC-123', acl_id: 'P19-1010' },
+  ])('case-normalizes OpenReview and ACL identity spellings: %j', fields => {
+    expect(normalizeIdentity(fields)).toMatchObject({ openReviewId: 'abc-123', aclId: 'p19-1010' });
+    expect(identityKeys(fields)).toEqual(['openReviewId:abc-123', 'aclId:p19-1010']);
+  });
   it.each([
     ['2401.12345v2', '2401.12345', 2], ['0704.0001', '0704.0001', undefined],
     ['hep-th/9901001v3', 'hep-th/9901001', 3], ['math.GT/0309136', 'math.gt/0309136', undefined],

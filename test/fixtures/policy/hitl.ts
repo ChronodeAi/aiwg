@@ -8,5 +8,5 @@ export const policy = (): HitlPolicy => ({
     expiresAt: '2026-10-28T00:00:00Z' } },
 });
 export const action = (): HitlAction => ({ category: 'repo.edit', repo: 'example/testnet', environment: 'testnet',
-  resources: ['src/index.ts'], reversible: true, impact: 'low' });
+  resources: ['src/index.ts'], reversible: true, impact: 'low', actor: 'pi:synthetic-user', inputDigest: `sha256:${'a'.repeat(64)}` });
 export const context = (p = policy()): HitlContext => ({ now: '2026-10-27T01:00:00Z', layers: [{ source: 'project', policy: p }] });

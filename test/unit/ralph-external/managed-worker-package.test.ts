@@ -36,7 +36,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
     const toolFiles = ['tools/_resolve-impl.mjs', 'tools/ralph-external/session-launcher.mjs',
       'tools/ralph-external/process-monitor.mjs', 'tools/scripts/resource-preflight.mjs',
       ...['worker-inputs', 'worker-final', 'strict-worker-json', 'worker-launch-cli', 'managed-worker-attempt', 'session-attempt', 'worker-health', 'worker-artifacts', 'consecutive-failure-circuit-breaker', 'session-environment', 'launcher-recovery-evidence',
-        'worker-isolation', 'worker-native-sandbox', 'worker-isolation-status', 'worker-retry-evidence', 'worker-termination', 'worker-invocation-processes', 'worker-invocation-ancestry', 'worker-context', 'systemd-client', 'recovery-probe'].map(file => `tools/ralph-external/lib/${file}.mjs`)];
+        'worker-isolation', 'worker-isolation-args', 'worker-unit-cleanup', 'worker-native-sandbox', 'worker-isolation-status', 'worker-retry-evidence', 'worker-termination', 'worker-invocation-processes', 'worker-invocation-ancestry', 'worker-context', 'systemd-client', 'recovery-probe'].map(file => `tools/ralph-external/lib/${file}.mjs`)];
     for (const file of toolFiles) {
       expect(manifest.files.includes('tools/') || manifest.files.includes(file), file).toBe(true);
       if (name === '@aiwg/cli') expect(stagedTools, file).toContain(file);
@@ -50,7 +50,7 @@ describe('T-OG-14 packaged managed one-shot entry point', () => {
     await copyFile(join(source, capabilities), join(root, capabilities));
     // These runtime sources are already ESM; stage their published dist locations without a build.
     for (const file of ['process/signal-child.mjs', 'process/bounded-child-process.mjs', 'models/worker-installation.mjs', 'models/worker-installation-store.mjs', 'models/qualification-digest.mjs',
-      'models/worker-artifact-binding.mjs', 'serve/worker-artifacts.mjs', 'config/dispatch-thresholds-runtime.mjs', 'config/project-artifacts-runtime.mjs']) {
+      'models/worker-artifact-binding.mjs', 'serve/worker-artifacts.mjs', 'config/dispatch-thresholds-runtime.mjs', 'config/host-resource-runtime.mjs', 'config/worker-invocation-marker.mjs', 'config/project-artifacts-runtime.mjs']) {
       await mkdir(dirname(join(root, 'dist/src', file)), { recursive: true });
       await copyFile(join(source, 'src', file), join(root, 'dist/src', file));
     }

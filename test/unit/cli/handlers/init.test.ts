@@ -145,7 +145,7 @@ describe('initHandler', () => {
       expect(cfg!.scripts['doctor']).toBe('aiwg doctor');
       expect(cfg!.scripts['sync']).toBe('aiwg sync');
 
-      const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+      const normalizedPath = join(tmpDir, 'AIWG.md');
       expect(existsSync(normalizedPath)).toBe(true);
       const normalized = readFileSync(normalizedPath, 'utf8');
       expect(normalized).toContain('## Context Finalization');
@@ -170,9 +170,9 @@ describe('initHandler', () => {
         expect(cfg).not.toBeNull();
         expect(cfg!.providers).toEqual(['claude']);
 
-        const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+        const normalizedPath = join(tmpDir, 'AIWG.md');
         expect(existsSync(normalizedPath)).toBe(true);
-        expect(readFileSync(normalizedPath, 'utf8')).toContain('Normalized project context: `.aiwg/AIWG.md`');
+        expect(readFileSync(normalizedPath, 'utf8')).toContain('Generated framework context: `AIWG.md`');
 
         expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
       } finally {
@@ -198,9 +198,9 @@ describe('initHandler', () => {
         expect(cfg).not.toBeNull();
         expect(cfg!.providers).toEqual(['claude']);
 
-        const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+        const normalizedPath = join(tmpDir, 'AIWG.md');
         expect(existsSync(normalizedPath)).toBe(true);
-        expect(readFileSync(normalizedPath, 'utf8')).toContain('Normalized project context: `.aiwg/AIWG.md`');
+        expect(readFileSync(normalizedPath, 'utf8')).toContain('Generated framework context: `AIWG.md`');
 
         expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
       } finally {
@@ -343,16 +343,16 @@ describe('initHandler', () => {
       expect(cfg!.providers).toEqual(['claude']);
     });
 
-    it('repairs missing .aiwg/AIWG.md when config already exists', async () => {
+    it('repairs missing root AIWG.md when config already exists', async () => {
       const { initHandler } = await import('../../../../src/cli/handlers/init.js');
 
       await initHandler.execute(makeCtx(tmpDir, ['--non-interactive']));
-      rmSync(join(tmpDir, '.aiwg', 'AIWG.md'), { force: true });
+      rmSync(join(tmpDir, 'AIWG.md'), { force: true });
 
       const result = await initHandler.execute(makeCtx(tmpDir, ['--non-interactive']));
       expect(result.exitCode).toBe(0);
 
-      const normalizedPath = join(tmpDir, '.aiwg', 'AIWG.md');
+      const normalizedPath = join(tmpDir, 'AIWG.md');
       expect(existsSync(normalizedPath)).toBe(true);
       expect(readFileSync(normalizedPath, 'utf8')).toContain('## Context Finalization');
     });

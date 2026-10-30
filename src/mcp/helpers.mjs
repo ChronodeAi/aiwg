@@ -354,7 +354,7 @@ export function mcpJson(data) {
 /**
  * Read AIWG CLI command registry to build the command-run allow-list.
  *
- * Lazily loaded from `src/extensions/commands/definitions.ts` — extracts
+ * Lazily loaded from `src/extensions/commands/definitions.ts` and its sibling command modules — extracts
  * `id:` fields. Cached after first read.
  */
 let _commandIds = null;
@@ -367,12 +367,22 @@ export async function loadCommandAllowList() {
     path.resolve(process.cwd(), 'src/extensions/commands/definitions.ts'),
   ];
   let text = '';
+  let found = null;
   for (const c of candidates) {
     try {
       text = await fs.readFile(c, 'utf-8');
+      found = c;
       break;
     } catch {
       // try next
+    }
+  }
+  if (text) {
+    // definitions.ts imports command groups from sibling modules (for example daemon.ts);
+    // read each one it imports so their ids are allowed too. A missing sibling is skipped.
+    const dir = path.dirname(found);
+    for (const [, name] of text.matchAll(/from '\.\/([A-Za-z0-9-]+)\.js'/g)) {
+      try { text += '\n' + await fs.readFile(path.join(dir, `${name}.ts`), 'utf-8'); } catch { /* skipped */ }
     }
   }
   if (!text) {

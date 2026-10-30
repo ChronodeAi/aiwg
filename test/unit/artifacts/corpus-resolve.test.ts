@@ -145,7 +145,8 @@ describe('aiwg corpus resolve title matching and findings', () => {
   it('reports every failed ID path even when no title candidate is found', async () => {
     state.errors = { crossref: 404, s2: 503 };
     const result = await cli(['10.1234/missing']);
-    expect(result.exitCode).toBe(3);
+    expect(result.exitCode).toBe(4);
+    expect(result.data!.status).toBe('deferred');
     expect(result.data!.findings).toContainEqual(expect.objectContaining({ type: 'identifier_unresolved', supplied: '10.1234/missing',
       paths: [expect.objectContaining({ source: 'crossref', status: 'empty' }), expect.objectContaining({ source: 'semantic-scholar', status: 'error' })] }));
   });
@@ -234,12 +235,12 @@ describe('aiwg corpus resolve title matching and findings', () => {
     expect(result.data!.input).toBe(input);
   });
 
-  it.each(['http', 'network'])('returns incomplete unresolved with every %s source error recorded', async mode => {
+  it.each(['http', 'network'])('returns retryable deferred with every %s source error recorded', async mode => {
     state.errors = { s2: 429, arxiv: 503, crossref: 503 };
     if (mode === 'network') fetchMock.mockRejectedValue(new TypeError('Synthetic network failure'));
     const result = await cli([title]);
-    expect(result.exitCode).toBe(3);
-    expect(result.data).toMatchObject({ status: 'unresolved', incomplete: true, candidates: [] });
+    expect(result.exitCode).toBe(4);
+    expect(result.data).toMatchObject({ status: 'deferred', incomplete: true, candidates: [] });
     expect(result.data!.paths_tried).toHaveLength(3);
     for (const path of result.data!.paths_tried) expect(path).toMatchObject({ status: 'error', error: expect.any(String), returned: [] });
   });
@@ -247,7 +248,7 @@ describe('aiwg corpus resolve title matching and findings', () => {
   it('rejects direct lookup responses carrying a different identifier', async () => {
     fetchMock.mockImplementation(async input => String(input).includes('semanticscholar')
       ? Response.json(s2Paper({ externalIds: { ArXiv: '2401.99999' } }))
-      : new Response('<feed><entry><id>https://arxiv.org/abs/2401.99999v1</id><title>Wrong work</title></entry></feed>'));
+      : new Response('<feed><entry><id>https://arxiv.org/abs/2401.99999v1</id><title>Wrong work</title><published>2024-01-01</published></entry></feed>'));
     const result = await cli(['2401.12345']);
     expect(result.exitCode).toBe(3);
     expect(result.data!.candidates).toEqual([]);
@@ -272,8 +273,9 @@ describe('aiwg corpus resolve title matching and findings', () => {
     expect(result.data!.incomplete).toBe(false);
     expect(result.data!.paths_tried.every(path => path.status === 'empty')).toBe(true);
     state.errors.s2 = 503;
-    state.crossref = [crossrefPaper()];
-    result = await cli([title]);
+    const distinctiveTitle = `${title} for autonomous navigation`;
+    state.crossref = [crossrefPaper({ title: [distinctiveTitle] })];
+    result = await cli([distinctiveTitle]);
     expect(result.exitCode).toBe(0);
     expect(result.data!.incomplete).toBe(true);
     expect(result.data!.paper!.doi).toBe('10.1234/fixture');

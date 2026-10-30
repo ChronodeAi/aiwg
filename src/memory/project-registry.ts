@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { boundedExecFileSync } from '../process/bounded-child-process.mjs';
@@ -225,9 +225,30 @@ export async function relocateProjectMemory(id: string, newMemoryRoot: string): 
   if (!entry) throw new Error(`No project memory entry with id '${id}'`);
   const oldRoot = entry.memoryRoot;
   const nextRoot = expandUserPath(newMemoryRoot);
-  if (oldRoot !== nextRoot && existsSync(oldRoot) && !existsSync(nextRoot)) {
-    await mkdir(path.dirname(nextRoot), { recursive: true });
-    await rename(oldRoot, nextRoot);
+  if (oldRoot !== nextRoot) {
+    const destination = await lstat(nextRoot).catch(error => {
+      if (error.code === 'ENOENT') return undefined;
+      throw error;
+    });
+    if (destination && (!destination.isDirectory() || (await readdir(nextRoot)).length > 0)) {
+      throw new Error(`Cannot relocate project memory from '${oldRoot}' to '${nextRoot}': destination is not empty`);
+    }
+    if (existsSync(oldRoot)) {
+      const createdParents: string[] = [];
+      try {
+        await createRelocationParents(path.dirname(nextRoot), createdParents);
+        // Rename can replace an empty directory; do not remove it before a move that may fail.
+        await rename(oldRoot, nextRoot);
+      } catch (error) {
+        for (const parent of createdParents.reverse()) {
+          // Never remove contents another writer added, or mask the original move error.
+          await rmdir(parent).catch(() => {});
+        }
+        throw error;
+      }
+    } else {
+      await ensureMemoryLayout(nextRoot);
+    }
   } else {
     await ensureMemoryLayout(nextRoot);
   }
@@ -235,6 +256,20 @@ export async function relocateProjectMemory(id: string, newMemoryRoot: string): 
   entry.updatedAt = new Date().toISOString();
   await writeProjectMemoryManifest(manifest);
   return entry;
+}
+
+// Track only mkdir calls we won, so rollback cannot claim another writer's parents.
+async function createRelocationParents(directory: string, created: string[]): Promise<void> {
+  try {
+    await mkdir(directory);
+    created.push(directory);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') return;
+    if (code !== 'ENOENT') throw error;
+    await createRelocationParents(path.dirname(directory), created);
+    await createRelocationParents(directory, created);
+  }
 }
 
 export async function removeProjectMemory(id: string, opts: { deleteFiles?: boolean } = {}): Promise<ProjectMemoryEntry | null> {

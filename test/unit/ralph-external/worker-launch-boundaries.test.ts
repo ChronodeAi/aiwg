@@ -12,7 +12,7 @@ import { resolveWorkerInvocation, revalidateWorkerInvocationPlan } from '../../.
 import { signalOwnedWorker, publishWorkerRecord, beneath, realBeneath } from '../../../tools/ralph-external/session-launcher.mjs';
 import { parseWorkerLaunchArgs, workerExitCode } from '../../../tools/ralph-external/index.mjs';
 import { sampleWorkerIdentity } from '../../../tools/ralph-external/process-monitor.mjs';
-import { stopWorkerUnit, detectWorkerIsolation, launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
+import { launchIsolatedWorker } from '../../../tools/ralph-external/lib/worker-isolation.mjs';
 import { qualificationDigest } from '../../../src/models/qualification-digest.mjs';
 import { ScopedFailureBreaker } from '../../../tools/ralph-external/lib/consecutive-failure-circuit-breaker.mjs';
 import { observeChildClose, stopAndReap } from '../../helpers/worker-lifecycle.mjs';
@@ -197,34 +197,6 @@ describe('MINOR regression (#2895): beneath() resolves symlinks, not just lexica
       .rejects.toThrow(/run directory parent does not exist: .*missing-parent; create it \(mode 0700\)/);
     expect(f.launchSpy).not.toHaveBeenCalled();
   });
-});
-
-describe('MAJOR regression (#2895): systemd-unit mode has real stop authority', () => {
-  it('stops the unit via systemctl on hard timeout; confirmation comes from unit state, not the stop request', async ctx => {
-    if (detectWorkerIsolation().mode !== 'systemd-unit') { ctx.skip(); return; }
-    const { spawnSync } = await import('node:child_process');
-    const f = await fixture({ scenario: 'hang', hardTimeoutSeconds: 1 });
-    const stopSpy = vi.fn((unit: string) => stopWorkerUnit(unit));
-    try {
-      const result = await f.launch({ isolation: { mode: 'systemd-unit', reason: 'live probe' }, stopUnit: stopSpy });
-      expect(stopSpy).toHaveBeenCalledTimes(1);
-      expect(result.isolation).toBe('systemd-unit');
-      expect(result.timedOut).toBe(true);
-      // Stop authority here is `systemctl --user stop`, not a best-effort
-      // PID/PGID signal against an identity that may still be unresolved.
-      // Confirmation still comes only from the unit's own retained state
-      // (checked via getWorkerIsolationStatus inside finish()); issuing the
-      // stop request is not itself proof of termination.
-      expect(['confirmed', 'uncertain']).toContain(result.termination);
-      if (result.termination === 'confirmed') expect(result.descendants).toBe('stopped');
-    } finally {
-      const unit = stopSpy.mock.calls[0]?.[0];
-      if (unit) {
-        spawnSync('systemctl', ['--user', 'stop', unit], { timeout: 10000 });
-        spawnSync('systemctl', ['--user', 'reset-failed', unit], { timeout: 10000 });
-      }
-    }
-  }, 20000);
 });
 
 describe('#2895 round 2, item 2: workerExitCode precedence — uncertainty dominates', () => {

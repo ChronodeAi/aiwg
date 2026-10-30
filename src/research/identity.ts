@@ -86,8 +86,8 @@ export function normalizeIdentity(value: ResearchIdentity | Record<string, unkno
     ...(arxiv ? { arxivId: arxiv.id, arxivVersion: arxiv.version ?? (typeof fields.arxivVersion === 'number' ? fields.arxivVersion : undefined) } : {}),
     doi: normalizeDoi(str('doi', 'DOI') ?? ''),
     s2PaperId: str('s2PaperId', 's2_paper_id', 'paperId')?.toLowerCase(),
-    openReviewId: str('openReviewId', 'openreview_id'),
-    aclId: str('aclId', 'acl_id'),
+    openReviewId: str('openReviewId', 'openreview_id')?.toLowerCase(),
+    aclId: str('aclId', 'acl_id')?.toLowerCase(),
     title: str('title') ? normalizeTitle(str('title')!) : undefined,
   };
 }
@@ -97,4 +97,41 @@ export function identityKeys(value: ResearchIdentity | Record<string, unknown>):
   const identity = normalizeIdentity(value);
   return (['arxivId', 'doi', 's2PaperId', 'openReviewId', 'aclId', 'title'] as const)
     .flatMap(key => identity[key] ? [`${key}:${identity[key]}`] : []);
+}
+
+/** REF spelling is case-sensitive, including the optional legacy suffix letter. */
+export const REF_ID_SOURCE = 'REF-\\d+[a-zA-Z]?';
+/** Match whole tokens in prose and paths without accepting a malformed ID prefix. */
+export const REF_ID_PATTERN = `(?<![A-Za-z0-9_])${REF_ID_SOURCE}(?![A-Za-z0-9_])`;
+const REF_ID_FULL = new RegExp(`^${REF_ID_SOURCE}$`);
+
+export function refIdsInText(text: string): string[] {
+  return text.match(new RegExp(REF_ID_PATTERN, 'g')) ?? [];
+}
+
+/** Exact lexical REF identity: preserve zero padding and suffix case. */
+export function isRefId(value: string): boolean {
+  return value.trim() === value && REF_ID_FULL.test(value);
+}
+
+/** Read the REF token before a slug or extension; never normalize its spelling. */
+export function refIdFromFilename(filename: string, extension = '.md'): string | null {
+  if (!filename.endsWith(extension)) return null;
+  const stem = filename.slice(0, -extension.length);
+  const slug = stem.indexOf('-', 4);
+  const ref = slug === -1 ? stem : stem.slice(0, slug);
+  return isRefId(ref) ? ref : null;
+}
+
+/** Sort key for REF ids: [numeric, alpha-suffix]. Mirrors build.py ref_sort_key. */
+export function refSortKey(refId: string): [number, string] {
+  const m = isRefId(refId) ? refId.match(/^REF-(\d+)([a-zA-Z]?)$/) : null;
+  return m ? [parseInt(m[1], 10), m[2]] : [999999, refId];
+}
+
+/** Compare two REF ids by (numeric, suffix). */
+export function compareRefId(a: string, b: string): number {
+  const [an, as_] = refSortKey(a);
+  const [bn, bs] = refSortKey(b);
+  return an !== bn ? an - bn : as_ < bs ? -1 : as_ > bs ? 1 : 0;
 }

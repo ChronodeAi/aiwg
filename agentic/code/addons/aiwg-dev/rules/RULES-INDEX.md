@@ -36,7 +36,7 @@ Contributor-focused rules for building AIWG addons, frameworks, skills, agents, 
 **Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/addon-boundaries.md
 
 #### aiwg-dir-reference-contract
-**Summary**: Skills and agents in `agentic/code/` may only `@`-reference `.aiwg/` paths that are normalized — declared in a component's `memory.creates` (Tier 2) or guaranteed by `aiwg init` (Tier 1: `.aiwg/AIWG.md`, `.aiwg/frameworks/registry.json`). Repo-local paths (specific files only in the AIWG dev repo) silently fail in user projects. The contract is manifest-derived: when a new framework creates `.aiwg/` paths, declare them in `memory.creates`. Validate with `grep -rn "@\.aiwg/" agentic/code/` and cross-check against installed manifests.
+**Summary**: Skills and agents in `agentic/code/` may only `@`-reference `.aiwg/` paths that are normalized — declared in a component's `memory.creates` (Tier 2) or guaranteed by `aiwg init` (Tier 1: root `AIWG.md`, `.aiwg/frameworks/registry.json`; `.aiwg/AIWG.md` is optional operator notes only). Repo-local paths (specific files only in the AIWG dev repo) silently fail in user projects. The contract is manifest-derived: when a new framework creates `.aiwg/` paths, declare them in `memory.creates`. Validate with `grep -rn "@\.aiwg/" agentic/code/` and cross-check against installed manifests.
 **When to apply**: Writing skills or agents that reference `.aiwg/` paths, adding a new framework that creates `.aiwg/` artifacts, reviewing distributable skills for link correctness
 **Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/aiwg-dir-reference-contract.md
 

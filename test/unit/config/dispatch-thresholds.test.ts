@@ -22,7 +22,7 @@ describe('dispatch host thresholds config plane (FR-OG-107)', () => {
       { min_avail_mem_gb: 2 },
     );
     expect(merged).toMatchObject({ min_avail_mem_gb: 8, max_load_ratio: 0.5 });
-    expect(merged.max_workers).toBeUndefined();
+    expect(merged.max_workers).toBe(5);
     expect(resolveDispatchHostThresholds(undefined, { max_workers: 3 }).max_workers).toBe(3);
   });
 

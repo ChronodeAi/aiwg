@@ -1,8 +1,13 @@
 // Report offline worker health and declared conductor input protection, without launching tools.
 import path from 'node:path';
 import { importImpl } from '../_resolve-impl.mjs';
+import { collectWrapperEnforcement } from './doctor-wrapper-enforcement.mjs';
+import { wrapperTextFindings } from './doctor-wrapper-text.mjs';
 
 export async function checkWorkerHealthReadiness({ config, configFailed, AIWG_ROOT, cwd, check }) {
+  for (const finding of wrapperTextFindings(await collectWrapperEnforcement({ projectDir: cwd, config, packageRoot: AIWG_ROOT }))) {
+    check(finding.name, finding.status, finding.message);
+  }
   const { validateParallelismConfig } = await importImpl(import.meta.url, 'config/aiwg-config.js');
   let workerSnapshotModels = null;
   let workerSnapshotCatalog = null;

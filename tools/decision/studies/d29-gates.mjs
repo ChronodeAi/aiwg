@@ -1,4 +1,4 @@
-// D29 report evaluation uses verified frozen inputs and independently pinned first-access records.
+// D29 report evaluation uses verified frozen inputs and signed first-access records.
 import { heldoutDigest } from '../../../src/decision/heldout/contract.ts';
 import { buildSdlcScreeningReleaseReport } from '../../../src/decision/sdlc-screening.ts';
 import { qualificationIntegrityAllowlistProblems } from '../../../src/decision/qualification/release.ts';
@@ -20,14 +20,14 @@ const refuse = reason => { throw new Error(`D29 study refused (${reason})`); };
  */
 export function evaluateStudyGates(args) {
   if (Object.hasOwn(args, 'floors')) refuse('project-floors-caller-supplied');
-  const { analysis, frozen, access, trustedAccessDigest, samples, heldout = null, integrity, calibrationAttestation = null, nowEpochMs,
+  const { analysis, frozen, access, trustedAccessDigest, keyring, samples, heldout = null, integrity, calibrationAttestation = null, nowEpochMs,
     projectRoot, requireProjectConfig = false } = args;
   const binding = analysis.gateBinding;
   const records = [...screeningRecords(samples, calibrationAttestation),
     ...d29RecordAttestations({ binding, heldout, nowEpochMs })];
   const metrics = { providers: { [screeningProvider.id]: screeningProvider.compute(records) } };
   return evaluateGatesFromHeldoutFrozen({ binding, registry: gateRegistry(),
-    frozen, analysis, access, trustedAccessDigest,
+    frozen, analysis, access, trustedAccessDigest, keyring,
     metrics, upstream: sealUpstream(integrity), now: new Date(nowEpochMs).toISOString(),
     floors: loadD29ProjectFloors(projectRoot, { requireConfig: requireProjectConfig }) });
 }
@@ -38,7 +38,7 @@ export function evaluateStudyGates(args) {
  * The native release report stays descriptive (v2 preregistration, no NI gate); the
  * preregistered GateBinding decides through `evaluateGates`, and any native
  * fail/insufficient verdict caps the outcome at HOLD (a gate ROLLBACK still
- * rolls back). The frozen bundle and the independently pinned access record are
+ * rolls back). The frozen bundle and the signed, independently pinned access record are
  * verified by `evaluateGatesFromHeldoutFrozen` before evaluation.
  *
  * Non-authoritative inputs: `calibrationAttestation` here is caller-asserted
@@ -50,14 +50,14 @@ export function evaluateStudyGates(args) {
 export function buildReport(args) {
   if (Object.hasOwn(args, 'floors')) refuse('project-floors-caller-supplied');
   const { analysis, trustedAnalysisDigest, heldout, integrity, trustedIntegrityDigest, nowEpochMs,
-    frozen, access, trustedAccessDigest, calibrationAttestation = null, projectRoot, requireProjectConfig = false } = args;
+    frozen, access, trustedAccessDigest, keyring, calibrationAttestation = null, projectRoot, requireProjectConfig = false } = args;
   validateStudyArtifact(analysis);
   if (heldoutDigest(analysis) !== trustedAnalysisDigest || heldoutDigest(integrity) !== trustedIntegrityDigest
     || qualificationIntegrityAllowlistProblems(integrity).includes('integrity-invalid')) refuse('report-anchor');
   const native = buildSdlcScreeningReleaseReport({ preregistration: analysis.native, trustedPreregistrationDigest: heldoutDigest(analysis.native),
     heldout, integrity, nowEpochMs });
   const samples = native.heldout && Array.isArray(heldout?.samples) ? heldout.samples : [];
-  const gateReport = evaluateStudyGates({ analysis, frozen, access, trustedAccessDigest, samples, heldout, integrity, calibrationAttestation, nowEpochMs, projectRoot, requireProjectConfig });
+  const gateReport = evaluateStudyGates({ analysis, frozen, access, trustedAccessDigest, keyring, samples, heldout, integrity, calibrationAttestation, nowEpochMs, projectRoot, requireProjectConfig });
   // The native verdict is descriptive, not a decision: rename it so no reader
   // mistakes it for one. Its digest covered the signed envelope, so it is
   // dropped with the renamed field rather than carried stale.

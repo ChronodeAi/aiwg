@@ -1,3 +1,6 @@
+import { generateKeyPairSync } from 'node:crypto';
+import { LedgerSigningKey } from '../../../src/effects/keys.js';
+import { createGenesisKeyring } from '../../../src/effects/keyring.js';
 import { writeExecutable } from '../../helpers/write-executable.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile, symlink } from 'node:fs/promises';
@@ -56,9 +59,11 @@ async function setup(count = 2) {
     bundle.approval.executionDigest = heldoutExecutionDigest(bundle.corpus, bundle.preregistration, bundle.approval);
   };
   refresh();
+  const signingKey = new LedgerSigningKey(generateKeyPairSync('ed25519').privateKey);
+  const accessSigning = { signingKey, keyring: createGenesisKeyring({ tenant: 'test', project: 'collector', subsystem: 'delivery' }, signingKey, '2026-01-01T00:00:00Z') };
   const run = async (transport: typeof fetch, extra = {}) => {
     refresh(); return collectHeldoutStudy({ enabled: true, bundle, trustedApprovalDigest: heldoutDigest(bundle.approval),
-      artifactRoot: root, sourceRoot: process.cwd(), offline: { transport, host }, ...clock, ...extra });
+      artifactRoot: root, sourceRoot: process.cwd(), offline: { transport, host, accessSigning }, ...clock, ...extra });
   };
   return { root, bundle, host, clock, refresh, run, gold, runDir: join(heldoutRunsRoot(root), bundle.approval.runId) };
 }
@@ -891,7 +896,15 @@ describe('held-out calibration scope and two-phase approval', () => {
     expect(calibrationScore.mock.calls[0][0].corpus.rows.map((r: any) => r.split)).toEqual(['tuning', 'calibration']);
     await testApproval(c, first);
     expect(await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).toMatchObject({ rowsInScope: ['row_2'], maximumAttempts: 2, reservedUsdMicros: 152 });
-    const second: any = await c.run(transport); expect(second).toMatchObject({ completedRows: 1, reservedUsdMicros: 76 });
+    const second: any = await c.run(async (url, init) => {
+      if (study === 'D29') {
+        const access = JSON.parse(await readFile(join(heldoutRunsRoot(c.root), 'test-phase/access.json'), 'utf8'));
+        expect(access).toMatchObject({ schemaVersion: 'decision-d29-access/v2', runId: 'test-phase',
+          analysisDigest: c.bundle.preregistration.studyAnalysisDigest, frozenBundleDigest: heldoutDigest(c.bundle), anchoredAt: seal.sealedAt });
+        expect(access.signature.sig).toBeTruthy();
+      }
+      return transport(url, init);
+    }); expect(second).toMatchObject({ completedRows: 1, reservedUsdMicros: 76 });
     expect(transport).toHaveBeenCalledTimes(3);
     const run = join(heldoutRunsRoot(c.root), 'test-phase'), frozen = JSON.parse(await readFile(join(run, 'frozen.json'), 'utf8'));
     expect(Date.parse(frozen.testPhaseAccessAt)).toBeGreaterThan(Date.parse(seal.sealedAt));

@@ -1,0 +1,31 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`offline doctor wrapper checks > keeps existing JSON worker fields and adds offline wrapper checks without executing a provider 1`] = `
+[
+  {
+    "message": "codex: Tier enforcement (generated wrapper defaults): pinned; effort: pinned via model_reasoning_effort (high/medium/low by wrapper). Native custom subagents carry explicit catalog model selectors. Explicit operator pins are preserved where supported. This is not a live resolved-model audit; provider/account policy may substitute models.",
+    "name": "Wrapper enforcement",
+    "provider": "codex",
+    "status": "info",
+  },
+  {
+    "effortEnforcement": "inherited",
+    "file": ".codex/agents/aiwg-model-coding-worker.toml",
+    "message": "codex aiwg-model-coding-worker: Tier enforcement (deployed wrapper): inherited; effort: inherited. Native custom subagents carry explicit catalog model selectors. Explicit operator pins are preserved where supported. This is not a live resolved-model audit; provider/account policy may substitute models.",
+    "modelEnforcement": "inherited",
+    "name": "Wrapper enforcement",
+    "provider": "codex",
+    "status": "info",
+    "wrapper": "aiwg-model-coding-worker",
+  },
+  {
+    "id": "delegation.unresolved-model",
+    "message": "codex aiwg-model-coding-worker has a placeholder or unresolved model value; run \`aiwg models resolve --agent aiwg-model-coding-worker --provider codex --tier standard\`, then set the concrete model in <project>/.codex/agents/aiwg-model-coding-worker.toml (model).",
+    "name": "delegation.unresolved-model",
+    "provider": "codex",
+    "remediation": "aiwg models resolve --agent aiwg-model-coding-worker --provider codex --tier standard",
+    "status": "warn",
+    "wrapper": "aiwg-model-coding-worker",
+  },
+]
+`;

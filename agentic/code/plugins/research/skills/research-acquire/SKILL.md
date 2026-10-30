@@ -26,7 +26,12 @@ When invoked, perform automated paper acquisition:
    - Continue only on `status: resolved` (exit 0), using canonical metadata and IDs.
      On `ambiguous` (exit 2) or `unresolved` (exit 3), stop acquisition and show every
      candidate, finding and `paths_tried`; request a more specific reference.
-     Never select the first candidate or guess an identifier.
+     On `deferred` (exit 4), the lookup is incomplete and retryable: stop acquisition,
+     show `paths_tried`, and retry later; never treat it as evidence the work is absent.
+     Batches reuse client pacing and retry 429s with backoff and `Retry-After`;
+     their exit code is the worst line (4 > 3 > 2 > 0). Usage errors exit 1.
+     Incomplete short/generic titles stay ambiguous unless an ID verifies them;
+     supply a year, author, or ID. Never select the first candidate or guess an ID.
    - Preserve the original reference and report title mismatch findings for review;
      never silently replace the supplied title. Check `already_in_corpus` and
      `corpus_matches` for the existing REF before assigning a new one.

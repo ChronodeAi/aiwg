@@ -49,6 +49,12 @@ describe('provider definition registry', () => {
     }
   });
 
+  it('declares root AIWG.md for every provider including home-scoped and generic adapters', () => {
+    for (const definition of listProviderDefinitions()) {
+      expect(definition.paths.contextFiles.aiwgMd, definition.id).toBe(true);
+    }
+  });
+
   it('normalizes existing provider aliases through definition data', () => {
     expect(normalizeProviderDefinitionId('claude-code')).toBe('claude');
     expect(normalizeProviderDefinitionId('openai')).toBe('codex');

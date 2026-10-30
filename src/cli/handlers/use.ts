@@ -1716,7 +1716,7 @@ const USE_BOOLEAN_FLAGS = new Set([
   '--no-aiwg-md', '--no-agents-md', '--force-context-files', '--global', '--user',
   '--no-utils', '--ci-hooks-enabled', '--skip-conflicts', '--no-harness-agents',
   '--workspace-signals', '--no-workspace-signals', '--yes', '-y', '--non-interactive',
-  '--allow-over-budget', '--no-hooks', '--enable-cross-provider-hooks',
+  '--allow-over-budget', '--no-hooks', '--no-attribution', '--enable-cross-provider-hooks',
   '--skip-commands-migration', '--listing-budget', '--mcp', '--as-agents-md',
   '--create-agents-md', '--commands-only', '--skills-only', '--rules-only',
   '--save', '--save-user', '--help', '-h',
@@ -1759,11 +1759,12 @@ async function generateDeploymentContextFiles(options: ContextPipelineOptions): 
   return result;
 }
 
-let useDeployment: { resourceCredentials?: Awaited<ReturnType<typeof prepareResourceCredentials>>; version: string; skipContextFiles: boolean; contextFiles: ContextPipelineResult[] } | undefined;
+let useDeployment: { resourceCredentials?: Awaited<ReturnType<typeof prepareResourceCredentials>>; version: string; skipAttribution?: boolean; skipContextFiles: boolean; contextFiles: ContextPipelineResult[] } | undefined;
 function useDeploymentArgs(args: string[]): string[] {
   const forwarded = [...args];
   if (useDeployment && !forwarded.includes('--deploy-version')) forwarded.push('--deploy-version', useDeployment.version);
   if (useDeployment?.skipContextFiles && !forwarded.includes('--no-context-files')) forwarded.push('--no-context-files');
+  if (useDeployment?.skipAttribution && !forwarded.includes('--no-attribution')) forwarded.push('--no-attribution');
   return forwarded;
 }
 function deploymentVersion(root: string): string {
@@ -2654,6 +2655,7 @@ Additional options:
                             Suppress individual context files
   --force-context-files     Replace context files
   --no-hooks                Skip managed hooks
+  --no-attribution          Leave Claude attribution settings untouched
   --enable-cross-provider-hooks
                             Enable cross-provider hooks
   --ci-hooks-enabled        Deploy CI workflows
@@ -2706,6 +2708,7 @@ export class UseHandler implements CommandHandler {
     useDeployment = {
       resourceCredentials,
       version: previousDeployment?.version ?? resolveDeployVersion(ctx.frameworkRoot || await getFrameworkRoot()),
+      skipAttribution: previousDeployment?.skipAttribution || ctx.args.includes('--no-attribution'),
       skipContextFiles: previousDeployment?.skipContextFiles || ctx.args.includes('--no-context-files'),
       contextFiles: previousDeployment?.contextFiles ?? [],
     };
@@ -2859,6 +2862,13 @@ export class UseHandler implements CommandHandler {
             coreResult = { exitCode: 1, message: error instanceof Error ? error.message : String(error) };
             break;
           }
+        }
+      }
+      // Captured deploy passes suppress stderr on success; report operator choices here.
+      if (coreResult.exitCode === 0 && !dryRun && providers.includes('claude') && !useDeployment?.skipAttribution) {
+        for (const root of new Set([projectDir, ...(requestedScope === 'user' ? [os.homedir()] : [])])) {
+          const settings = await installAiwgHooks({ projectPath: root, frameworkRoot, hooks: false, dryRun: true });
+          for (const warning of settings?.warnings || []) originalConsole.warn(`Claude settings: ${warning}`);
         }
       }
       const providerResults = [];
@@ -4400,6 +4410,7 @@ export class UseHandler implements CommandHandler {
         const r = await installAiwgHooks({
           projectPath: target,
           frameworkRoot,
+          attribution: !useDeployment?.skipAttribution && !remainingArgs.includes('--no-attribution'),
           dryRun,
           verbose,
         });
@@ -4538,9 +4549,6 @@ export class UseHandler implements CommandHandler {
         }
         if (verbose && ctxResult.aiwgMdPath) {
           ui.dim(`  Wrote AIWG.md`);
-        }
-        if (verbose && ctxResult.normalizedAiwgMdPath) {
-          ui.dim(`  Wrote .aiwg/AIWG.md`);
         }
         if (verbose && ctxResult.claudeMdHookPath && ctxResult.claudeMdHookAction && ctxResult.claudeMdHookAction !== 'unchanged') {
           // #1437: CLAUDE.md hook for claude provider; mirrors AGENTS.md for other providers.

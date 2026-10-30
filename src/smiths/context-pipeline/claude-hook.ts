@@ -55,7 +55,7 @@ export function buildClaudeHookBlock(_policy: ClaudeArtifactOutputPolicy = {}): 
     '<!--',
     '  This block is managed by `aiwg regenerate` and `aiwg use`.',
     '  Operator content above and below this block is preserved on regenerate.',
-    '  To change AIWG.md content, edit .aiwg/AIWG.md (the normalized source)',
+    '  Edit WORKSPACE.md Project Context or optional .aiwg/AIWG.md operator notes,',
     '  then run `aiwg regenerate`.',
     '-->',
     '',

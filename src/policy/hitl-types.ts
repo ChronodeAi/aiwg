@@ -35,6 +35,9 @@ export interface HitlAction {
   resources: string[];
   reversible: boolean;
   impact: HitlImpact;
+  /** Host identity and SHA-256 of the exact proposed tool input; required for repo.edit. */
+  actor?: string;
+  inputDigest?: string;
 }
 export interface HitlLayer {
   /** Trusted config origin, never issue or model-authored text. Outermost first. */
@@ -56,4 +59,6 @@ export interface HitlResolution {
   policyVersion: string;
   matchedProfile: string | null;
   provenance: 'platform' | 'explicit-deny' | 'session-user' | 'project-policy' | 'default';
+  /** Earliest expiration of the effective grant, fixed when the receipt is issued. */
+  expiresAt?: string;
 }

@@ -28,6 +28,9 @@ import type { ExecutorRegistration } from './executor-registry.js';
 import { StackAdapterRegistry } from './stack-adapters.js';
 import type { GraphExecutionMetadata, GraphRunIdentity } from '../flow/graph-metadata.js';
 import { assertMissionWorkerHandoff } from '../mission-protocol/codecs.js';
+import { lookupEffect, reconcileEffect, recordIntent, type EffectLedger, type EffectReceipt } from '../effects/ledger.js';
+import { createVerifierRegistry } from '../effects/verifiers/registry.js';
+import { fileDigestVerifier } from '../effects/verifiers/file.js';
 
 /** A single worker cycle within a Mission — runs on exactly one stack. */
 export interface WorkerCycle {
@@ -40,6 +43,9 @@ export interface WorkerCycle {
   requiredCapabilities?: string[];
   /** Long-running workers require the `resumable` capability (per ADR §3). */
   longRunning?: boolean;
+  /** The worker's sole effect. The conductor records intent before dispatch and verifies completion.
+   * Host-supplied digests must describe the intended bytes and, for replacement, the pre-write bytes. */
+  fileEffect?: { target: string; payloadDigest: string; previousDigest?: string };
   /** Graph node projection. Present only for GraphPlaybook missions. */
   graph?: Omit<GraphExecutionMetadata, 'schemaVersion' | 'graphId' | 'graphVersion' | 'runId' | 'nodeRunId'> & {
     nodeRunId?: string;
@@ -124,6 +130,8 @@ export interface ConductorOptions {
   scorerId?: string;
   /** Resume from a prior ledger's checkpoint (skip already-completed cycles). */
   resumeFrom?: MissionLedger;
+  /** Host-owned durable ledger for cycles declaring a file effect; its projectDir bounds file reads. */
+  effectLedger?: EffectLedger;
 }
 
 /**
@@ -136,12 +144,14 @@ export class MissionConductor {
   private runWorker?: RunWorker;
   private scoreOutput?: ScoreOutput;
   private scorerId: string | null;
+  private effectLedger?: EffectLedger;
 
   constructor(opts: ConductorOptions = {}) {
     this.adapters = opts.adapters ?? new StackAdapterRegistry();
     this.runWorker = opts.runWorker;
     this.scoreOutput = opts.scoreOutput;
     this.scorerId = opts.scoreOutput ? (opts.scorerId ?? 'custom') : null;
+    this.effectLedger = opts.effectLedger;
   }
 
   /**
@@ -265,10 +275,46 @@ export class MissionConductor {
 
       let output: string | undefined;
       let cost = 0;
+      let reason = routing.selected.matchReason;
       try {
-        const ran = await this.runWorker(cycle, executor, invocation);
-        output = ran.output;
-        cost = ran.cost ?? 0;
+        let intent: EffectReceipt | undefined;
+        let recovered = false;
+        const effects = this.effectLedger;
+        const reconcile = (id: string) => reconcileEffect(effects!, id, {
+          verifiers: createVerifierRegistry([fileDigestVerifier({ root: effects!.projectDir })]),
+          expected: { previousDigest: cycle.fileEffect!.previousDigest ?? null },
+        });
+        if (cycle.fileEffect) {
+          if (!effects) throw new Error('file effect requires a host-configured effect ledger');
+          const { target, payloadDigest, previousDigest } = cycle.fileEffect;
+          intent = await recordIntent(effects, {
+            kind: 'file.digest', target, payloadDigest,
+            context: { missionId: plan.missionId, cycleId: cycle.id,
+              ...(previousDigest === undefined ? {} : { previousDigest }) },
+          });
+          const recorded = await lookupEffect(effects, intent.effectId);
+          if (recorded.tombstoned || recorded.records.some(record => record.phase === 'failed')) {
+            throw new Error(`file effect ${intent.effectId} replay blocked: terminal outcome or tombstone`);
+          }
+          recovered = recorded.records.some(record => record.phase === 'completed');
+          if (!recovered) {
+            const checked = await reconcile(intent.effectId);
+            if (checked.result.verification.result === 'unknown') {
+              throw new Error(`file effect ${intent.effectId} replay blocked: ${checked.result.verification.reason}`);
+            }
+            recovered = checked.completed !== null;
+          }
+          if (recovered) reason = `file effect ${intent.effectId} completed; worker replay skipped`;
+        }
+        if (!recovered) {
+          const ran = await this.runWorker(cycle, executor, invocation);
+          output = ran.output;
+          cost = ran.cost ?? 0;
+          if (intent) {
+            const checked = await reconcile(intent.effectId);
+            if (!checked.completed) throw new Error(`file effect ${intent.effectId} completion unverified: ${checked.result.verification.reason}`);
+          }
+        }
       } catch (err) {
         const result: CycleResult = {
           cycleId: cycle.id,
@@ -292,7 +338,7 @@ export class MissionConductor {
         primitive: adapter.primitive,
         executorId: executor.executorId,
         routed: true,
-        reason: routing.selected.matchReason,
+        reason,
         output,
         cost,
         ...(graph ? { graph } : {}),

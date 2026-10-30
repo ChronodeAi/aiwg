@@ -22,6 +22,7 @@
  * @tests @test/unit/artifacts/citation-parser.test.ts
  */
 
+import { isRefId, REF_ID_PATTERN } from '../research/identity.js';
 import type { TypedEdge } from './types.js';
 import { parseFrontmatter } from './index-builder.js';
 import { CITATION_HEADER_ALIASES, CITATION_SECTION_ALIASES } from './citation-table-schema.js';
@@ -30,14 +31,14 @@ import { CITATION_HEADER_ALIASES, CITATION_SECTION_ALIASES } from './citation-ta
  * Match a single node identifier (REF-* or PROF-*) anywhere in a string.
  * Used by `extractRefsFromTable` to pull every ID out of a table cell.
  */
-const NODE_ID_PATTERN = /(?:REF-\d+[a-z]?|PROF-[POFG]-[a-z0-9-]+)/g;
+const NODE_ID_PATTERN = new RegExp(`(?:${REF_ID_PATTERN}|PROF-[POFG]-[a-z0-9-]+)`, 'g');
 
 /**
  * Validate that a string is a complete node identifier.
  * Used by `parseCitationSidecar` and `buildRefToPathMap` to gate
  * frontmatter `ref` values.
  */
-const NODE_ID_FULL = /^(?:REF-\d+[a-z]?|PROF-[POFG]-[a-z0-9-]+)$/;
+const PROFILE_ID_FULL = /^PROF-[POFG]-[a-z0-9-]+$/;
 
 /** An unnamed resolution cell must contain only one REF, optionally decorated. */
 function standaloneRef(value: string): string | null {
@@ -46,7 +47,7 @@ function standaloneRef(value: string): string | null {
   if (link) text = link[1].trim();
   const code = text.match(/^`([^`]+)`$/);
   if (code) text = code[1].trim();
-  return /^REF-\d+[a-z]?$/.test(text) ? text : null;
+  return isRefId(text) ? text : null;
 }
 
 /** Resolution aliases are shared by every registered bibliographic form. */
@@ -124,7 +125,7 @@ function isNonCitationContext(value: string): boolean {
  * match the four-letter type code form).
  */
 export function isNodeId(value: unknown): value is string {
-  return typeof value === 'string' && NODE_ID_FULL.test(value);
+  return typeof value === 'string' && (isRefId(value) || PROFILE_ID_FULL.test(value));
 }
 
 /**
@@ -262,7 +263,7 @@ export function parseCitationSidecar(content: string): CitationParseResult | nul
 
   // Must have a node identifier in frontmatter (REF-* or PROF-*)
   const ref = typeof data.ref === 'string' ? data.ref : null;
-  if (!ref || !NODE_ID_FULL.test(ref)) return null;
+  if (!ref || !isNodeId(ref)) return null;
 
   // ATX level-two headings allow indentation, tabs and closing hashes.
   const sectionHeading = /^ {0,3}##[ \t]+([^\r\n]+)/m;
@@ -339,7 +340,7 @@ export function buildRefToPathMap(
   const map = new Map<string, string>();
   for (const [filePath, data] of entries) {
     const ref = typeof data.ref === 'string' ? data.ref : null;
-    if (ref && NODE_ID_FULL.test(ref)) {
+    if (ref && isNodeId(ref)) {
       map.set(ref, filePath);
     }
   }

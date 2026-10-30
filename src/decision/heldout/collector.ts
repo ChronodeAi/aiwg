@@ -16,6 +16,7 @@ import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReserva
 import { appendHeldoutSpend, appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
   reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile, validateHeldoutJournal, heldoutCollectionAllowance } from './journal.js';
 import { readHeldoutFrozen, sealHeldoutCalibrationPhase, validateHeldoutPhaseAccess } from './calibration.js';
+import { createHeldoutAccess, type HeldoutAccessSigning } from './access.js';
 import { D17_MULTIFACT_CALIBRATION_NOT_AFTER, usesD17MultifactGenerator } from './study-generators.js';
 import type { AdapterObservation, DecisionAdapter, RulesetResult } from '../types.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutStudyModule, HeldoutSummary } from './types.js';
@@ -24,7 +25,7 @@ interface HeldoutHost { resolveCredential(reference: string): Promise<Uint8Array
 export interface HeldoutOptions {
   enabled?: boolean; bundle: HeldoutBundle; trustedApprovalDigest: Digest; sourceRoot: string; artifactRoot: string;
   /** The only offline seam. Supplying it labels all persisted evidence injected-transport. */
-  offline?: { transport: typeof fetch; host: HeldoutHost };
+  offline?: { transport: typeof fetch; host: HeldoutHost; accessSigning?: HeldoutAccessSigning };
   signal?: AbortSignal; now?: () => number; sleep?: (ms: number) => Promise<void>;
 }
 const byteDigest = (bytes: Uint8Array): Digest => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -89,12 +90,17 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
       }
     }
     const testPhaseAccessAt = a.calibration.mode === 'staged' && a.calibration.phase === 'test' ? new Date(started).toISOString() : null;
-    await validateHeldoutPhaseAccess(bundle, heldoutRunsRoot(options.artifactRoot), prior.runs, testPhaseAccessAt);
+    const accessAnchoredAt = await validateHeldoutPhaseAccess(bundle, heldoutRunsRoot(options.artifactRoot), prior.runs, testPhaseAccessAt);
     if (testPhaseAccessAt !== null) await planHeldoutCollection(bundle, options.trustedApprovalDigest);
     const rows = heldoutRowsInScope(bundle);
     const run = join(heldoutRunsRoot(options.artifactRoot), a.runId);
     await mkdir(run, { mode: 0o700 });
     await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, testPhaseAccessAt, collectionStartedAt: new Date(started).toISOString(), digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
+    if (a.study === 'D29' && testPhaseAccessAt !== null) {
+      if (offline && !offline.accessSigning) throw new HeldoutError('offline-access-signing-required');
+      const access = await createHeldoutAccess(bundle, testPhaseAccessAt, options.sourceRoot, offline?.accessSigning, accessAnchoredAt);
+      await writeHeldoutFile(join(run, 'access.json'), access);
+    }
     const events: HeldoutEvent[] = [];
     const allowance = heldoutCollectionAllowance(a, prior);
     let calls = 0, reserved = 0, accounted = 0, tokens = 0, lastDispatch = started - plan.minDispatchIntervalMs;

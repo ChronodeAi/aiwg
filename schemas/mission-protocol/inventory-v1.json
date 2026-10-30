@@ -1273,7 +1273,11 @@
       "owner": "src/serve",
       "role": "producer-consumer",
       "currentVersion": "graph.flow.aiwg.io/v1",
-      "statusVocabulary": [],
+      "statusVocabulary": [
+        "completed",
+        "failed",
+        "unknown"
+      ],
       "serialization": "typescript/javascript",
       "migrationAction": "adapt",
       "migrationReason": "Legacy or transport-specific shape remains behind the versioned Mission codec adapter during the compatibility window."
@@ -2656,6 +2660,20 @@
         "failed",
         "operator-review-required",
         "pending"
+      ],
+      "serialization": "typescript/javascript",
+      "migrationAction": "retain",
+      "migrationReason": "Compatibility fixture or test remains to prove legacy reads and mixed-version behavior."
+    },
+    {
+      "path": "test/unit/serve/mission-conductor-effects.test.ts",
+      "owner": "test/unit",
+      "role": "fixture-or-test",
+      "currentVersion": "executor.aiwg.io/v1",
+      "statusVocabulary": [
+        "completed",
+        "failed",
+        "unknown"
       ],
       "serialization": "typescript/javascript",
       "migrationAction": "retain",

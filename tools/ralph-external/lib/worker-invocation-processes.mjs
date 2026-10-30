@@ -2,8 +2,9 @@
 import { opendirSync, statSync, openSync, readSync, closeSync, constants } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import { classifyUnreadableWorkerProcess, readProcCgroup } from './worker-invocation-ancestry.mjs';
-
-export const WORKER_INVOCATION_MARKER = 'AIWG_WORKER_INVOCATION_ID';
+import { importImpl } from '../../_resolve-impl.mjs';
+const { WORKER_INVOCATION_MARKER } = await importImpl(import.meta.url, 'config/worker-invocation-marker.mjs');
+export { WORKER_INVOCATION_MARKER };
 
 function startedBeforeWorker(fs, path, startTicks) {
   if (typeof startTicks !== 'string' || !/^\d+$/.test(startTicks)) return false;

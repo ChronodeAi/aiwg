@@ -457,6 +457,7 @@ export function parseArgs(args = process.argv.slice(2)) {
     // managed-hooks opt-out (default on, mirroring the Claude autoInstall policy).
     else if (a === '--mcp') cfg.mcp = true;
     else if (a === '--no-hooks') cfg.hooks = false;
+    else if (a === '--no-attribution') cfg.attribution = false;
     else if (a === '--no-context-files') cfg.contextFiles = false;
     else if (a === '--deploy-source' && args[i + 1]) cfg.deploySource = String(args[++i]);
     else if (a === '--listing-budget') cfg.listingBudget = true;
@@ -506,6 +507,7 @@ Options:
                            mcp_servers; default off)
   --no-hooks               Muse provider: skip managed project hooks
                            (.muse/hooks.json; installed by default)
+  --no-attribution         Claude provider: leave attribution settings untouched
   --as-agents-md               Aggregate to single AGENTS.md (Codex)
   --create-agents-md           Create/update AGENTS.md template
   --no-context-files           Preserve WORKSPACE.md, AIWG.md and AGENTS.md (including managed blocks)
@@ -962,6 +964,7 @@ export async function main(args = process.argv.slice(2), internal = {}) {
     // #228: Muse provider hooks/MCP profile surface.
     mcp: cfg.mcp === true,
     hooks: cfg.hooks !== false,
+    attribution: cfg.attribution !== false,
     listingBudget: cfg.listingBudget === true,
     deployVersion: resolveDeployVersion(resolveAiwgRoot(srcRoot) || srcRoot, cfg.deployVersion),
     deploySource: cfg.deploySource || 'bundled',
@@ -1013,6 +1016,13 @@ export async function main(args = process.argv.slice(2), internal = {}) {
       } else await provider.deploy(opts);
     }
     if (preparationActive) return;
+
+    // User settings are outside staging: write only after a real promotion.
+    if (provider.name === 'claude' && cfg.userScope && !cfg.dryRun && cfg.attribution !== false) {
+      const { installAiwgHooks } = await importImpl(import.meta.url, 'extensions/claude-hooks-installer.js');
+      const result = await installAiwgHooks({ projectPath: os.homedir(), frameworkRoot: srcRoot, hooks: false });
+      for (const warning of result?.warnings || []) console.warn(`Claude settings: ${warning}`);
+    }
 
     const mirroredCommandCount = mirrorSkillsAsCommands(provider, cfg.target, srcRoot, opts);
     if (mirroredCommandCount > 0 && !cfg.quiet) {

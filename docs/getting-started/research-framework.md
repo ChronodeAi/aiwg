@@ -9,6 +9,8 @@ The research framework handles the mechanical parts: discovery, acquisition,
 source-grounded notes, citation management, quality assessment, and archive
 organization. You remain responsible for interpretation and final synthesis.
 
+Each section below starts with what you can ask your assistant, then gives the command reference. Every command is kept exactly as shipped.
+
 ---
 
 ## Before You Start
@@ -35,6 +37,16 @@ Each stage has dedicated commands. Run them in sequence or jump to wherever you 
 
 ## Finding papers
 
+> "Find papers on transformer attention mechanisms. Return a prioritized list and tell me what is missing from my corpus."
+
+Your assistant searches configured academic sources, ranks results by relevance and available metadata, and returns a prioritized list. The `discovery-agent` can compare the query with your existing corpus and surface likely gaps.
+
+> "Limit it to open-access papers since 2023 and re-rank."
+
+Your assistant re-runs the same search against the narrower scope.
+
+### Command reference — finding papers
+
 ```bash
 /research-discover "transformer attention mechanisms" --limit 20
 ```
@@ -53,6 +65,12 @@ Filter by recency, citation count, or open access:
 
 ## Acquiring papers
 
+> "Acquire the papers from the last result set into papers/. Flag anything paywalled instead of skipping it."
+
+Your assistant downloads PDFs with Unpaywall integration for open-access versions, extracts metadata, validates against FAIR principles, and assigns persistent `REF-XXX` identifiers so later notes can refer back to stored sources.
+
+### Command reference — acquiring papers
+
 ```bash
 /research-acquire --from-results last --output papers/
 ```
@@ -64,6 +82,12 @@ identifiers so later notes can refer back to stored sources.
 ---
 
 ## Documenting papers
+
+> "Document this paper from its PDF content and save a literature note I can cite later."
+
+Your assistant uses RAG-based summarization against the actual PDF content — not from training data.
+
+### Command reference — documenting papers
 
 ```bash
 /research-document papers/attention-is-all-you-need.pdf
@@ -84,11 +108,27 @@ source text stored in the corpus.
 
 ## Citation management
 
+> "What paper does this reference mean: Vaswani et al. 2017, Attention Is All You Need? Resolve it against my corpus and do not guess."
+
+Your assistant runs `aiwg corpus resolve` against stored sources. It reports ambiguous or unresolved instead of guessing.
+
+> "Cite REF-042 in APA and check the citations in my draft for accuracy."
+
+Your assistant generates the citation from stored metadata and flags anything that does not match.
+
+### Command reference — citation management
+
 ```bash
 /research-cite REF-042 --style apa
 ```
 
 Generates properly formatted citations in 9,000+ styles from stored metadata. No manual formatting.
+
+```bash
+aiwg corpus resolve "Vaswani et al. 2017, Attention Is All You Need" --json
+```
+
+Resolves one quoted reference (title, URL, arXiv ID, DOI, or bibliography line) with optional `--year YYYY` and `--json`. Exit codes: 0 resolved, 2 ambiguous, 3 unresolved, 1 usage error. Ambiguous or unresolved results need review instead of guessing.
 
 Check all citations in a document for accuracy:
 
@@ -104,11 +144,17 @@ misattributions, and unsupported page references.
 
 ## Quality assessment
 
+> "Assess the evidence quality of REF-042 and tell me how to hedge the citation if it is weak."
+
+Your assistant produces a GRADE assessment with justification and hedging language.
+
 Every paper gets a GRADE score (Grading of Recommendations, Assessment, Development and Evaluations):
 
 - **High**: Systematic reviews, RCTs, large cohort studies
 - **Moderate**: Smaller controlled studies, consistent observational evidence
 - **Low**: Case reports, expert opinion, early-stage findings
+
+### Command reference — quality assessment
 
 ```bash
 /quality-assess REF-042
@@ -120,6 +166,12 @@ When you cite low-quality sources, the framework flags it and suggests appropria
 
 ## Corpus health
 
+> "How healthy is my corpus? Show me coverage, quality, and what needs verification."
+
+Your assistant shows corpus statistics: total papers, quality distribution, coverage by topic, papers with incomplete metadata, and citations that need verification.
+
+### Command reference — corpus health
+
 ```bash
 /research-status
 ```
@@ -130,15 +182,37 @@ Shows corpus statistics: total papers, quality distribution, coverage by topic, 
 
 ## Finding gaps
 
+> "Find papers similar to my recent corpus entries on transformer fine-tuning. Preview the plan first and write nothing yet."
+
+Your assistant runs `aiwg corpus expand` as a dry run. It needs a scope (`--seeds`, `--since`, or `--all`) and writes nothing unless you pass `--write`.
+
+> "What is missing from my corpus on transformer fine-tuning approaches?"
+
+Your assistant analyzes your corpus against the query topic to identify what's missing.
+
+### Command reference — finding gaps
+
 ```bash
 /research-gap "transformer fine-tuning approaches"
 ```
 
 Analyzes your corpus against the query topic to identify what's missing — research questions that aren't answered by what you have, contradictions between sources that need resolution, and time periods with thin coverage.
 
+```bash
+aiwg corpus expand --since 2024-01-01 --per-seed 20 --min-year 2018
+```
+
+Previews similar-paper expansion without writing. A scope (`--seeds REF-0001,REF-0002`, `--since YYYY-MM-DD`, or `--all`) is required. The default is a dry run; add `--write` to save results. Other flags: `--from recent|all-cs`, `--reexplore-after 180d`, `--max-seeds N`, `--overlap`, `--json`.
+
 ---
 
 ## Synthesizing knowledge
+
+> "Synthesize what my corpus says about attention mechanisms, with agreements and contradictions I should review."
+
+Your assistant produces a synthesis note connecting related papers in your corpus.
+
+### Command reference — synthesizing
 
 ```bash
 /research-document --synthesize "attention mechanisms"
@@ -149,6 +223,12 @@ Produces a synthesis note connecting related papers in your corpus — agreement
 ---
 
 ## Archiving the corpus
+
+> "Archive my corpus with integrity verification so someone else can reconstruct the research process."
+
+Your assistant packages the research corpus following OAIS standards.
+
+### Command reference — archiving
 
 ```bash
 /research-archive --verify-integrity

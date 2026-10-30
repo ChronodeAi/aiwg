@@ -1,4 +1,5 @@
 /** Stop authority and bounded termination proof for MCP stdout overflow. */
+import { recordWorkerUnitStop, readRecordedWorkerUnitStop } from './worker-unit-cleanup.mjs';
 import { importImpl } from '../../_resolve-impl.mjs';
 import { getWorkerIsolationStatus, killWorkerUnit, stopWorkerUnit } from './worker-isolation.mjs';
 import { signalOwnedWorker } from '../session-launcher.mjs';
@@ -21,11 +22,13 @@ export async function stopOverflowWorker(launch, {
   // Kill and stop are one unit-stop authority: a caller that substitutes the stop
   // also controls the kill, so the real systemctl never bypasses it.
   stopUnit = stopWorkerUnit, killUnit = stopUnit === stopWorkerUnit ? killWorkerUnit : () => ({ ok: false }),
-  unitStatus = getWorkerIsolationStatus,
+  unitStatus = getWorkerIsolationStatus, recordUnitResult = recordWorkerUnitStop,
   sample = sampleWorkerIdentity, children = sampleWorkerChildren, platform = process.platform,
   signal = signalOwnedWorker, killPid = (pid, sig) => process.kill(pid, sig),
   clock = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
+  const recorded = readRecordedWorkerUnitStop(launch);
+  if (recorded) return recorded;
   let delivered = false;
   const uncertain = diagnostic => ({ termination: 'uncertain', diagnostic, delivered });
   const deadline = clock() + deadlineMs;
@@ -76,7 +79,12 @@ export async function stopOverflowWorker(launch, {
     return uncertain('OG_WORKER_MCP_STOP_UNCONFIRMED');
   }
   for (;;) {
-    try { if (!unitStatus(launch.unit, { timeoutMs: remaining() }).active) return { termination: 'confirmed', delivered, ...(diagnostic ? { diagnostic } : {}) }; }
+    const recorded = readRecordedWorkerUnitStop(launch);
+    if (recorded) return recorded;
+    try {
+      const native = unitStatus(launch.unit, { timeoutMs: remaining() });
+      if (!native.active) return recordUnitResult(launch, native, { termination: 'confirmed', delivered, ...(diagnostic ? { diagnostic } : {}) });
+    }
     catch { /* Retry unavailable/transient unit state until the deadline. */ }
     if (clock() >= deadline) break;
     await sleep(Math.min(pollIntervalMs, deadline - clock()));

@@ -226,11 +226,10 @@ skill or the same composer; they may not jump directly to a tracker create API.
 
 ### Step 6: HITL checkpoint before each write
 
-Build the six-field descriptor from the resolved backend's actual pending
-effects, never from the draft body, composition output, or model claims:
+Build the descriptor from the resolved backend's actual pending effects, never from the draft body, composition output, or model claims:
 category, resolved repo, execution environment, every affected repo-relative
 path, reversibility, and impact. Local file creation with a complete rollback
-is `repo.edit`; remote tracker creation/cross-links are `tracker.write` and
+is `repo.edit`: include the real host `actor` and `inputDigest` (SHA-256 of the exact serialized pending tool name and all input fields, including every file byte); remote tracker creation/cross-links are `tracker.write` and
 remain subject to explicit review. Include index/metadata writes and sibling
 links; do not describe remote writes as local file edits. Policy-preflight
 exceptions are `threat.override`, which cannot be auto-authorized.

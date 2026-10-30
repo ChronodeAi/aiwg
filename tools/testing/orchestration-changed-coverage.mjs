@@ -32,6 +32,8 @@ export const REPORT_PARENT = 'test-results/orchestration-changed-coverage';
 
 export function classifyChangedFile(file) {
   const normalized = String(file).replace(/\\/g, '/').replace(/^\.\//, '');
+  // Declarations have no executable lines; V8 cannot parse them as JavaScript.
+  if (/\.d\.[cm]?ts$/.test(normalized)) return null;
   if (normalized.split('/').includes('..')) return null;
   if (![...SOURCE_EXTENSIONS].some(extension => normalized.endsWith(extension))) return null;
   if (/(^|\/)(test|tests|__tests__)\//.test(normalized)

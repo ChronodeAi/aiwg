@@ -4020,13 +4020,13 @@
   },
   "hardCapUsd": 6,
   "stopAtUsd": 4.8,
-  "preregistrationDigest": "sha256:d1555c216a5392b03803b7a7d351a36e0285aaee8901a7b4f0ca9e3e4ec3823a",
+  "preregistrationDigest": "sha256:64217c15c2e03af2b63a5befae3a54baaec4d19472f052a28b4ece43348886ff",
   "analysisDigest": "sha256:7ef2da199a5e614a4e4591cbfd23c44abe0687e6d6a851ba1233686214cfb383",
   "corpusDigest": "sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de",
   "goldDigest": "sha256:b175f64db211e5710c3fff11efa479f4797cf631a96913f3a65da366bd70044e",
   "generatorDigest": "sha256:eb11b1ae0c91cb285c8ee2bde5a5cd3d08deace0b03d706185ffc6409f7df6a1",
-  "scorerDigest": "sha256:90f899c3e6c02ae1107fef81ba2ff3992a5c3377a15c1e08ae2fb3e1b144fa49",
-  "approvalTemplateDigest": "sha256:f25218279f24ce4aa50a1a11c07e1366e0ed0cbb4e9cd8706e1d13973b396c60",
+  "scorerDigest": "sha256:fc1a79a7189380a2a4f3c204f19f6fc603f6dffd2c1f8aba0650ba2d129598dd",
+  "approvalTemplateDigest": "sha256:1abe6eec2b41c37bd3e44fbd5136e92d88dad6ba1911e85cd2899ca3a26d1ec8",
   "splitDigests": [
     {
       "name": "tuning",

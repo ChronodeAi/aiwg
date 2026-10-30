@@ -6,6 +6,7 @@
 
 import { promises as fs } from 'fs';
 
+import { isRefId, refIdFromFilename } from '../identity.js';
 import { ResearchPaper } from '../types.js';
 import { CitationStyle, CitationNetwork } from './types.js';
 
@@ -55,11 +56,12 @@ export class CitationService {
    * Validate that a citation exists in corpus
    */
   async validateCitation(refId: string, corpusPath?: string): Promise<boolean> {
+    if (!isRefId(refId)) return false;
     const path = corpusPath || this.corpusPath;
 
     try {
-      const files = await fs.readdir(path);
-      return files.some((file) => file.startsWith(refId));
+      const files = await fs.readdir(path, { withFileTypes: true });
+      return files.some((file) => file.isFile() && refIdFromFilename(file.name) === refId);
     } catch (error) {
       return false;
     }

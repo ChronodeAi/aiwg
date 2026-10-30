@@ -38,7 +38,7 @@ paths:
 
 ## Overview
 
-Skills and agents in `agentic/code/` may reference `.aiwg/` paths — this is a feature, not a problem. When a skill references `.aiwg/requirements/` or `.aiwg/AIWG.md`, it gains project-specific context when deployed to any user project. **The constraint is that only normalized paths may be referenced** — paths guaranteed to exist after `aiwg init` or framework deployment.
+Skills and agents in `agentic/code/` may reference `.aiwg/` paths — this is a feature, not a problem. When a skill references `.aiwg/requirements/` or root `AIWG.md`, it gains project-specific context when deployed to any user project. **The constraint is that only normalized paths may be referenced** — paths guaranteed to exist after `aiwg init` or framework deployment.
 
 The normalized contract is **manifest-derived**: each framework and addon declares its `.aiwg/` footprint in `memory.creates`. The allowlist is computed from those declarations, not maintained as a static document.
 
@@ -48,7 +48,7 @@ These paths exist in every AIWG project, regardless of which frameworks are inst
 
 | Path | Created by | Purpose |
 |------|-----------|---------|
-| `.aiwg/AIWG.md` | `aiwg init` | Project context entry point — phase, architecture summary, installed frameworks |
+| `AIWG.md` (root) | `aiwg init` | Single generated framework context; `.aiwg/AIWG.md` is optional operator notes only |
 | `.aiwg/frameworks/registry.json` | `aiwg use <framework>` | Installed framework registry |
 
 ## Tier 2: Framework-Specific (present when framework deployed)

@@ -6,4 +6,3 @@ applies-to:
   glob: "{findings,documentation/references}/REF-*.md"
 checks:
   - type: cross-ref-bidirectional
-    referencePattern: "REF-\\d{3}"

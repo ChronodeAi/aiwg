@@ -118,7 +118,9 @@ export function deployExtensionBridge(targetDir, opts) {
   if (!fs.existsSync(source)) return 0;
   const destination = path.join(targetDir, '.pi/extensions');
   ensureDir(destination, opts.dryRun);
-  return deployFiles([source], destination, opts);
+  const loader = new URL('../../providers/pi-bridge-policy.mjs', import.meta.url).href;
+  return deployFiles([source], destination, opts, (_file, content) =>
+    content.replace("'../../../../tools/providers/pi-bridge-policy.mjs'", JSON.stringify(loader)));
 }
 
 export function createAgentsMd(target, srcRoot, dryRun) {

@@ -12,11 +12,13 @@ import {
 } from '../contracts.js';
 import { readBoundedText, type ReaderLimits } from '../readers.js';
 import {
+  assertGrokBuildNativeEnabled,
   discoverGrokBuildNativeChatHistories,
   GROK_BUILD_NATIVE_DISCOVERY_MAX_FILES,
   GROK_BUILD_NATIVE_LOCATOR_CLASS,
   GROK_BUILD_NATIVE_SCHEMA_VERSION,
   grokBuildNativeSessionId,
+  grokBuildNativeEnabled,
   parseGrokBuildNativeCursor,
   readGrokBuildNativeChatHistory,
   toGrokBuildNativeRecord,
@@ -33,20 +35,24 @@ interface ExportBlock {
 
 /**
  * Imports the documented `grok export <session-id> <file>` surface plus the
- * native `chat_history.jsonl` store under an explicitly authorized
- * sessions root (`--grok-root`).
+ * experimental native `chat_history.jsonl` store with an explicit environment
+ * opt-in and an explicitly authorized sessions root (`--grok-root`).
  *
  * The public export contract is intentionally lossy. Native reads use the
  * synthetic v1 schema in grok-build-native.ts (real stores were never
- * inspected); anything outside it fails closed. AIWG never runs
- * `grok export` itself: export remains an operator-selected fallback.
+ * inspected); anything outside it fails closed. This adapter never invokes
+ * `grok export` automatically: CLI export remains operator-selected.
  */
 export class GrokBuildSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'grok-build' as const;
   readonly adapterVersion = GROK_BUILD_ADAPTER_VERSION;
   readonly disposition = 'implemented' as const;
-  readonly supportedOperations = ['discover', 'inspect', 'stream'] as const;
-  readonly acquisitionModes = ['manual-export', 'jsonl'] as const;
+  get supportedOperations() {
+    return grokBuildNativeEnabled() ? ['discover', 'inspect', 'stream'] as const : ['inspect', 'stream'] as const;
+  }
+  get acquisitionModes() {
+    return grokBuildNativeEnabled() ? ['manual-export', 'jsonl'] as const : ['manual-export'] as const;
+  }
 
   constructor(
     private readonly limits?: Partial<ReaderLimits>,
@@ -54,6 +60,7 @@ export class GrokBuildSessionAdapter implements SessionSourceAdapter {
   ) {}
 
   async *discover(scope: AuthorizedScope): AsyncIterable<SourceDescriptor> {
+    assertGrokBuildNativeEnabled();
     if (scope.allowedRoots.length === 0) {
       throw new SessionContractError(
         'SOURCE_NOT_AUTHORIZED',
@@ -84,6 +91,8 @@ export class GrokBuildSessionAdapter implements SessionSourceAdapter {
 
   async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
     if (source.locatorClass === GROK_BUILD_NATIVE_LOCATOR_CLASS) {
+      // The experimental gate answers first, so a disabled gate never reports a locator error.
+      assertGrokBuildNativeEnabled();
       const sessionId = grokBuildNativeSessionId(source.locator);
       if (!sessionId) {
         throw new SessionContractError(

@@ -1,6 +1,9 @@
 # Daemon Mode Guide
 
-AIWG daemon mode runs a persistent background process that monitors your project, executes automated tasks, supervises AI agent sessions, and coordinates multi-agent orchestration. It extends the agent loop pattern into always-on autonomous project supervision — from a local background helper to a distributed orchestration node managing sandbox sessions.
+> "Start the daemon for this project and show me it's healthy."
+> "Run the overnight security scan and queue a task to fix what it finds."
+
+Your assistant starts and supervises the persistent AIWG daemon for the project: lifecycle, agent tasks, schedules, memory, behaviors, and remote-operation surfaces. Every command below is on the real `aiwg daemon` surface (`tools/daemon/index.mjs`); related surfaces are `aiwg housekeeper`, `aiwg behavior`, and `aiwg daemon-init`.
 
 ## Overview
 
@@ -19,6 +22,222 @@ The daemon provides:
 - **2-way AI chat** — Ask questions from messaging platforms
 - **Headless operation** — Runs inside agentic-sandbox containers without a display server
 
+## Daemon vs housekeeper
+
+> "Should this job run on the daemon or the housekeeper?"
+
+Your assistant routes conversational, agent-driven work to the daemon and deterministic maintenance to the housekeeper, and explains the boundary in one sentence.
+
+`aiwg housekeeper` is the deterministic maintenance profile of the same daemon. It reuses the daemon binary (`tools/daemon/daemon-main.mjs`) but loads only the scheduler, file watcher, and minimal IPC — it never constructs the agent supervisor, behaviors, messaging, or web server, and it runs zero model calls. The default profile runs the conversational daemon described in this guide. Full boundary: [housekeeper daemon reuse boundary](architecture/housekeeper-daemon-boundary.md) and the [Housekeeper operator guide](housekeeper-operator-guide.md).
+
+| Profile | Command | Runs |
+|---|---|---|
+| Conversational daemon (default) | `aiwg daemon start` | Agent tasks, chat, behaviors, automation, messaging |
+| Deterministic maintenance | `aiwg housekeeper start` | Cron-scheduled owner operations with persisted receipts |
+
+## Quick Start
+
+> "Start the daemon and queue a task to fix the failing auth tests."
+
+Your assistant starts the daemon, checks its status, and submits the task to the agent supervisor.
+
+### Command reference
+
+```bash
+aiwg daemon start
+aiwg daemon status
+aiwg daemon task submit "Fix the failing tests in auth module"
+aiwg daemon stop
+```
+
+The daemon detaches from the terminal and runs in the background. State is stored in `.aiwg/daemon/`. `status` queries the live daemon over IPC when it is running. `stop` sends SIGTERM for graceful shutdown.
+
+## Initialize from a profile
+
+> "Set up the daemon config for this project from the default profile."
+
+Your assistant initializes the daemon config from a profile template.
+
+### Command reference
+
+```bash
+aiwg daemon init                     # manager profile → .aiwg/daemon.yaml
+aiwg daemon init list                # list available profiles
+aiwg daemon init manager --force     # overwrite the existing config
+```
+
+`aiwg daemon-init` is the same operation under its handler name (`src/cli/handlers/daemon.ts` → `tools/daemon/init-profile.mjs`). It writes `.aiwg/daemon.yaml` plus a `.env.example` template when none exists. The daemon reads `.aiwg/daemon.yaml` first, then `.aiwg/daemon.json`, then built-in defaults.
+
+## Lifecycle
+
+> "Restart the daemon and tail its logs while it comes up."
+
+Your assistant restarts the daemon and streams the log.
+
+### Command reference
+
+```bash
+aiwg daemon start                    # detached background process
+aiwg daemon start --foreground       # foreground (Docker/systemd)
+aiwg daemon start --docker           # start inside a Docker container
+aiwg daemon stop
+aiwg daemon restart
+aiwg daemon status                   # live via IPC, state-file fallback
+aiwg daemon logs --lines 100
+aiwg daemon logs --follow            # or: aiwg daemon logs -f
+aiwg daemon attach                   # open the aiwg-daemon tmux session
+aiwg daemon attach --readonly        # observe without sending input
+```
+
+`attach` creates the `aiwg-daemon` tmux session (chat REPL plus status pane) when none exists, starting the daemon first when it is stopped. There is no `start --tmux` flag: tmux handling lives in `attach`.
+
+## Agent tasks
+
+> "Submit a high-priority task to refactor the user module, then list what's running."
+
+Your assistant submits the task with a priority and lists tasks filtered by state.
+
+### Command reference
+
+```bash
+aiwg daemon task submit "Refactor the user module to use dependency injection"
+aiwg daemon task submit "Fix critical security bug" --priority 10 --agent claude-code
+aiwg daemon task list
+aiwg daemon task list --state running --limit 20
+aiwg daemon task get <task-id>
+aiwg daemon task cancel <task-id>
+aiwg daemon task stats
+```
+
+### How Tasks Work
+
+1. A task is submitted (via CLI, automation rule, or messaging command)
+2. The task enters the queue with its priority
+3. When a slot is available (under `max_parallel_actions`), the supervisor spawns a `claude -p` process
+4. The process runs in the project directory with full CLAUDE.md context
+5. On completion, the result is stored in the task store
+6. Events are emitted: `task:started`, `task:completed`, `task:failed`, `task:timeout`
+
+### Task States
+
+| State | Description |
+|-------|-------------|
+| `queued` | Waiting for an available slot |
+| `running` | `claude -p` process is active |
+| `completed` | Process exited successfully |
+| `failed` | Process exited with error |
+| `cancelled` | Cancelled by user or system |
+| `timeout` | Exceeded `action_timeout_minutes` |
+
+Tasks run in priority order (higher first); equal priorities run FIFO.
+
+### Concurrency
+
+`max_parallel_actions` controls how many tasks run simultaneously (default 3). Each running task is a separate child process running `claude -p`.
+
+| Priority | Use Case | Example |
+|----------|----------|---------|
+| 10 | Critical security issues | Secret scanning |
+| 5 | Important but not urgent | Nightly backups |
+| 0 (default) | Normal development tasks | Test runs |
+| -5 | Low priority background tasks | Documentation updates |
+
+## Chat
+
+> "Ask the daemon what our current test coverage is."
+
+Your assistant sends the message through the running daemon, which handles it as an agent task.
+
+### Command reference
+
+```bash
+aiwg daemon chat "What is our current test coverage?"
+```
+
+`chat` requires the daemon to be running and takes the message as its argument. For an interactive session, use `aiwg daemon attach`, which opens the tmux session with a chat REPL pane.
+
+## Schedules and one-shot runs
+
+> "Show the scheduled jobs, then run the nightly audit once without starting the daemon."
+
+Your assistant shows scheduler status, then runs one deterministic maintenance job directly.
+
+### Command reference
+
+```bash
+aiwg daemon schedule
+aiwg daemon schedule --run-once --job <job-id>
+aiwg daemon schedule --run-once --job <job-id> --json
+aiwg daemon schedule --run-once --job <job-id> --fire-time <iso> --config PATH --store-path PATH
+aiwg daemon schedule --run-once --job <job-id> --resolve "inspected; <what you found>"
+```
+
+`schedule` with no flags reports scheduler state and job history from the live daemon. `--run-once` executes exactly one configured deterministic maintenance job with no daemon, watcher, or IPC server; `--json` prints a single receipt object; `--resolve` acknowledges an inspected interrupted run without replaying it. Scheduled updates check only; installation stays opt-in via `aiwg update`. Manual execution is supported on Linux/macOS; on Windows use WSL2.
+
+## Memory
+
+> "Show me what the daemon remembers, then clear the session memory."
+
+Your assistant shows memory contents and clears the requested scope.
+
+### Command reference
+
+```bash
+aiwg daemon memory show
+aiwg daemon memory show --scope user
+aiwg daemon memory clear --scope session
+aiwg daemon memory clear --scope project
+```
+
+Scopes are `session`, `project`, and `user`. `clear` requires `--scope`. When the daemon is running, both subcommands go over IPC; otherwise they read the memory files directly.
+
+## Autonomous mode
+
+> "Check whether autonomous mode is on, and turn it off."
+
+Your assistant queries autonomous state and disables it.
+
+### Command reference
+
+```bash
+aiwg daemon autonomous status
+aiwg daemon autonomous enable
+aiwg daemon autonomous disable
+```
+
+With no subcommand, `autonomous` reports status. Status shows running state, daily task count and spend against budget, pending proposals, approval requirements, and allowed actions.
+
+## Messaging rooms
+
+> "List the messaging rooms the daemon is connected to."
+
+Your assistant lists connected rooms grouped by platform.
+
+### Command reference
+
+```bash
+aiwg daemon rooms
+```
+
+Output shows total rooms, task bindings, and per-platform room labels, purposes, and default markers. Room wiring itself lives in the daemon config; see the [Messaging Guide](messaging-guide.md).
+
+## Behaviors
+
+> "List the available behaviors and apply the security sentinel to the daemon."
+
+Your assistant lists behaviors, shows details, and applies the chosen one.
+
+### Command reference
+
+```bash
+aiwg behavior list
+aiwg behavior info security-sentinel
+aiwg behavior apply security-sentinel
+aiwg behavior remove security-sentinel
+```
+
+Behaviors are YAML bundles binding directives and toolsets to agent types. `list` and `info` work offline; `apply` and `remove` call the live daemon over IPC. Full format: [Behaviors Guide](behaviors-guide.md).
+
 ## Platform Support
 
 The daemon runs on any CLI-based platform. Platforms are grouped into three tiers:
@@ -29,35 +248,39 @@ The daemon runs on any CLI-based platform. Platforms are grouped into three tier
 | **Tier 2 — PTY Adapter** | Platform has a TUI that can be bridged over a PTY. Not headless natively, but operable remotely via `aiwg daemon pty`. | Claude Code (secondary), Codex (secondary) |
 | **Tier 3 — IDE-hosted** | Runs as an extension inside a desktop IDE process that requires a display server. No standalone CLI process to bridge or supervise. Can *connect to* a daemon over HTTP/WS but cannot *host* one. | Cursor, Windsurf, GitHub Copilot |
 
-Tier 1 platforms receive the full daemon feature set: file watching, cron scheduling, agent supervision, PTY orchestration, IPC, automation rules, and behaviors. Factory AI's `droid exec` provides headless one-shot execution; the AIWG daemon wraps it with persistence, scheduling, and multi-session coordination. Tier 3 platforms still benefit from AIWG's agent loop, Mission Control, and scheduling via AIWG emulation — they connect to a daemon running elsewhere rather than hosting one locally.
+Tier 1 platforms receive the full daemon feature set: file watching, cron scheduling, agent supervision, PTY orchestration, IPC, automation rules, and behaviors. Tier 3 platforms still benefit from AIWG's agent loop, Mission Control, and scheduling via AIWG emulation — they connect to a daemon running elsewhere rather than hosting one locally.
 
 See `agentic/code/providers/capability-matrix.yaml` for the authoritative `daemon_tier` field per provider.
 
-### PTY Adapter (Tier 2)
+## PTY Adapter
 
-The PTY adapter spawns a Tier 1 platform's TUI process under a pseudo-terminal and relays I/O bidirectionally through the AIWG chat channel. This enables remote operation of interactive TUI tools (e.g. `opencode`, `codex`) from messaging platforms, shell scripts, or agentic LLMs — without requiring a local terminal session.
+> "Start OpenCode under a PTY bridge so I can drive it remotely, then list sessions."
+
+Your assistant spawns the platform TUI under a pseudo-terminal and bridges I/O through the chat channel, for remote operation of interactive TUI tools without a local terminal session.
+
+### Command reference
 
 ```bash
-# Start an OpenCode TUI session bridged over PTY
 aiwg daemon pty start opencode
-
-# Start Codex with a wider terminal
+aiwg daemon pty start opencode --tmux           # reconnectable session
 aiwg daemon pty start codex --cols 120 --rows 40
-
-# List active PTY sessions
+aiwg daemon pty start claude-code -- --dangerously-skip-permissions
 aiwg daemon pty list
-
-# Stop a session
+aiwg daemon pty attach <session-id>             # reattach (requires --tmux)
 aiwg daemon pty stop <session-id>
 ```
 
-The PTY adapter requires `node-pty` (native module) for local mode:
+Supported platforms: `claude-code`, `opencode`, `codex`, `warp`, `openclaw`. Size flags are `--cols` (default 80) and `--rows` (default 24); `--tmux` starts inside a named tmux session so `pty attach` can reconnect later. Arguments after `--` pass through to the platform binary. Sessions persist across detaches — reconnect with `aiwg daemon pty list` to find the session ID.
+
+The non-tmux PTY adapter requires `node-pty` (native module):
 
 ```bash
 npm install node-pty   # requires node-gyp + C++ build tools
 ```
 
-Input from the chat channel is forwarded as keystrokes/stdin to the TUI. Output (screen state, ANSI sequences) flows back out. Both human-in-the-loop (typing in chat) and agentic driving (LLM or script sends input programmatically) are supported. Sessions persist across detaches — reconnect with `aiwg daemon pty list` to find the session ID.
+Tmux mode requires tmux to be installed instead.
+
+Input from the chat channel is forwarded as keystrokes/stdin to the TUI and screen output flows back out, so both human-in-the-loop typing and agentic driving are supported.
 
 ### Execution Modes
 
@@ -69,35 +292,24 @@ The PTY adapter supports three execution modes, selected automatically based on 
 | **Container** | HTTP → sandbox → Docker | `AIWG_SANDBOX_ENDPOINT` | Isolated sandbox, fast spin-up |
 | **VM** | HTTP → sandbox → QEMU | `AIWG_SANDBOX_ENDPOINT` | Full isolation, untrusted workloads |
 
-#### Local mode (default)
-
-Spawns the TUI process directly on the host via `node-pty`. Requires native compilation.
-
-#### Sandbox mode (container/VM)
-
-Delegates to an [agentic-sandbox](https://github.com/jmagly/agentic-sandbox) management server (docs: [docs.aiwg.io/agentic-sandbox](https://docs.aiwg.io/agentic-sandbox)). The sandbox handles provisioning and PTY allocation inside containers or VMs.
-
 ```bash
-# Set the sandbox endpoint to enable remote execution
 export AIWG_SANDBOX_ENDPOINT=http://sandbox.local:8122
 export AIWG_SANDBOX_AGENT_ID=agent-01   # optional, defaults to agent-01
-
-# PTY commands work identically — transport is transparent
-aiwg daemon pty start opencode
-aiwg daemon pty list
-aiwg daemon pty stop <session-id>
+aiwg daemon pty start opencode          # transport is transparent
 ```
+
+Local mode spawns the TUI directly on the host via `node-pty` and requires native compilation. Sandbox mode delegates to an [agentic-sandbox](https://github.com/jmagly/agentic-sandbox) management server: the sandbox provisions the PTY inside containers or VMs, and the browser terminal viewer connects to the sandbox WebSocket (`:8121`) for real-time streaming with full ANSI color support.
 
 Or use the programmatic API:
 
 ```javascript
 import { PTYAdapter } from './tools/daemon/pty-adapter.mjs';
 
-// Auto-select: uses sandbox if AIWG_SANDBOX_ENDPOINT is set, else local
-const adapter = PTYAdapter.auto({ platform: 'opencode', cols: 120, rows: 30 });
+// Local transport
+const adapter = new PTYAdapter({ platform: 'opencode', cols: 120, rows: 30 });
 
 // Or explicitly use sandbox transport
-const adapter = PTYAdapter.fromSandbox({
+const sandboxAdapter = PTYAdapter.fromSandbox({
   httpEndpoint: 'http://sandbox.local:8122',
   agentId: 'agent-01',
   platform: 'opencode',
@@ -107,13 +319,23 @@ await adapter.start();
 adapter.on('data', (chunk) => process.stdout.write(chunk));
 ```
 
-The sandbox transport uses the management server's REST API (`:8122`) to submit tasks and poll for output. The browser terminal viewer connects directly to the sandbox WebSocket (`:8121`) for real-time PTY streaming with full ANSI color support.
-
----
-
 ## PTY Orchestrator
 
-The PTY Orchestrator is an AI supervisor that attaches to a live PTY session and operates it the way a human operator would: reading the screen, understanding the current state, and injecting input at the right moments. This elevates the daemon from a process manager to an autonomous agent driver.
+> "Supervise agent-01 through Mission Control until the migration is complete and tests are green."
+
+Your assistant dispatches a PTY-orchestrator mission that reads the agent's screen, assesses state with an LLM, and injects input the way a human operator would.
+
+### Command reference
+
+```bash
+aiwg mc dispatch <session-id> \
+  "Supervise agent-01: complete the database migration" \
+  --mode pty-orchestrator \
+  --target-agent agent-01 \
+  --completion "migration complete and tests green"
+```
+
+`--mode pty-orchestrator` requires `--target-agent`. Mission Control treats this as a standard mission, but the executor is `OrchestratorPTY` instead of a direct task runner.
 
 ### Architecture
 
@@ -146,146 +368,29 @@ The PTY Orchestrator is an AI supervisor that attaches to a live PTY session and
 
 ### Assess Loop
 
-Each cycle of the orchestrator follows this pattern:
-
-```
-READ screen state (via ScreenReader.awaitChange)
-  → ASSESS: LLM evaluates screen + mission context + recent history
-  → PLAN: LLM returns a decision as structured JSON
-  → ACT: inject keystrokes, wait, send signal, or signal completion
-  → REPEAT (until complete or max cycles reached)
-```
-
-The LLM assessment prompt includes:
-- Current screen summary (ANSI-stripped, human-readable)
-- Whether a prompt was detected and its text
-- The mission brief (what the orchestrator is trying to accomplish)
-- The last 10 actions taken (to avoid loops)
-
-Decisions are one of:
-
-| Action | Effect | When |
-|--------|--------|------|
-| `type` | Writes text + newline to PTY stdin | Prompt detected, agent needs input |
-| `wait` | No-op, observes next screen change | Agent is running, making progress |
-| `signal` | Sends SIGINT/SIGTERM to PTY | Agent is stuck, needs interruption |
-| `complete` | Exits the loop | Mission accomplished |
+Each cycle follows read→assess→plan→act: read screen state, evaluate it against the mission brief plus the last 10 actions, and inject keystrokes, wait, send a signal, or signal completion. Decisions are one of `type`, `wait`, `signal`, or `complete`.
 
 ### Screen State Parsing
 
-The `ScreenReader` uses `@xterm/headless` (a headless xterm.js terminal) as its VT100/ANSI state machine. This means all escape sequences — colors, cursor movement, line wrapping, clear screen — are handled correctly without a DOM.
-
-The parsed `ScreenState` exposes:
-
-```typescript
-interface ScreenState {
-  text: string[][]          // visible text grid (rows × cols)
-  cursor: { row, col }     // cursor position
-  scrollback: string[]      // lines scrolled past viewport
-  summary: string           // human/LLM-readable text
-  prompt_detected: boolean  // terminal waiting for input?
-  prompt_text?: string      // the detected prompt line
-}
-```
-
-**Prompt detection** checks the cursor row and last non-empty line against patterns:
-- Shell prompts: `$`, `#`, `>`, `%` at end of line
-- Interactive prompts: `?` prefix (inquirer-style), `[y/N]`, `(yes/no)`
-- Claude Code prompts: `>` prefix at cursor position
+The `ScreenReader` uses `@xterm/headless` (a headless xterm.js terminal) as its VT100/ANSI state machine, so escape sequences — colors, cursor movement, line wrapping, clear screen — are handled correctly without a DOM. The parsed `ScreenState` exposes the visible text grid, cursor position, scrollback, a human/LLM-readable summary, and whether a prompt was detected plus its text. Prompt detection checks the cursor row and last non-empty line against shell prompts (`$`, `#`, `>`, `%`), interactive prompts (`?` prefix, `[y/N]`, `(yes/no)`), and Claude Code `>` prompts.
 
 ### Operator Override (HITL Handoff)
 
-A human operator can take manual control of an orchestrator-supervised session at any time:
-
-```
-Orchestrator running
-  → operator triggers override
-  → OrchestratorPTY.pause() — finishes current cycle, then halts
-  → PTY stdin routes to operator input
-  → Operator interacts directly with the terminal
-  → Operator triggers release
-  → OrchestratorPTY.resume() — reads current screen, continues loop
-```
-
-Override events are recorded with timestamps for audit. Multiple override/release cycles are supported without state corruption. If the orchestrator has already completed, override is a no-op.
+A human operator can take manual control at any time: the orchestrator pauses after its current cycle, PTY stdin routes to the operator, and the orchestrator resumes from the current screen on release. Override events are recorded with timestamps; multiple override/release cycles are supported.
 
 ### Mission Control Integration
 
-PTY-orchestrated missions can be dispatched via Mission Control:
-
-```bash
-aiwg mc dispatch <session-id> \
-  "Supervise agent-01: complete the database migration" \
-  --mode pty-orchestrator \
-  --target-agent agent-01 \
-  --completion "migration complete and tests green"
-```
-
-MC treats this as a standard mission, but the executor is `OrchestratorPTY` instead of a direct task runner. Status displays show PTY missions distinctly:
-
-```
-  #    Mission                          Mode   Status       Loop     Started
-  ────────────────────────────────────────────────────────────────────────
-  1    Fix authentication bug           —      ✓ DONE       3/10     14:30
-  2    Supervise agent-01: migrate DB   PTY    ⏳ RUNNING   12/50    14:35
-       └─ Last: type "npm run test"
-```
+PTY-orchestrated missions dispatch via Mission Control (`--mode pty-orchestrator` requires `--target-agent`), where the executor is `OrchestratorPTY` instead of a direct task runner. Status displays show PTY missions distinctly, including the last injected action.
 
 ### MC ↔ aiwg serve dispatch
 
-`aiwg mc dispatch` enqueues missions to `.aiwg/ralph-external/mc/sessions/*/session.json`.
-The old `aiwg mc bridge` queue tailer has been removed. For agentic-sandbox
-work, use routable A2A instances and verify them through
-`GET /api/v2/admin/instances`,
-`GET /agents/{instance_id}/.well-known/agent-card.json` or
-`GET /agents/{instance_id}/v1/extendedAgentCard`, and
-`POST /agents/{instance_id}/v1/messages:send`.
-
-Executor registration and A2A readiness are intentionally separate. The
-executor `executor_id` is the management identity; the A2A `instance_id` is the
-routable sandbox target. When they differ, dispatch with `a2a_instance_id` and
-confirm it appears in the dispatch response.
-
-There are two operating modes depending on what's running:
-
-| Mode | Running | Outcome |
-|------|---------|---------|
-| **MC alone** | `aiwg mc dispatch` only | Missions queue to `session.json`; operator drives manually. |
-| **A2A sandbox route** | Routable agentic-sandbox instance | Dispatch directly through A2A: `messages:send`, task status, and SSE subscribe. |
-
-The A2A task lifecycle now lives on the sandbox route itself: submit with
-`messages:send`, poll `tasks/{task_id}`, or subscribe to
-`tasks/{task_id}/subscribe`.
-
----
+`aiwg mc dispatch` enqueues missions to `.aiwg/ralph-external/mc/sessions/*/session.json`. For agentic-sandbox work, use routable A2A instances and verify them through `GET /api/v2/admin/instances` and the agent-card endpoints. There are two operating modes: MC alone (missions queue for manual driving) or the A2A sandbox route (dispatch through `messages:send`, poll `tasks/{task_id}`, or subscribe).
 
 ## Daemon-in-Sandbox Deployment
 
-The primary deployment model for autonomous agent supervision is a **daemon running inside an agentic-sandbox container**. Both the daemon and the sandbox can run fully headless — no display server, no local terminal session required.
+> "Run a daemon inside a sandbox container so agents execute in full isolation."
 
-### Architecture
-
-```
-┌─────────────────────────────────────────────┐
-│  AIWG Service (operator interface)          │
-│  aiwg serve — dashboard on port 7337        │
-└──────────┬────────────────────┬─────────────┘
-           │                    │
-     ┌─────▼──────┐      ┌─────▼──────┐
-     │  Daemon A   │      │  Daemon B   │
-     │  (sandbox)  │      │  (sandbox)  │
-     ├─────────────┤      ├─────────────┤
-     │ Session 1   │      │ Session 3   │
-     │ (PTY orch.) │      │ (PTY orch.) │
-     ├─────────────┤      ├─────────────┤
-     │ Session 2   │      │ Session 4   │
-     │ (PTY orch.) │      │ (direct)    │
-     └─────────────┘      └─────────────┘
-           │                    │
-     Mission Control coordinates across daemons
-```
-
-**The pattern:** Each daemon runs inside an agentic-sandbox (Docker container or Firecracker VM). Each daemon manages one or more PTY-orchestrated agent sessions. Multiple daemons coordinate through Mission Control. The AIWG service (`aiwg serve`) provides the operator dashboard for the fleet.
+Your assistant provisions the daemon-in-sandbox topology: each daemon runs inside an agentic-sandbox (Docker container or Firecracker VM), supervises PTY-orchestrated agent sessions, and coordinates with other daemons through Mission Control under the `aiwg serve` dashboard.
 
 ### Deployment Topology
 
@@ -298,32 +403,12 @@ The primary deployment model for autonomous agent supervision is a **daemon runn
 
 ### How It Works
 
-1. **Sandbox provisioning**: An agentic-sandbox instance starts with the AIWG daemon pre-installed. The daemon starts automatically and registers with the AIWG service.
-
-2. **Session creation**: The operator (or Mission Control) dispatches a task. The daemon spawns an agent session inside the sandbox via the PTY bridge.
-
-3. **PTY orchestration**: The daemon's OrchestratorPTY attaches to the agent's PTY session. The ScreenReader parses terminal output; the LLM assessor decides what to type; the session adapter injects input.
-
-4. **Multi-session**: A single daemon can supervise multiple concurrent agent sessions (up to `max_concurrent` from the supervisor config).
-
-5. **Multi-daemon coordination**: Mission Control dispatches work across daemons. Each daemon reports status back. The AIWG service aggregates the view.
-
-6. **Operator intervention**: At any time, the operator can override a session via the HITL relay — the orchestrator pauses, the operator interacts directly, then the orchestrator resumes.
-
-### Configuration
-
-```json
-{
-  "supervisor": {
-    "max_concurrent": 4,
-    "default_mode": "pty-orchestrator"
-  },
-  "sandbox": {
-    "auto_register": true,
-    "service_endpoint": "http://aiwg-service:7337"
-  }
-}
-```
+1. **Sandbox provisioning**: a sandbox instance starts with the daemon pre-installed; the daemon starts automatically and registers with the AIWG service.
+2. **Session creation**: the operator or Mission Control dispatches a task, and the daemon spawns an agent session inside the sandbox via the PTY bridge.
+3. **PTY orchestration**: `OrchestratorPTY` attaches to the session — the ScreenReader parses output, the LLM assessor decides what to type, the session adapter injects input.
+4. **Multi-session**: one daemon supervises multiple concurrent agent sessions, up to `supervisor.max_concurrent`.
+5. **Multi-daemon coordination**: Mission Control dispatches work across daemons and the AIWG service aggregates the view.
+6. **Operator intervention**: the operator can override any session via the HITL relay — the orchestrator pauses, the operator interacts directly, then the orchestrator resumes.
 
 Environment variables for sandbox deployment:
 
@@ -335,8 +420,6 @@ Environment variables for sandbox deployment:
 
 ### Capability Levels
 
-With the daemon-in-sandbox deployment, AIWG supports increasingly autonomous operation:
-
 | Level | Capability | Requirements |
 |-------|------------|-------------|
 | **Level 1** | CLI tool — human drives, AI assists | AIWG CLI + any platform |
@@ -347,96 +430,34 @@ With the daemon-in-sandbox deployment, AIWG supports increasingly autonomous ope
 
 Level 3 and above require the daemon-in-sandbox deployment. Level 5 is the full distributed orchestration topology.
 
----
-
-## Quick Start
-
-### Start the daemon
-
-```bash
-aiwg daemon start
-```
-
-The daemon detaches from the terminal and runs in the background. State is stored in `.aiwg/daemon/`.
-
-### Check status
-
-```bash
-aiwg daemon status
-```
-
-Output shows PID, uptime, active subsystems, and connected adapters.
-
-### Submit a task
-
-```bash
-aiwg task submit "Fix the failing tests in auth module"
-```
-
-This queues a task for the agent supervisor, which spawns a `claude -p` process to execute it.
-
-### Stop the daemon
-
-```bash
-aiwg daemon stop
-```
-
-Sends SIGTERM for graceful shutdown. Running tasks are given 15 seconds to complete.
-
 ## Configuration
 
-Configuration is stored in `.aiwg/daemon.json`. Create this file in your project root:
+> "Watch src and test, run a health check every 30 minutes, and auto-test on TypeScript changes."
 
-```json
-{
-  "daemon": {
-    "heartbeat_interval_seconds": 30,
-    "max_parallel_actions": 3,
-    "action_timeout_minutes": 120,
-    "log": {
-      "max_size_mb": 50,
-      "max_files": 5
-    }
-  },
-  "watch": {
-    "enabled": true,
-    "paths": ["src/", "test/", ".aiwg/"],
-    "ignore": ["node_modules/", ".git/", "*.log"],
-    "debounce_ms": 1000
-  },
-  "schedule": {
-    "enabled": true,
-    "jobs": [
-      {
-        "name": "health-check",
-        "cron": "*/30 * * * *",
-        "action": "health-check"
-      },
-      {
-        "name": "daily-audit",
-        "cron": "0 9 * * *",
-        "action": "security-audit"
-      }
-    ]
-  },
-  "rules": [
-    {
-      "id": "auto-test-on-change",
-      "trigger": {
-        "type": "file_change",
-        "pattern": "src/**/*.ts"
-      },
-      "condition": {
-        "type": "debounce",
-        "interval_ms": 5000
-      },
-      "action": {
-        "type": "submit_task",
-        "prompt": "Run tests for the changed files"
-      }
-    }
-  ]
-}
+Your assistant writes the watch, schedule, and automation-rule blocks into the daemon config.
+
+Configuration lives in `.aiwg/daemon.yaml` (written by `aiwg daemon init`) or `.aiwg/daemon.json` — the daemon reads YAML first, then JSON:
+
+```yaml
+# .aiwg/daemon.yaml
+daemon:
+  heartbeat_interval_seconds: 30
+  max_parallel_actions: 3
+  action_timeout_minutes: 120
+watch:
+  enabled: true
+  paths: ["src/", "test/"]
+  ignore: ["node_modules/", ".git/", "*.log"]
+  debounce_ms: 1000
+schedule:
+  enabled: true
+  jobs:
+    - name: health-check
+      cron: "*/30 * * * *"
+      action: health-check
+    - name: daily-audit
+      cron: "0 9 * * *"
+      action: security-audit
 ```
 
 ### Configuration Reference
@@ -456,54 +477,40 @@ Configuration is stored in `.aiwg/daemon.json`. Create this file in your project
 | `schedule.jobs` | object[] | — | Cron job definitions |
 | `rules` | object[] | — | Automation rules |
 
-## Headend Architecture
+## Headend supervisor
 
-The daemon acts as the headend supervisor for all External Agent Loop lifecycles. A `DaemonSupervisor` component wraps the existing `AgentSupervisor`, adding process governance without breaking backward compatibility.
+> "Cap the daemon at four concurrent agents with a circuit breaker and a daily budget."
+
+Your assistant writes the `supervisor` block that wraps the agent supervisor with process governance.
+
+The daemon acts as the headend supervisor for all agent-loop lifecycles. `DaemonSupervisor` wraps the existing `AgentSupervisor` (`tools/daemon/agent-supervisor.mjs`) — which keeps handling subprocess spawning and the basic task queue — and adds governance without breaking direct `AgentSupervisor` consumers.
 
 ### What DaemonSupervisor adds
 
 | Capability | Description |
 |------------|-------------|
-| **Concurrency cap** | Hard limit on simultaneous agent sessions (`max_concurrent`, default 4). Additional submissions queue in priority order; queue overflow is rejected with a structured error. |
-| **Bounded priority queue** | Queue depth cap (`max_queue_depth`, default 20) prevents unbounded memory growth under load. |
-| **Process group kill** | Uses `process.kill(-pid, signal)` to terminate entire process trees. Plain PID kill leaves child shells and subprocesses as orphans. |
-| **Restart intensity** | Tracks restart count per loop within a sliding time window (Erlang/OTP `max_restarts` pattern). Exceeded threshold marks the task permanently failed rather than entering an infinite restart loop. |
-| **Circuit breaker** | Consecutive failures increment a global counter. At `failure_threshold`, the breaker opens and blocks new spawns for `cooldown_ms`. After cooldown, one probe attempt (half-open state) determines whether to close. |
-| **Budget aggregation** | Rolls up token cost across all supervised loops. Emits a warning at 90% of the daily limit; blocks new spawns at 100%. Resets at midnight local time. |
-| **Zombie reap** | Periodic sweep reconciles PID files against running processes. Stale entries are cleaned up automatically. |
+| **Concurrency cap** | Hard limit on simultaneous agent sessions (`max_concurrent`). Extra submissions queue in priority order; overflow past `max_queue_depth` is rejected with a structured error. |
+| **Process group kill** | Terminates entire process trees (`process.kill(-pid, signal)`), so no orphaned child shells survive. |
+| **Restart intensity** | Erlang/OTP-style `max_restarts` within a sliding window; exceeded thresholds mark the task permanently failed instead of looping forever. |
+| **Circuit breaker** | Consecutive failures open the breaker for `cooldown_ms`; one half-open probe then decides whether it closes. |
+| **Budget aggregation** | Rolls up spend across all loops — warning at 90% of `daily_budget_usd`, new spawns blocked at 100%, reset at midnight local time. |
+| **Zombie reap** | Periodic sweep reconciles PID files against running processes and cleans up stale entries. |
 
-### Relationship to AgentSupervisor
+### Command reference
 
-`DaemonSupervisor` is a wrapper, not a replacement. The existing `AgentSupervisor` in `tools/daemon/agent-supervisor.mjs` continues to handle subprocess spawning and the basic task queue. `DaemonSupervisor` sits above it and enforces governance policy. Consumers of `AgentSupervisor` directly are unaffected.
-
-See `.aiwg/architecture/adr-daemon-as-headend.md` for the full architecture decision.
-
-## Headend Configuration Reference
-
-The supervisor configuration lives under the `supervisor` key in `.aiwg/daemon.json`:
+```bash
+aiwg daemon status    # includes supervisor, budget, and circuit state
+```
 
 ```json
 {
   "supervisor": {
     "max_concurrent": 4,
     "max_queue_depth": 20,
-    "restart_intensity": {
-      "max_restarts": 3,
-      "window_seconds": 300
-    },
-    "circuit_breaker": {
-      "failure_threshold": 5,
-      "cooldown_ms": 120000
-    },
+    "restart_intensity": { "max_restarts": 3, "window_seconds": 300 },
+    "circuit_breaker": { "failure_threshold": 5, "cooldown_ms": 120000 },
     "daily_budget_usd": 50,
     "behaviors": ["ops-toolset"]
-  },
-  "interface": {
-    "web": {
-      "enabled": true,
-      "port": 7474,
-      "host": "127.0.0.1"
-    }
   }
 }
 ```
@@ -522,44 +529,23 @@ The supervisor configuration lives under the `supervisor` key in `.aiwg/daemon.j
 | `interface.web.port` | number | 7474 | Web UI port |
 | `interface.web.host` | string | `"127.0.0.1"` | Bind address (localhost by default) |
 
+See `.aiwg/architecture/adr-daemon-as-headend.md` for the full architecture decision.
+
 ## Concierge
 
-The **Concierge** is the front-facing interaction layer for the daemon — the first point of contact for users interacting with a live daemon session. It presents a consistently composed, professional interface regardless of what complexity is executing behind it.
+> "Greet me with yesterday's context and route what I ask to the right daemon tool."
 
-Think of it as the reception desk: the guest (user) speaks to the concierge; the concierge routes, delegates, and translates without ever exposing the kitchen.
+Your assistant enables the concierge behavior: the front-facing interaction layer that greets with persisted memory and routes intent to daemon primitives without exposing the routing.
 
-### Architecture
-
-```
-User input
-    ↓
-[ Concierge ]  ← session context, memory, tone rules
-    ↓
-[ Router ]  → skill / agent / flow / task
-    ↓
-[ Concierge ]  ← wraps and composes response
-    ↓
-User output
-```
-
-The concierge intercepts at both ends of each interaction — intake and output. On intake it identifies intent and routes silently. On output it translates raw technical results into composed, appropriately registered responses.
-
-### Enabling the Concierge
-
-Add to `.aiwg/daemon.json`:
+Add to the daemon config:
 
 ```json
 {
-  "supervisor": {
-    "behaviors": ["concierge"]
-  },
+  "supervisor": { "behaviors": ["concierge"] },
   "behaviors": {
     "concierge": {
       "enabled": true,
-      "memory": {
-        "cross_session": true,
-        "store": ".aiwg/daemon/concierge-memory.json"
-      }
+      "memory": { "cross_session": true, "store": ".aiwg/daemon/concierge-memory.json" }
     }
   }
 }
@@ -568,7 +554,7 @@ Add to `.aiwg/daemon.json`:
 Or deploy via CLI:
 
 ```bash
-aiwg add-behavior concierge
+aiwg behavior apply concierge
 ```
 
 ### Session Start
@@ -606,9 +592,9 @@ The concierge classifies user intent and routes to the appropriate daemon primit
 | Intent | Examples | Routes To |
 |--------|---------|-----------|
 | Status | "How's the build?" | Reads daemon state, summarizes |
-| Task | "Fix the failing tests" | `aiwg task submit` |
-| Schedule | "Run the audit tonight" | `/schedule` skill or `CronCreate` |
-| Behavior | "Start watching tests" | `aiwg behavior run` |
+| Task | "Fix the failing tests" | `aiwg daemon task submit` |
+| Schedule | "Run the audit tonight" | Schedule config or `aiwg daemon schedule --run-once` |
+| Behavior | "Start watching tests" | `aiwg behavior apply` |
 | Information | "What's in the queue?" | Reads state files |
 | Meta | "What can you do?" | Answers directly |
 | Escalation | "Why is this failing?" | Diagnoses and surfaces cleanly |
@@ -622,42 +608,32 @@ The concierge persists session context to `.aiwg/daemon/concierge-memory.json`:
 - User preferences stated during sessions
 - Unresolved items from prior sessions
 
-This means the concierge never asks about context it has already been given. On each new session start, relevant prior context is surfaced in the greeting.
+It never asks about context it has already been given; relevant prior context is surfaced in the next session greeting.
 
 ### Implementation Reference
 
-The concierge is defined in `agentic/code/behaviors/concierge/BEHAVIOR.md` and is the **reference implementation** for agent-based AIWG behaviors. It introduces:
-
-- `mode: agent` — distinguishes AI-instruction behaviors from shell-script behaviors
-- `on_session_start` hook — new hook type for persistent daemon session boundaries
-- `memory.cross_session` — explicit opt-in to persistent cross-session memory
-- `expose_internals: false` — canonical pattern for user-facing routing
-
-See `docs/behaviors-guide.md` for the full behaviors format specification.
+The concierge is defined in `agentic/code/behaviors/concierge/BEHAVIOR.md` and is the reference implementation for agent-based AIWG behaviors. It introduces `mode: agent` (AI-instruction behaviors vs shell-script behaviors), the `on_session_start` hook for persistent daemon session boundaries, `memory.cross_session` opt-in to persistent memory, and the `expose_internals: false` pattern for user-facing routing. See the [Behaviors Guide](behaviors-guide.md).
 
 ## Operator Web UI
+
+> "Open the operator dashboard to watch loop output live."
+
+Your assistant enables the web UI in the daemon config and starts the daemon.
 
 When `interface.web.enabled` is `true`, the daemon serves an operator interface at `http://localhost:7474`.
 
 ### Access
 
 ```bash
-# Start daemon with web UI enabled (configure in daemon.json first)
 aiwg daemon start
-
-# Open in browser
-open http://localhost:7474
+# then open http://localhost:7474
 ```
 
-Authentication uses a Bearer token from `interface.web.token` or `AIWG_WEB_TOKEN`.
-With neither configured, authentication remains disabled. Prefer
-`interface.web.token_ref` with `ENV_NAME`, `file:ABSOLUTE_PATH`, or `store:NAME`.
-The existing config loader resolves references separately for the web UI,
-webhook configuration and each messaging adapter at startup. See
-[Supplying sensitive values](cli/sensitive-values.md#daemon-startup-references)
-for fields, precedence, private-file requirements and remaining limitations.
+```json
+{ "interface": { "web": { "enabled": true, "port": 7474, "host": "127.0.0.1" } } }
+```
 
-The web UI is localhost-only by default. Remote access requires a TLS-terminating reverse proxy; the daemon does not enforce TLS itself.
+Authentication uses a Bearer [REDACTED] from `interface.web.token` or `AIWG_WEB_TOKEN`. With neither configured, authentication remains disabled. Prefer `interface.web.token_ref` with `ENV_NAME`, `file:ABSOLUTE_PATH`, or `store:NAME`. See [Supplying sensitive values](cli/sensitive-values.md#daemon-startup-references) for fields, precedence, and private-file requirements. The web UI is localhost-only by default; remote access requires a TLS-terminating reverse proxy — the daemon does not enforce TLS itself.
 
 ### Tab reference
 
@@ -671,74 +647,54 @@ The web UI is localhost-only by default. Remote access requires a TLS-terminatin
 
 ### Live streaming
 
-Output is delivered via Server-Sent Events (SSE). Each loop has its own SSE endpoint. The browser reconnects automatically on disconnect. No WebSocket or polling required.
+Output is delivered via Server-Sent Events (SSE) — each loop has its own endpoint, and the browser reconnects automatically on disconnect. No WebSocket or polling required. See `.aiwg/architecture/adr-native-web-operator-interface.md`.
 
-See `.aiwg/architecture/adr-native-web-operator-interface.md` for the architecture decision.
+## Automation rules
 
-## IPC Commands
+> "Run the test suite whenever TypeScript sources change, after things settle for five seconds."
 
-The daemon communicates via a Unix domain socket at `.aiwg/daemon/daemon.sock` using JSON-RPC 2.0.
+Your assistant writes the rule into the daemon config. Automation is config-driven: there is no `aiwg automation` CLI. The `automation.*` IPC methods exist on the daemon socket, and rule state shows in `aiwg daemon status`.
 
-### Daemon Management
-
-```bash
-# Full daemon status with all subsystems
-aiwg daemon status
-
-# Health check (quick ping)
-aiwg daemon ping
+```json
+{
+  "id": "auto-test",
+  "trigger": { "type": "file_change", "pattern": "src/**/*.{ts,js}" },
+  "condition": { "type": "debounce", "interval_ms": 5000 },
+  "action": { "type": "submit_task", "prompt": "Run the test suite and report results" }
+}
 ```
 
-### Task Management
+| Trigger | Description | Parameters |
+|------|-------------|------------|
+| `file_change` | File created, modified, or deleted | `pattern` (glob) |
+| `schedule` | Cron schedule fires | `cron` (cron expression) |
+| `event` | Internal daemon event | `topic` (event topic string) |
 
-```bash
-# Submit a task
-aiwg task submit "Refactor the user module to use dependency injection"
+| Condition | Description | Parameters |
+|------|-------------|------------|
+| `debounce` | Wait for activity to settle | `interval_ms` |
+| `always` | Always proceed | — |
 
-# Submit with priority (higher = sooner, default 0)
-aiwg task submit "Fix critical security bug" --priority 10
+| Action | Description | Parameters |
+|------|-------------|------------|
+| `submit_task` | Submit to agent supervisor | `prompt`, `priority?` |
 
-# List tasks
-aiwg task list
-aiwg task list --state running
-aiwg task list --state queued
-aiwg task list --state completed
+Every rule carries an `id`, one `trigger`, one `condition`, and one `action` (see the JSON above). Further examples:
 
-# Get task details
-aiwg task get <task-id>
-
-# Cancel a task
-aiwg task cancel <task-id>
-
-# Task statistics
-aiwg task stats
+```json
+{
+  "id": "security-scan",
+  "trigger": {"type": "file_change", "pattern": "**/.env*"},
+  "condition": {"type": "always"},
+  "action": {"type": "submit_task", "prompt": "Scan for accidentally committed secrets", "priority": 10}
+}
 ```
 
-### Automation Management
+Avoid embedding secrets in rules; reference environment variables instead of literal credentials.
 
-```bash
-# View automation status and rules
-aiwg automation status
+## Daemon Supervisor IPC Methods
 
-# Enable/disable all automation
-aiwg automation enable
-aiwg automation disable
-
-# Enable/disable specific rule
-aiwg automation enable --rule auto-test-on-change
-aiwg automation disable --rule auto-test-on-change
-```
-
-### Chat via IPC
-
-```bash
-# Send a chat message through the daemon (submitted as a task)
-aiwg chat send "What is our current test coverage?"
-```
-
-### Daemon Supervisor IPC Methods
-
-The following `daemon.*` JSON-RPC methods are available on the IPC socket when the `DaemonSupervisor` is active:
+The daemon communicates via a Unix domain socket at `.aiwg/daemon/daemon.sock` using JSON-RPC 2.0. The `ops-toolset` behavior maps directly onto these `daemon.*` methods.
 
 | Method | Params | Returns |
 |--------|--------|---------|
@@ -750,241 +706,46 @@ The following `daemon.*` JSON-RPC methods are available on the IPC socket when t
 | `daemon.loop.history` | `{ limit }` | Array of completed loop summaries |
 | `daemon.budget.remaining` | `{}` | `{ dailyLimit, spent, remaining, percentUsed }` |
 
-`filter` values for `daemon.process.list`: `all` (default), `running`, `queued`, `failed`.
+`filter` values for `daemon.process.list`: `all` (default), `running`, `queued`, `failed`. `signal` values for `daemon.process.kill`: `SIGTERM` (default), `SIGKILL`, `SIGINT` — sent to the entire process group. Circuit `state` values: `closed` (normal), `open` (blocking new spawns), `half-open` (one probe in progress).
 
-`signal` values for `daemon.process.kill`: `SIGTERM` (default), `SIGKILL`, `SIGINT`. The kill is sent to the entire process group (`-pid`), not just the top-level PID.
+## Health monitoring
 
-Circuit breaker `state` values: `closed` (normal operation), `open` (blocking new spawns), `half-open` (one probe in progress).
+> "Is the daemon alive, and what is it doing?"
 
-## Agent Tasks
+Your assistant checks the heartbeat file, the state file, and live status.
 
-The daemon's agent supervisor manages `claude -p` subprocesses:
+The daemon writes a heartbeat every `heartbeat_interval_seconds` (default 30s) to `.aiwg/daemon/heartbeat` (PID, timestamp, uptime), and full state to `.aiwg/daemon/state.json`. The state file contains PID and start time, uptime, IPC socket path and connected clients, agent supervisor status and task statistics, file watcher and scheduler status, automation engine state, and the health assessment.
 
-### How Tasks Work
-
-1. A task is submitted (via CLI, automation rule, or messaging command)
-2. The task enters the queue with its priority
-3. When a slot is available (under `max_parallel_actions`), the supervisor spawns a `claude -p` process
-4. The process runs in the project directory with full CLAUDE.md context
-5. On completion, the result is stored in the task store
-6. Events are emitted: `task:started`, `task:completed`, `task:failed`, `task:timeout`
-
-### Task States
-
-| State | Description |
-|-------|-------------|
-| `queued` | Waiting for an available slot |
-| `running` | `claude -p` process is active |
-| `completed` | Process exited successfully |
-| `failed` | Process exited with error |
-| `cancelled` | Cancelled by user or system |
-| `timeout` | Exceeded `action_timeout_minutes` |
-
-### Concurrency
-
-The `max_parallel_actions` setting controls how many tasks run simultaneously. Default is 3. Each running task is a separate Node.js child process running `claude -p`.
-
-## Automation Rules
-
-Automation rules define event-driven workflows that respond to file changes, scheduled events, or other daemon events.
-
-### Rule Structure
-
-```json
-{
-  "id": "unique-rule-id",
-  "trigger": {
-    "type": "file_change",
-    "pattern": "src/**/*.ts"
-  },
-  "condition": {
-    "type": "debounce",
-    "interval_ms": 5000
-  },
-  "action": {
-    "type": "submit_task",
-    "prompt": "Run linting on the changed TypeScript files"
-  }
-}
-```
-
-### Trigger Types
-
-| Type | Description | Parameters |
-|------|-------------|------------|
-| `file_change` | File created, modified, or deleted | `pattern` (glob) |
-| `schedule` | Cron schedule fires | `cron` (cron expression) |
-| `event` | Internal daemon event | `topic` (event topic string) |
-
-### Condition Types
-
-| Type | Description | Parameters |
-|------|-------------|------------|
-| `debounce` | Wait for activity to settle | `interval_ms` |
-| `always` | Always proceed | — |
-
-### Action Types
-
-| Type | Description | Parameters |
-|------|-------------|------------|
-| `submit_task` | Submit to agent supervisor | `prompt`, `priority?` |
-
-### Example Rules
-
-**Run tests when source changes**:
-```json
-{
-  "id": "auto-test",
-  "trigger": {"type": "file_change", "pattern": "src/**/*.{ts,js}"},
-  "condition": {"type": "debounce", "interval_ms": 5000},
-  "action": {"type": "submit_task", "prompt": "Run the test suite and report results"}
-}
-```
-
-**Security scan on config changes**:
-```json
-{
-  "id": "security-scan",
-  "trigger": {"type": "file_change", "pattern": "**/.env*"},
-  "condition": {"type": "always"},
-  "action": {"type": "submit_task", "prompt": "Scan for accidentally committed secrets", "priority": 10}
-}
-```
-
-## REPL Chat
-
-The daemon includes an interactive REPL for terminal-based chat:
+### Command reference
 
 ```bash
-aiwg daemon chat
+aiwg daemon status
+cat .aiwg/daemon/heartbeat
 ```
 
-This connects to the running daemon via IPC and provides an interactive prompt for sending messages. Messages are submitted as high-priority tasks to the agent supervisor.
+Daemon logs go to `.aiwg/daemon/daemon.log` with automatic rotation at `log.max_size_mb` (default 50 MB), keeping `log.max_files` copies (default 5).
 
-## Tmux Integration
+## Docker, CI, and services
 
-For projects using tmux, the daemon can manage sessions:
+> "Run the daemon in Docker and keep it alive across reboots."
+
+Your assistant starts the daemon in a container for ephemeral environments and writes a service unit for long-lived hosts.
+
+### Command reference
 
 ```bash
-# Start daemon with tmux session
-aiwg daemon start --tmux
-
-# Attach to daemon's tmux session
-aiwg daemon attach
+aiwg daemon start --docker
+aiwg daemon start --foreground    # under systemd/docker entrypoint
 ```
 
-The tmux manager creates a session named `aiwg-daemon` with panes for:
-- Daemon logs
-- Task output
-- Interactive chat
+The bundled image is built `FROM node:24-slim` (`tools/docker/Dockerfile.daemon`); use Node 24 for custom images, the same runtime the CLI requires.
 
-## Health Monitoring
+No systemd or launchd is required — pure Node.js process management. PID file at `.aiwg/daemon.pid`, lock file at `.aiwg/daemon/.lock`, socket at `.aiwg/daemon/daemon.sock`. All paths are project-relative.
 
-### Heartbeat
+For long-lived deployments, use your system's service manager pointing at the daemon entry point (`tools/daemon/daemon-main.mjs`):
 
-The daemon writes a heartbeat file every `heartbeat_interval_seconds` (default 30s):
-
-```
-.aiwg/daemon/heartbeat
-```
-
-Contains PID, timestamp, and uptime. External monitoring tools can check this file for daemon health.
-
-### State File
-
-Complete daemon state is written alongside the heartbeat:
-
-```
-.aiwg/daemon/state.json
-```
-
-Contains:
-- PID and start time
-- Uptime
-- IPC socket path and connected clients
-- Agent supervisor status (running/queued tasks)
-- Task statistics
-- File watcher and scheduler status
-- Automation engine state
-- Health assessment
-
-### Log Rotation
-
-Daemon logs are written to `.aiwg/daemon/daemon.log` with automatic rotation:
-- Rotates when file exceeds `log.max_size_mb` (default 50 MB)
-- Keeps `log.max_files` rotated copies (default 5)
-- Rotated files named: `daemon.log.1`, `daemon.log.2`, etc.
-
-## Docker and CI Usage
-
-The daemon works in Docker containers and CI environments:
-
-```dockerfile
-# Dockerfile
-FROM node:24
-RUN npm install -g aiwg
-WORKDIR /app
-COPY . .
-RUN aiwg daemon start
-```
-
-Key considerations:
-- No systemd or launchd required — pure Node.js process management
-- PID file at `.aiwg/daemon.pid` for lifecycle tracking
-- Lock file at `.aiwg/daemon/.lock` prevents duplicate daemons
-- Unix socket at `.aiwg/daemon/daemon.sock` for IPC
-- All paths are project-relative (no system-level dependencies)
-
-### Running as a Service
-
-For long-lived deployments, use your system's service manager:
-
-**systemd (Linux)**:
-```ini
-[Unit]
-Description=AIWG Daemon
-After=network.target
-
-[Service]
-Type=forking
-PIDFile=/path/to/project/.aiwg/daemon.pid
-ExecStart=/usr/bin/node /path/to/project/tools/daemon/daemon-main.mjs
-ExecStop=/bin/kill -TERM $MAINPID
-WorkingDirectory=/path/to/project
-User=developer
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**launchd (macOS)**:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>io.aiwg.daemon</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/node</string>
-        <string>/path/to/project/tools/daemon/daemon-main.mjs</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>/path/to/project</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/path/to/project/.aiwg/daemon/stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>/path/to/project/.aiwg/daemon/stderr.log</string>
-</dict>
-</plist>
-```
+- **systemd (Linux)**: a unit with `Type=forking`, `PIDFile=/path/to/project/.aiwg/daemon.pid`, `ExecStart=/usr/bin/node /path/to/project/tools/daemon/daemon-main.mjs`, `WorkingDirectory=/path/to/project`, and `Restart=on-failure`.
+- **launchd (macOS)**: a plist with `ProgramArguments` pointing at node plus `daemon-main.mjs`, `WorkingDirectory`, `RunAtLoad`/`KeepAlive`, and stdout/stderr paths under `.aiwg/daemon/`.
 
 ## File Structure
 
@@ -1005,342 +766,73 @@ WantedBy=multi-user.target
 
 ## Troubleshooting
 
-### Daemon won't start
+> "The daemon won't start and tasks are stuck in the queue."
+
+Your assistant checks for a stale lock, verifies the socket and PID, and inspects the queue.
+
+### Command reference
 
 ```bash
-# Check if already running
 aiwg daemon status
-
-# Check for stale lock file
 ls -la .aiwg/daemon/.lock
-
-# Remove stale lock and PID (if daemon is confirmed not running)
-rm .aiwg/daemon/.lock .aiwg/daemon.pid
+rm .aiwg/daemon/.lock .aiwg/daemon.pid   # only when the daemon is confirmed not running
 aiwg daemon start
-```
-
-### Can't connect to daemon
-
-```bash
-# Verify socket exists
 ls -la .aiwg/daemon/daemon.sock
-
-# Check socket permissions
-stat .aiwg/daemon/daemon.sock
-
-# Verify daemon PID is running
-cat .aiwg/daemon.pid
-ps -p $(cat .aiwg/daemon.pid)
+aiwg daemon task list --state running
+aiwg daemon task list --state queued
+aiwg daemon task get <task-id>
+aiwg daemon task cancel <task-id>
+tail -f .aiwg/daemon/daemon.log | grep automation
 ```
 
-### Tasks stuck in queue
+**Daemon won't start.** Check `aiwg daemon status` and for a stale lock file; remove the lock and PID files only when the daemon is confirmed not running, then start again.
 
-```bash
-# Check supervisor status
-aiwg daemon status
+**Can't connect.** Verify the socket exists with permissions `0600`, and that the PID in `.aiwg/daemon.pid` is alive.
 
-# Check if max_parallel_actions limit is reached
-aiwg task list --state running
+**Tasks stuck in queue.** Check whether `max_parallel_actions` is saturated (`aiwg daemon task list --state running`), then cancel the stuck task.
 
-# Cancel a stuck task
-aiwg task cancel <task-id>
-```
+**Circuit breaker is open.** The breaker opens when consecutive failures reach `circuit_breaker.failure_threshold`. Check `aiwg daemon status`, wait out the cooldown (default 120 s) for the half-open probe; a successful probe closes it automatically. To reduce sensitivity, raise `failure_threshold` or `cooldown_ms`.
 
-### Circuit breaker is open
+**Restart intensity exceeded.** A loop restarts at most `max_restarts` times per `window_seconds` before permanent failure. Inspect with `aiwg daemon task get <task-id>`, fix the root cause, and resubmit with `aiwg daemon task submit`. To allow more restarts, raise `supervisor.restart_intensity.max_restarts`.
 
-The circuit breaker opens when consecutive loop failures reach `circuit_breaker.failure_threshold`. New submissions are rejected while it is open.
+**Queue overflow.** Submissions are rejected past `max_queue_depth` — backpressure, not an error. Cancel lower-priority items or raise the cap cautiously.
 
-```bash
-# Check circuit breaker state via IPC
-aiwg daemon status
+**Budget gate.** New loops block at 100% of `daily_budget_usd` (warning at 90%); the budget resets at midnight local time. Set `0` to disable.
 
-# Wait for the cooldown period to elapse (default: 120 seconds)
-# The breaker enters half-open state and allows one probe attempt.
-# If the probe succeeds, the breaker closes automatically.
-# If the probe fails, the cooldown timer resets.
-
-# To override cooldown and force-close the circuit (use with caution):
-aiwg daemon circuit-reset
-```
-
-To reduce sensitivity, increase `failure_threshold` or `cooldown_ms` in `supervisor.circuit_breaker`.
-
-### Restart intensity threshold exceeded
-
-A loop is marked permanently failed when it restarts more than `max_restarts` times within `window_seconds`. This prevents infinite crash-restart cycles.
-
-```bash
-# Check a loop's restart count
-aiwg task get <task-id>
-
-# Review the loop's error output for root cause before resubmitting
-aiwg task get <task-id> --output
-
-# Resubmit after fixing the underlying issue
-aiwg task submit "..." --priority 5
-```
-
-To allow more restarts before permanent failure, increase `supervisor.restart_intensity.max_restarts`.
-
-### Queue overflow (submission rejected)
-
-Submissions are rejected when the queue reaches `max_queue_depth`. This is a backpressure signal, not an error condition.
-
-```bash
-# Check current queue depth
-aiwg task list --state queued
-
-# Cancel lower-priority items to free capacity
-aiwg task cancel <task-id>
-
-# Or increase max_queue_depth in daemon.json (with caution — unbounded queues
-# can exhaust memory under sustained load)
-```
-
-### Budget gate blocking submissions
-
-New loops are blocked when cumulative spend reaches `daily_budget_usd`. A warning is emitted at 90%.
-
-```bash
-# Check remaining budget
-aiwg daemon status  # includes budget line
-
-# Budget resets at midnight local time automatically.
-# To raise the limit mid-day, update daemon.json and restart the daemon.
-```
-
-Set `daily_budget_usd: 0` to disable the budget gate entirely.
-
-### High memory usage
-
-The daemon accumulates conversation history for AI chat sessions. Clear old conversations by restarting the daemon:
-
-```bash
-aiwg daemon stop && aiwg daemon start
-```
-
-### Log file too large
-
-Check log rotation settings in `.aiwg/daemon.json`:
+**Log file too large.** Tune `daemon.log.max_size_mb` / `max_files`; for memory growth from accumulated chat history, `aiwg daemon stop && aiwg daemon start`.
 
 ```json
-{
-  "daemon": {
-    "log": {
-      "max_size_mb": 50,
-      "max_files": 5
-    }
-  }
-}
+{ "daemon": { "log": { "max_size_mb": 50, "max_files": 5 } } }
 ```
 
 ## Advanced Configuration
-
-### Custom Event Handlers
 
 Automation rules can respond to custom daemon events:
 
 ```json
 {
   "id": "on-deployment-complete",
-  "trigger": {
-    "type": "event",
-    "topic": "deployment:complete"
-  },
+  "trigger": { "type": "event", "topic": "deployment:complete" },
   "condition": {"type": "always"},
-  "action": {
-    "type": "submit_task",
-    "prompt": "Run post-deployment smoke tests"
-  }
+  "action": { "type": "submit_task", "prompt": "Run post-deployment smoke tests" }
 }
 ```
 
-Emit custom events from your own scripts using the IPC protocol:
-
-```javascript
-import { DaemonClient } from 'aiwg/daemon/ipc-client';
-
-const client = new DaemonClient();
-await client.connect();
-await client.emit('deployment:complete', { version: '1.2.3' });
-await client.disconnect();
-```
-
-### Multiple Automation Profiles
-
-Create environment-specific configuration:
+Emit custom events from your own scripts over the IPC socket (`.aiwg/daemon/daemon.sock`, JSON-RPC 2.0). For environment-specific setups, keep separate daemon files per environment and select between them when running a schedule job manually:
 
 ```bash
-# Development profile with aggressive automation
-aiwg daemon start --config .aiwg/daemon.dev.json
-
-# Production profile with conservative automation
-aiwg daemon start --config .aiwg/daemon.prod.json
+aiwg daemon schedule --run-once --job nightly-audit --config .aiwg/daemon.prod.json
 ```
 
-### Task Priority Strategies
-
-Tasks are executed in priority order (higher priority first):
-
-| Priority | Use Case | Example |
-|----------|----------|---------|
-| 10 | Critical security issues | Secret scanning |
-| 5 | Important but not urgent | Nightly backups |
-| 0 (default) | Normal development tasks | Test runs |
-| -5 | Low priority background tasks | Documentation updates |
-
-When multiple tasks have the same priority, they execute in submission order (FIFO).
+Priority strategy: tasks execute in priority order (higher first, FIFO within a level) — reserve high priorities for truly urgent tasks.
 
 ## Performance Tuning
 
-### File Watching at Scale
-
-For large projects, optimize file watching:
-
-```json
-{
-  "watch": {
-    "enabled": true,
-    "paths": ["src/", "test/"],
-    "ignore": [
-      "node_modules/",
-      ".git/",
-      "*.log",
-      "dist/",
-      "build/",
-      "coverage/"
-    ],
-    "debounce_ms": 3000,
-    "use_polling": false
-  }
-}
-```
-
-- Increase `debounce_ms` to reduce noise from rapid file changes
-- Set `use_polling: true` only if native file watching fails (slower but more compatible)
-- Exclude large directories like `node_modules/` and build artifacts
-
-### Concurrency Limits
-
-Adjust `max_parallel_actions` based on system resources:
-
-```json
-{
-  "daemon": {
-    "max_parallel_actions": 5
-  }
-}
-```
-
-Each agent task spawns a separate `claude -p` process. Monitor resource usage:
-
-```bash
-# Check daemon and subprocess resource usage
-ps aux | grep -E '(daemon|claude)'
-```
-
-Recommended limits:
-- Development machine: 3-5 concurrent tasks
-- CI server: 5-10 concurrent tasks
-- Production server: 1-3 concurrent tasks
-
-### Task Timeout Tuning
-
-Set appropriate timeouts for different task types:
-
-```json
-{
-  "daemon": {
-    "action_timeout_minutes": 120
-  }
-}
-```
-
-For specific tasks requiring longer execution:
-
-```bash
-# Override timeout for long-running task
-aiwg task submit "Comprehensive security audit" --timeout 240
-```
+For large projects, narrow `watch.paths`, extend `watch.ignore` to cover `dist/`, `build/`, and `coverage/`, and raise `watch.debounce_ms` (e.g. 3000) to quiet rapid-change noise. Adjust `daemon.max_parallel_actions` to the host: 3–5 on a development machine, 5–10 on CI, 1–3 on a production server — each agent task is a separate `claude -p` process, so watch RSS with `ps aux`. Keep `daemon.action_timeout_minutes` generous for audits (default 120); per-task timeout overrides do not exist on `task submit`, so size the global timeout for your longest job.
 
 ## Security Considerations
 
-### Access Control
-
-The daemon runs with the permissions of the user who started it. IPC socket permissions are set to 0600 (owner read/write only).
-
-For multi-user environments, consider:
-- Running daemon as dedicated service user
-- Setting appropriate file permissions on `.aiwg/daemon/`
-- Using OS-level access controls for socket file
-
-### Secrets in Automation
-
-Avoid embedding secrets in automation rules. Use environment variables:
-
-```json
-{
-  "id": "notify-on-error",
-  "trigger": {"type": "event", "topic": "task:failed"},
-  "action": {
-    "type": "submit_task",
-    "prompt": "Send failure notification",
-    "env": {
-      "SLACK_WEBHOOK_URL": "${SLACK_WEBHOOK_URL}"
-    }
-  }
-}
-```
-
-### Network Exposure
-
-The daemon uses local Unix domain sockets by default (no network exposure). For remote access, use SSH tunneling:
-
-```bash
-# From remote machine
-ssh -L /tmp/aiwg.sock:/path/to/project/.aiwg/daemon/daemon.sock user@host
-
-# Use forwarded socket
-export AIWG_DAEMON_SOCKET=/tmp/aiwg.sock
-aiwg daemon status
-```
-
-## Cross-References
-
-### PTY Orchestrator
-- `src/serve/screen-reader.ts` — VT100/ANSI parser using `@xterm/headless`
-- `src/serve/orchestrator-pty.ts` — LLM-driven assess loop
-- `src/serve/orchestrator-adapter.ts` — Live PTY session wiring (attach/detach)
-- `src/serve/orchestrator-override.ts` — Operator HITL handoff manager
-- `src/serve/pty-bridge.ts` — WebSocket PTY bridge
-
-### Guides
-- [Serve Guide](serve-guide.md) — Operator web dashboard, sandbox registration, HITL relay
-- [Messaging Guide](messaging-guide.md) — Platform integration
-- [Al Guide](agent-loop-guide.md) — Iterative task loops via daemon
-- [Behaviors Guide](behaviors-guide.md) — Attaching capabilities to daemon and long-running agents
-- [HITL Integration](addons/agent-persistence/hitl-integration.md) — HITL gates for agent recovery
-- [Provider Capability Matrix](providers/capability-matrix.md) — Per-provider daemon tier and feature support
-
-### Source References
-- `agentic/code/providers/capability-matrix.yaml` — Authoritative `daemon_tier` and feature data
-- `agentic/code/behaviors/concierge/BEHAVIOR.md` — Concierge behavior definition
-- `src/cli/handlers/mc.ts` — Mission Control with `--mode pty-orchestrator`
-
-### Architecture Decisions
-- `.aiwg/architecture/adrs/ADR-daemon-mode.md` — Original daemon architecture decision
-- `.aiwg/architecture/adrs/ADR-ipc-protocol.md` — IPC protocol specification
-- `.aiwg/architecture/adr-daemon-as-headend.md` — DaemonSupervisor headend architecture
-- `.aiwg/architecture/adr-native-web-operator-interface.md` — Web UI architecture decision
-- `.aiwg/architecture/adr-behaviors-sticky-capabilities.md` — Behaviors primitive design
-- `.aiwg/architecture/adr-in-memory-queue-defer-redis.md` — Queue implementation decision
-- `tools/daemon/README.md` — Developer documentation
-- `tools/daemon/daemon-main.mjs` — Daemon entry point source
-- `tools/daemon/pty-adapter.mjs` — PTY adapter for TUI bridging (#656)
-- `tools/daemon/agent-supervisor.mjs` — Agent task execution
-- `tools/daemon/automation-engine.mjs` — Rule processing
-- `tools/daemon/ipc-server.mjs` — IPC server implementation
-- `tools/daemon/ipc-client.mjs` — IPC client implementation
+The daemon runs with the permissions of the user who started it, and IPC socket permissions are `0600` (owner read/write only). In multi-user environments, run the daemon as a dedicated service user and lock down `.aiwg/daemon/`. Never embed secrets in automation rules — reference environment variables instead. The daemon exposes no network surface by default (Unix domain socket only); for remote access, forward the socket over SSH rather than exposing ports.
 
 ## Migration from Manual Workflows
 
@@ -1380,13 +872,7 @@ Now tests run automatically after code changes stabilize.
 {
   "schedule": {
     "enabled": true,
-    "jobs": [
-      {
-        "name": "daily-audit",
-        "cron": "0 9 * * *",
-        "action": "security-audit"
-      }
-    ]
+    "jobs": [{ "name": "daily-audit", "cron": "0 9 * * *", "action": "security-audit" }]
   }
 }
 ```
@@ -1402,7 +888,7 @@ Scheduling is now project-aware and integrated with task management.
 5. **Review logs regularly** — Check `.aiwg/daemon/daemon.log` for issues
 6. **Test automation rules** — Manually trigger events to verify behavior
 7. **Document custom rules** — Add comments explaining business logic
-8. **Version control daemon config** — Track `.aiwg/daemon.json` in git
+8. **Version control daemon config** — Track `.aiwg/daemon.yaml` in git
 9. **Set up log rotation** — Prevent disk space issues
 10. **Use priorities wisely** — Reserve high priorities for truly urgent tasks
 
@@ -1422,7 +908,7 @@ No. The daemon must be running to accept tasks. Start it with `aiwg daemon start
 
 **Q: How do I upgrade the daemon after updating AIWG?**
 
-Stop the daemon, update AIWG, restart the daemon:
+Stop the daemon, update, restart:
 
 ```bash
 aiwg daemon stop
@@ -1436,15 +922,7 @@ Not directly, but tasks submitted by automation can emit events that trigger oth
 
 **Q: What happens to running tasks when I stop the daemon?**
 
-Running tasks receive SIGTERM and have 15 seconds to complete. After that, they're killed.
-
-**Q: Can I pause the daemon without stopping it?**
-
-Use automation disable to stop rule processing while keeping the daemon running:
-
-```bash
-aiwg automation disable
-```
+Running tasks receive SIGTERM with up to 10 seconds to exit gracefully (the CLI waits before SIGKILL). After that, they're killed.
 
 **Q: How do I debug automation rules?**
 
@@ -1453,6 +931,10 @@ Check the daemon log for trigger/action events:
 ```bash
 tail -f .aiwg/daemon/daemon.log | grep automation
 ```
+
+**Q: Can I pause rule processing without stopping the daemon?**
+
+Remove or disable the `rules` in the daemon config and restart the daemon.
 
 **Q: Can I use the daemon without messaging platforms?**
 
@@ -1468,3 +950,24 @@ The daemon + serve + sandbox seam is covered by a four-tier strategy in [`.aiwg/
 - **Tier 4 (live UAT)** — `npm run uat:serve-live` runs against a real agentic-sandbox at `AIWG_SANDBOX_ENDPOINT`; skips cleanly when unreachable (#1176).
 
 Tiers 1–3 run in CI. Tier 4 is operator-driven before releases that touch the serve seam.
+
+## Cross-References
+
+- [Serve Guide](serve-guide.md) — Operator web dashboard, sandbox registration, HITL relay
+- [Messaging Guide](messaging-guide.md) — Platform integration
+- [Agent Loop Guide](agent-loop-guide.md) — Iterative task loops via daemon
+- [Behaviors Guide](behaviors-guide.md) — Attaching capabilities to daemon and long-running agents
+- [Housekeeper operator guide](housekeeper-operator-guide.md) — Deterministic maintenance profile
+- `agentic/code/providers/capability-matrix.yaml` — Authoritative `daemon_tier` and feature data
+- `agentic/code/behaviors/concierge/BEHAVIOR.md` — Concierge behavior definition
+- `src/cli/handlers/mc.ts` — Mission Control with `--mode pty-orchestrator`
+- `src/serve/pty-bridge.ts` — WebSocket PTY bridge
+- `.aiwg/architecture/adr-daemon-as-headend.md` — DaemonSupervisor headend architecture
+- `.aiwg/architecture/adr-native-web-operator-interface.md` — Web UI architecture decision
+- `tools/daemon/README.md` — Developer documentation
+- `tools/daemon/daemon-main.mjs` — Daemon entry point source
+- `tools/daemon/pty-adapter.mjs` — PTY adapter for TUI bridging
+- `tools/daemon/agent-supervisor.mjs` — Agent task execution
+- `tools/daemon/automation-engine.mjs` — Rule processing
+- `tools/daemon/ipc-server.mjs` — IPC server implementation
+- `tools/daemon/ipc-client.mjs` — IPC client implementation

@@ -16,6 +16,8 @@ import type { EffectContext, EffectScope, UnknownReason, VerificationResult, Ver
 export interface EffectVerifierExpectation {
   /** Expected `sha256:<hex>` digest of the target object (a file, a D03 receipt). */
   digest?: string;
+  /** Replay check: only this pre-write digest is safe to replace; null requires a missing file. */
+  previousDigest?: string | null;
   /** Expected git object ID a ref resolves to (`git.tag`). */
   object?: string;
   /** Require a cryptographically good signature (`git.commit`, `git.tag`). */
