@@ -101,7 +101,7 @@ test('the gate resolves the Grok Build provider status from the real repository 
   const { execFileSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const script = fileURLToPath(new URL('../../../tools/providers/grok-build-qualification.mjs', import.meta.url));
-  const out = execFileSync(process.execPath, [script, 'gate'], { encoding: 'utf8' });
+  const out = execFileSync(process.execPath, [script, 'gate'], { encoding: 'utf8', timeout: 60_000 });
   const result = JSON.parse(out);
   assert.equal(typeof result.ready, 'boolean');
   assert.ok(Array.isArray(result.errors));
